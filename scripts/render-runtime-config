@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Installation paths and one compiled bundle pointer, projected into native config.
+set -euo pipefail
+[[ $# == 3 ]] || { printf '%s\n' 'Usage: render-runtime-config RESOLVED_JSON OUTPUT_QML OUTPUT_LUA' >&2; exit 2; }
+input=$1 qml=$2 lua=$3
+jq -e '.schema == 1 and (.commands | type == "object") and (.paths | type == "object") and (.bundle.quickshell | startswith("/"))' "$input" >/dev/null
+# Resolve the configured in-root link lexically, never through its cache target.
+profile_module=$(realpath -ms --relative-to="${qml%/*}" -- "$(jq -er '.bootstrap.profileModule' "$input")")
+qml_temp=$(mktemp "${qml}.XXXXXX")
+lua_temp=$(mktemp "${lua}.XXXXXX")
+trap 'rm -f -- "$qml_temp" "$lua_temp"' EXIT
+jq -er --arg profile_module "$profile_module" '
+  ["pragma Singleton", "import QtQuick",
+   "import " + ($profile_module | tojson) + " as Profile",
+   "", "QtObject {",
+   "    readonly property string configFile: " + (.configFile | tojson),
+   "    readonly property var paths: " + (.paths | tojson),
+   "    readonly property var commands: " + (.commands | tojson),
+   "    readonly property var bootstrap: " + (.bootstrap | tojson),
+   "    readonly property var bundle: " + (.bundle | tojson),
+   "    readonly property var profileColors: ({",
+   "        defaultPalette: Profile.OutputPalettes.defaultPalette,",
+   "        byOutput: Profile.OutputPalettes.byOutput,",
+   "        globalPalette: Profile.GlobalPalette.colorData",
+   "    })",
+   "    readonly property var wallpaperTargets: Profile.WallpaperTargets",
+   "    readonly property var xdg: " + (.xdg | tojson),
+   "    readonly property var theme: " + (.theme | tojson),
+   "    readonly property var wallpaperFolders: " + (.wallpaperFolders | tojson), "}", ""] | join("\n")
+' "$input" >"$qml_temp"
+jq -er '
+  def lua:
+    if type == "object" then "{ " + ([to_entries[] | "[" + (.key | tojson) + "] = " + (.value | lua)] | join(", ")) + " }"
+    elif type == "array" then "{ " + ([.[] | lua] | join(", ")) + " }"
+    elif type == "string" or type == "number" or type == "boolean" then tojson
+    elif type == "null" then "nil"
+    else error("unsupported runtime value") end;
+  "-- Generated installation bootstrap. Edit config.ini and profiles, not this projection.\nreturn " + lua + "\n"
+' "$input" >"$lua_temp"
+mv -f -- "$qml_temp" "$qml"
+mv -f -- "$lua_temp" "$lua"

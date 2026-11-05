@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+set -euo pipefail
+(( $# >= 1 && $# <= 3 )) || { printf '%s\n' 'Usage: test-nested mode [ephemeral|persistent] [state-profile]' >&2; exit 2; }
+
+mode=${1:?test mode required}
+[[ $mode == run || $mode == smoke || $mode == snapshot || $mode == theme || $mode == import-themes || $mode == profiles || $mode == motion || $mode == launcher || $mode == apps || $mode == app-launch || $mode == app-close || $mode == phantomat || $mode == borders || $mode == check || $mode == qml || $mode == theme-config || $mode == pipelines ]] || { printf '%s\n' 'Mode must be run, smoke, snapshot, theme, import-themes, profiles, motion, launcher, apps, app-launch, app-close, phantomat, borders, check, qml, theme-config or pipelines.' >&2; exit 1; }
+project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+# The project wallpapers are not tracked files: fetch what is missing or wrong.
+bash "$project_root/tools/scripts/fetch-wallpapers"
+source "$project_root/tests/nested.conf"
+[[ $test_state_schema =~ ^[1-9][0-9]*$ ]] || { printf '%s\n' 'Test state schema must be a positive integer.' >&2; exit 1; }
+[[ $test_process_prefix =~ ^[a-z][a-z0-9-]*$ ]] || { printf '%s\n' 'Invalid test process prefix.' >&2; exit 1; }
+state_mode=${2:-$test_state_mode}
+[[ $state_mode == ephemeral || $state_mode == persistent ]] || { printf '%s\n' 'Test state mode must be ephemeral or persistent.' >&2; exit 1; }
+[[ $mode != check && $mode != qml && $mode != theme-config && $mode != pipelines || $state_mode == ephemeral ]] || { printf '%s\n' 'Automated check modes require ephemeral state.' >&2; exit 1; }
+[[ $mode != borders || $state_mode == ephemeral ]] || { printf '%s\n' 'Border checks require ephemeral state.' >&2; exit 1; }
+
+for dependency in bwrap dbus-run-session Hyprland hyprctl hyprpaper qs matugen jq grim magick rg lua pkill pgrep timeout tail; do
+  command -v "$dependency" >/dev/null || { printf 'Required test dependency: %s\n' "$dependency" >&2; exit 1; }
+done
+[[ $mode != motion ]] || command -v qmlprofiler >/dev/null || { printf '%s\n' 'qmlprofiler is required for motion diagnostics.' >&2; exit 1; }
+[[ $mode != launcher && $mode != apps ]] || command -v app2unit >/dev/null || { printf '%s\n' 'app2unit is required for launcher tests.' >&2; exit 1; }
+command -v "${test_compositor_command[0]}" >/dev/null || { printf '%s\n' 'Configured compositor launcher is unavailable.' >&2; exit 1; }
+[[ $test_graphics == render-nodes || $test_graphics == software ]] || { printf '%s\n' 'Unsupported test_graphics mode.' >&2; exit 1; }
+[[ $test_logs == keep || $test_logs == discard ]] || { printf '%s\n' 'Unsupported test_logs policy.' >&2; exit 1; }
+[[ $test_qt_portals == 0 || $test_qt_portals == 1 ]] || { printf '%s\n' 'test_qt_portals must be 0 or 1.' >&2; exit 1; }
+[[ $test_ready_seconds =~ ^[1-9][0-9]*$ ]] || { printf '%s\n' 'A positive readiness deadline is required.' >&2; exit 1; }
+[[ $mode != qml || -x $test_qmllint ]] || { printf '%s\n' 'Configured Qt 6 qmllint is unavailable.' >&2; exit 1; }
+[[ $mode != qml || -x $test_qmltestrunner ]] || { printf '%s\n' 'Configured Qt 6 qmltestrunner is unavailable.' >&2; exit 1; }
+[[ -x $test_qtpaths && $test_qt_input_method =~ ^[a-z][a-z0-9_-]*$ ]] || {
+  printf '%s\n' 'Qt 6 qtpaths and an explicit input-method plugin name are required.' >&2; exit 1;
+}
+qt_plugin_directory=$("$test_qtpaths" --plugin-dir)
+[[ -f $qt_plugin_directory/platforminputcontexts/lib${test_qt_input_method}platforminputcontextplugin.so ]] || {
+  printf 'Configured Qt input-method plugin is missing: %s\n' "$test_qt_input_method" >&2; exit 1;
+}
+[[ $test_log_parent == /tmp && -d $test_log_parent ]] || { printf '%s\n' 'Test log parent must be /tmp.' >&2; exit 1; }
+
+display_socket="${XDG_RUNTIME_DIR:?Parent XDG_RUNTIME_DIR required}/${WAYLAND_DISPLAY:?Parent WAYLAND_DISPLAY required}"
+[[ $WAYLAND_DISPLAY != /* ]] || display_socket=$WAYLAND_DISPLAY
+[[ -S $display_socket ]] || { printf 'Parent Wayland socket is missing: %s\n' "$display_socket" >&2; exit 1; }
+
+if [[ $state_mode == persistent ]]; then
+  state_dir=$(bash "$project_root/tests/scripts/test-state" path "${3:-$test_state_directory}")
+  command -v flock >/dev/null || { printf '%s\n' 'flock is required for persistent test state.' >&2; exit 1; }
+  mkdir -p -m 0700 -- "${state_dir%/*}"
+  exec {state_lock_fd}>>"$state_dir.lock"
+  flock -n "$state_lock_fd" || { printf '%s\n' 'Persistent test state is already in use.' >&2; exit 1; }
+  if [[ ! -e $state_dir ]]; then
+    state_init=$(mktemp -d "${state_dir%/*}/.init-XXXXXX")
+    if ! { mkdir -m 0700 -- "$state_init/home" &&
+           mkdir -p -m 0700 -- "$state_init/home/.config/ui-shell" &&
+           cp -- "$project_root/tools/config.ini" "$state_init/home/.config/ui-shell/config.ini" &&
+           bash "$project_root/tools/scripts/stage-defaults" "$project_root" "$state_init/home/.config/ui-shell" &&
+           printf 'ui-shell-test-state:%s\n' "$test_state_schema" >"$state_init/.owner" &&
+           mv -- "$state_init" "$state_dir"; }; then
+      rm -rf -- "$state_init"
+      printf '%s\n' 'Could not initialize private test state.' >&2
+      exit 1
+    fi
+  fi
+  [[ -f $state_dir/.owner && ! -L $state_dir/.owner && $(<"$state_dir/.owner") == "ui-shell-test-state:$test_state_schema" &&
+     -d $state_dir/home && ! -L $state_dir/home ]] || {
+    printf '%s\n' 'Persistent state is invalid or incompatible; inspect it before using make test-env-clean.' >&2; exit 1;
+  }
+  printf 'Persistent test state: %s\n' "$state_dir"
+else
+  [[ $# -lt 3 ]] || { printf '%s\n' 'A state directory requires persistent mode.' >&2; exit 1; }
+fi
+
+test_run_dir=$(mktemp -d "$test_log_parent/ui-shell-test.XXXXXX")
+run_prefix="$test_process_prefix-${test_run_dir##*.}"
+sandbox_pid=
+logger_pid=
+test_log_fd=
+manager_proxy_pid=
+close_check_pid=
+app_slice=
+wait_for_child() {
+  local pid=$1
+  if ! timeout --kill-after=1 "$test_cleanup_seconds" tail --pid="$pid" -s "$test_poll_seconds" -f /dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    if ! timeout --kill-after=1 "$test_cleanup_seconds" tail --pid="$pid" -s "$test_poll_seconds" -f /dev/null; then
+      printf 'Post-run failure: child PID %s did not stop after KILL.\n' "$pid" >&2
+      return 1
+    fi
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [[ -n $test_log_fd ]]; then
+    exec {test_log_fd}>&-
+  fi
+  # Every sandbox child inherits this run's prefix. Terminate only that set,
+  # including apps no longer parented by the shell after app2unit handoff.
+  bash "$project_root/tests/scripts/close-session" "$run_prefix" || status=1
+  if [[ -n $app_slice ]]; then
+    # No host target/environment changes. Stop only this run's recorded units.
+    if [[ -f $test_run_dir/app-units.log ]]; then
+      while IFS= read -r unit; do
+        [[ $unit =~ ^${run_prefix}-[a-zA-Z0-9]+\.scope$ ]] || { status=1; continue; }
+        timeout --kill-after=1 "$test_cleanup_seconds" systemctl --user stop "$unit" 2>/dev/null || true
+        if timeout --kill-after=1 "$test_cleanup_seconds" systemctl --user is-active --quiet "$unit"; then status=1; fi
+      done <"$test_run_dir/app-units.log"
+    fi
+    timeout --kill-after=1 "$test_cleanup_seconds" systemctl --user stop "$app_slice" 2>/dev/null || true
+    if timeout --kill-after=1 "$test_cleanup_seconds" systemctl --user is-active --quiet "$app_slice"; then status=1; fi
+    if ! timeout --kill-after=1 "$test_cleanup_seconds" systemctl --user show-environment | sort | sha256sum >"$test_run_dir/manager-after.log"; then
+      printf '%s\n' 'Post-run failure: could not verify host manager environment.' >&2
+      status=1
+    elif ! cmp -s "$test_run_dir/manager-before.log" "$test_run_dir/manager-after.log"; then
+      printf '%s\n' 'Post-run failure: host manager environment changed.' >&2
+      status=1
+    else
+      printf '%s\n' 'Post-run check: test app units stopped; host manager environment unchanged.'
+    fi
+  fi
+  if [[ -n $sandbox_pid ]]; then
+    kill -TERM "$sandbox_pid" 2>/dev/null || true
+    wait_for_child "$sandbox_pid" || status=1
+  fi
+  if [[ -n $manager_proxy_pid ]]; then
+    kill -TERM "$manager_proxy_pid" 2>/dev/null || true
+    wait_for_child "$manager_proxy_pid" || status=1
+  fi
+  if [[ -n $logger_pid ]]; then
+    wait_for_child "$logger_pid" || status=1
+  fi
+  if [[ -n $close_check_pid ]]; then
+    wait_for_child "$close_check_pid" || status=1
+    wait "$close_check_pid" || status=1
+  fi
+  if [[ -f $test_run_dir/host-before.log ]]; then
+    sha256sum -- "${test_protected_host_paths[@]/#/$project_root/}" >"$test_run_dir/host-after.log"
+    if ! cmp -s "$test_run_dir/host-before.log" "$test_run_dir/host-after.log"; then
+      printf '%s\n' 'Post-run failure: protected host-generated files changed.' >&2
+      status=1
+    else
+      printf '%s\n' 'Post-run check: protected host-generated files unchanged.'
+    fi
+  fi
+  local deadline=$((SECONDS + test_cleanup_seconds))
+  while pgrep --env "UI_SHELL_TEST_RUN=$test_run_dir" >/dev/null && (( SECONDS < deadline )); do
+    sleep "$test_poll_seconds"
+  done
+  if pgrep -a --env "UI_SHELL_TEST_RUN=$test_run_dir" >"$test_run_dir/leftovers.log"; then
+    printf '%s\n' 'Post-run failure: tagged test processes remain; see leftovers.log.' >&2
+    status=1
+  else
+    printf '%s\n' 'Post-run check: no test children remain.'
+  fi
+  if [[ $test_run_dir == /tmp/ui-shell-test.* && -d $test_run_dir && ! -L $test_run_dir ]]; then
+    if [[ $test_logs == discard ]]; then
+      rm -rf -- "$test_run_dir"
+    else
+      find "$test_run_dir" -type s -delete
+      local -a artifact_filters=(-type f ! -name '*.log' ! -name '*.qslog' ! -name 'qmltests-*.xml' ! -name '*.qtd')
+      for frame in "${test_frame_artifacts[@]}"; do artifact_filters+=(! -name "$frame"); done
+      find "$test_run_dir" "${artifact_filters[@]}" -delete
+      printf 'Artifacts kept: %s\n' "$test_run_dir"
+    fi
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$test_run_dir/quickshell" "$test_run_dir/hypr" "$test_run_dir/package"
+for runtime_part in "${test_ephemeral_config_parts[@]}"; do
+  [[ $runtime_part =~ ^[a-z][a-z0-9-]*$ ]] || { printf '%s\n' 'Invalid disposable config directory.' >&2; exit 1; }
+  mkdir -p -- "$test_run_dir/package/$runtime_part"
+done
+printf 'Test artifacts: %s (policy: %s)\n' "$test_run_dir" "$test_logs"
+sha256sum -- "${test_protected_host_paths[@]/#/$project_root/}" >"$test_run_dir/host-before.log"
+
+# Only interactive sessions and the explicit real-launch check need a host API.
+if [[ $mode == run || $mode == apps || $mode == app-launch || $mode == app-close || $mode == phantomat ]]; then
+  for dependency in app2unit systemctl xdg-dbus-proxy timeout; do
+    command -v "$dependency" >/dev/null || { printf 'Required test dependency: %s\n' "$dependency" >&2; exit 1; }
+  done
+  [[ -n ${DBUS_SESSION_BUS_ADDRESS-} ]] || { printf '%s\n' 'Host user bus address is required for test app launches.' >&2; exit 1; }
+  test_session_id=${test_run_dir##*.}
+  app_slice="app-uishelltest${test_session_id}.slice"
+  systemctl --user show-environment | sort | sha256sum >"$test_run_dir/manager-before.log"
+  xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$test_run_dir/$test_manager_socket" \
+    --filter --talk=org.freedesktop.systemd1 >"$test_run_dir/manager-proxy.log" 2>&1 &
+  manager_proxy_pid=$!
+  deadline=$((SECONDS + test_app2unit_seconds))
+  while [[ ! -S $test_run_dir/$test_manager_socket ]] && (( SECONDS < deadline )); do
+    kill -0 "$manager_proxy_pid" 2>/dev/null || { printf '%s\n' 'Test manager proxy failed; inspect manager-proxy.log.' >&2; exit 1; }
+    sleep "$test_poll_seconds"
+  done
+  [[ -S $test_run_dir/$test_manager_socket ]] || { printf '%s\n' 'Test manager proxy did not become ready.' >&2; exit 1; }
+fi
+
+args=("${test_namespace_options[@]}" --clearenv)
+for path in "${test_readonly_system_paths[@]}"; do
+  [[ -e $path ]] || { printf 'Configured system path is missing: %s\n' "$path" >&2; exit 1; }
+  args+=(--ro-bind "$path" "$path")
+done
+args+=(--symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64
+  --proc /proc --dev /dev --tmpfs /tmp
+  --perms 0700 --dir "$test_home"
+  --perms 0700 --dir "$test_runtime"
+  --dir "$test_project" --bind "$test_run_dir" /artifacts
+  --bind "$test_run_dir/quickshell" "$test_runtime/quickshell"
+  --bind "$test_run_dir/hypr" "$test_runtime/hypr"
+  --ro-bind "$display_socket" "$test_runtime/$test_parent_display")
+if [[ -n $manager_proxy_pid ]]; then
+  args+=(--ro-bind "$test_run_dir/$test_manager_socket" "$test_runtime/$test_manager_socket"
+    --setenv UI_SHELL_TEST_MANAGER_BUS "unix:path=$test_runtime/$test_manager_socket"
+    --setenv UI_SHELL_TEST_APP_SLICE "$app_slice"
+    --setenv UI_SHELL_TEST_SESSION_ID "$test_session_id")
+fi
+
+if [[ $state_mode == persistent ]]; then
+  args+=(--bind "$state_dir/home" "$test_home")
+  preferences=$state_dir/home/.config/ui-shell
+  for private_part in .config .config/ui-shell .config/ui-shell/components .config/ui-shell/default .config/ui-shell/themes .config/ui-shell/profiles .config/ui-shell/config.ini; do
+    [[ ! -L $state_dir/home/$private_part ]] || { printf 'Redirected private test preferences: %s\n' "$private_part" >&2; exit 1; }
+  done
+  for runtime_part in "${test_ephemeral_config_parts[@]}"; do
+    [[ ! -L $preferences/$runtime_part ]] || { printf 'Redirected disposable code directory: %s\n' "$runtime_part" >&2; exit 1; }
+  done
+  mkdir -p -m 0700 -- "$preferences/components" "$preferences/themes" "$preferences/profiles"
+  [[ -e $preferences/config.ini ]] || cp -- "$project_root/tools/config.ini" "$preferences/config.ini"
+  [[ -f $preferences/config.ini ]] || { printf '%s\n' 'Private test manifest must be a regular file.' >&2; exit 1; }
+  if ! manifest_data=$("$project_root/scripts/read-ini" "$preferences/config.ini"); then
+    printf '%s\n' 'Persistent test profile bundle is stale or invalid. Update the saved profile explicitly before running.' >&2
+    exit 1
+  fi
+  private_path() {
+    jq -er --arg role "$1" --arg root "$preferences" --arg home "$state_dir/home" \
+      --arg config "$state_dir/home/.config" --arg cache "$state_dir/home/.cache" \
+      --arg data "$state_dir/home/.local/share" --arg state "$state_dir/home/.local/state" '
+      .paths[$role] | select(type=="string" and length>0)
+      | if startswith("${HOME}/") then $home + .[7:]
+        elif startswith("${XDG_CONFIG_HOME}/") then $config + .[18:]
+        elif startswith("${XDG_CACHE_HOME}/") then $cache + .[17:]
+        elif startswith("${XDG_DATA_HOME}/") then $data + .[16:]
+        elif startswith("${XDG_STATE_HOME}/") then $state + .[17:]
+        elif startswith("/") then . else $root + "/" + . end
+    ' <<<"$manifest_data"
+  }
+  if ! persistent_profile=$(jq -er '.theme.profile' <<<"$manifest_data") ||
+      [[ $persistent_profile == /* || $persistent_profile == *'..'* ]]; then
+    printf '%s\n' 'Persistent test profile bundle is stale or invalid. Update the saved profile explicitly before running.' >&2
+    exit 1
+  fi
+  if ! persistent_profile_data=$("$project_root/scripts/read-theme-profile" \
+      "$preferences/$persistent_profile" "$preferences" "$(private_path profiles)" \
+      "$(private_path themes)" "$project_root/scripts/read-ini"); then
+    printf '%s\n' 'Persistent test profile bundle is stale or invalid. Update the saved profile explicitly before running.' >&2
+    exit 1
+  fi
+  while IFS= read -r definition; do
+    [[ -f $definition && ! -L $definition ]] || {
+      printf 'Persistent Theme definition is missing: %s\n' "$definition" >&2; exit 1;
+    }
+  done < <(jq -r '[.theme.definition, (.theme.definitionOverrides | .[])] | .[] | select(length > 0)' <<<"$persistent_profile_data")
+fi
+# Retain the config directory, not individual files: commits replace the
+# manifest atomically. Fresh code overlays keep old runtime files out of view.
+if [[ $state_mode == persistent ]]; then
+  args+=(--bind "$preferences" "$test_config_root")
+  for runtime_part in "${test_ephemeral_config_parts[@]}"; do
+    args+=(--bind "$test_run_dir/package/$runtime_part" "$test_config_root/$runtime_part")
+  done
+else
+  args+=(--bind "$test_run_dir/package" "$test_config_root")
+fi
+
+for part in "${test_copied_project_parts[@]}"; do
+  args+=(--ro-bind "$project_root/$part" "/source/$part")
+done
+for part in "${test_readonly_project_parts[@]}"; do
+  args+=(--ro-bind "$project_root/$part" "$test_project/$part")
+done
+if [[ $mode == check || $mode == qml || $mode == theme-config || $mode == theme || $mode == import-themes ]]; then
+  for part in "${test_reference_parts[@]}"; do
+    args+=(--ro-bind "$project_root/$part" "/source/$part")
+  done
+fi
+if [[ $mode == phantomat ]]; then
+  [[ -s $project_root/$test_phantomat_plugin ]] || { printf '%s\n' 'Build Phantomat before its isolated test.' >&2; exit 1; }
+  sha256sum -- "$project_root/$test_phantomat_plugin" >"$test_run_dir/phantomat-build.log"
+  args+=(--ro-bind "$project_root/$test_phantomat_plugin" "$test_config_root/plugins/spatialoverview.so")
+fi
+if [[ $mode == qml || $test_graphics == software ]]; then
+  args+=(--setenv LIBGL_ALWAYS_SOFTWARE 1)
+else
+  [[ -d /dev/dri ]] || { printf '%s\n' 'GPU sharing was selected but /dev/dri is unavailable.' >&2; exit 1; }
+  render_nodes=()
+  while IFS= read -r node; do render_nodes+=("$node"); done < <(find /dev/dri -maxdepth 1 -type c -name 'renderD*' -print | sort)
+  (( ${#render_nodes[@]} > 0 )) || { printf '%s\n' 'GPU sharing was selected but no render nodes exist.' >&2; exit 1; }
+  for node in "${render_nodes[@]}"; do args+=(--dev-bind "$node" "$node"); done
+fi
+
+args+=(--setenv PATH /usr/bin:/bin --setenv HOME "$test_home"
+  --setenv XDG_CONFIG_HOME "$test_home/.config"
+  --setenv XDG_CACHE_HOME "$test_home/.cache"
+  --setenv XDG_DATA_HOME "$test_home/.local/share"
+  --setenv XDG_STATE_HOME "$test_home/.local/state"
+  --setenv XDG_RUNTIME_DIR "$test_runtime"
+  --setenv WAYLAND_DISPLAY "$test_parent_display"
+  --setenv UI_SHELL_ROOT "$test_project"
+  --setenv UI_SHELL_OPEN_PICKER "$test_open_picker"
+  --setenv UI_SHELL_OPEN_TUNING "${UI_SHELL_OPEN_TUNING:-0}"
+  --setenv UI_SHELL_HOST_PROJECT "$project_root"
+  --setenv UI_SHELL_HOST_PID_NS "$(readlink /proc/self/ns/pid)"
+  --setenv UI_SHELL_HOST_MNT_NS "$(readlink /proc/self/ns/mnt)"
+  --setenv UI_SHELL_HOST_NET_NS "$(readlink /proc/self/ns/net)"
+  --setenv UI_SHELL_TEST_RUN "$test_run_dir"
+  --setenv UI_SHELL_TEST_PREFIX "$run_prefix"
+  --setenv UI_SHELL_TEST_STATE_MODE "$state_mode"
+  --setenv GSETTINGS_BACKEND "$test_gsettings_backend"
+  --setenv QT_IM_MODULE "$test_qt_input_method"
+  --setenv QS_ICON_THEME "$test_icon_theme"
+  --setenv LANG C.UTF-8 --chdir "$test_project")
+[[ $test_qt_portals != 0 ]] || args+=(--setenv QT_NO_XDG_DESKTOP_PORTAL 1)
+if [[ $mode == launcher || $mode == apps ]]; then
+  args+=(--setenv UI_SHELL_OPEN_PICKER 0 --setenv UI_SHELL_OPEN_APPS 1)
+fi
+
+exec {test_log_fd}> >(tee "$test_run_dir/launcher.log")
+logger_pid=$!
+bwrap "${args[@]}" -- /usr/bin/bash /source/tests/scripts/nested-session "$mode" >&"$test_log_fd" 2>&1 &
+sandbox_pid=$!
+exec {test_log_fd}>&-
+test_log_fd=
+if [[ $mode == app-close ]]; then
+  bash "$project_root/tests/scripts/check-window-close" "$test_run_dir" "$sandbox_pid" &
+  close_check_pid=$!
+fi
+# A nested compositor can keep running headless after its toplevel is closed.
+# The host owns that window's lifetime; observe its exact run-tagged PID.
+if [[ $mode == run || $mode == apps || $mode == app-close || $mode == phantomat ]]; then
+  saw_window=false
+  window_pid=
+  window_sized=false
+  nested_mode=$(sed -n 's/.*mode = "\([0-9][0-9]*x[0-9][0-9]*\)@.*/\1/p' "$project_root/hypr/user/nested.lua" | head -n 1)
+  [[ $nested_mode =~ ^[0-9]+x[0-9]+$ ]] || nested_mode=1280x720
+  while kill -0 "$sandbox_pid" 2>/dev/null; do
+    if [[ -n $close_check_pid ]] && ! kill -0 "$close_check_pid" 2>/dev/null; then
+      wait "$close_check_pid" || exit 1
+    fi
+    clients=$(timeout --kill-after=1 "$test_cleanup_seconds" hyprctl -j clients) || exit 1
+    if [[ -z $window_pid ]]; then
+      compositor_pids=$(pgrep -x Hyprland --env "UI_SHELL_TEST_PREFIX=$run_prefix" || true)
+      window_pid=$(jq -r --arg pids "$compositor_pids" \
+        '[.[] | .pid as $pid | select($pids | split("\n") | any(. == ($pid | tostring))) | .pid] |
+         unique | if length == 1 then .[] else empty end' <<<"$clients")
+    fi
+    if [[ -n $window_pid && $window_sized == false ]]; then
+      address=$(jq -r --arg pid "$window_pid" \
+        '.[] | select((.pid | tostring) == $pid) | .address' <<<"$clients" | head -n 1)
+      if [[ -n $address ]]; then
+        # Float only this nested window; a tiling host must not shrink the
+        # fixed 1280x720 output the test renders against.
+        hyprctl dispatch setfloating "address:$address" >/dev/null 2>&1 || true
+        hyprctl dispatch resizewindowpixel "exact ${nested_mode%x*} ${nested_mode#*x},address:$address" >/dev/null 2>&1 || true
+        hyprctl dispatch centerwindow "address:$address" >/dev/null 2>&1 || true
+        window_sized=true
+      fi
+    fi
+    # Keep the original owner: a watchdog restart is not a new test session.
+    if [[ -n $window_pid ]] && jq -e --arg pid "$window_pid" \
+      'any(.[]; (.pid | tostring) == $pid)' <<<"$clients" >/dev/null; then
+      saw_window=true
+    elif [[ $saw_window == true ]]; then
+      printf 'Nested window closed: %s\n' "$run_prefix"
+      exit 0
+    fi
+    sleep "$test_poll_seconds"
+  done
+fi
+wait "$sandbox_pid"

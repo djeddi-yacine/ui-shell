@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Install the clean default seed and seed runtime stores only when absent.
+# The destination may be any config root: staging, tests, or private state.
+set -euo pipefail
+(( $# == 2 )) || { printf '%s\n' 'Usage: stage-defaults SOURCE_ROOT DESTINATION' >&2; exit 2; }
+source_root=$(realpath -e -- "$1")
+destination=$(realpath -m -- "$2")
+source_default=$source_root/default
+fail() { printf 'Stage defaults: %s\n' "$*" >&2; exit 1; }
+[[ $destination != "$source_root" && $destination != / ]] || fail 'use a separate destination directory'
+for name in default.png theme.ini profile.ini; do
+  [[ -f $source_default/$name && ! -L $source_default/$name ]] || fail "default/$name must be a regular file"
+done
+mapfile -t entries < <(find "$source_default" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+[[ ${entries[*]} == 'default.png profile.ini theme.ini' ]] ||
+  fail 'default/ must contain only default.png, profile.ini and theme.ini'
+[[ ! -L $destination/themes && ! -L $destination/profiles ]] || fail 'runtime stores must not be symlinks'
+mkdir -p -- "$destination"
+temporary=$(mktemp -d "$destination/.default.XXXXXX")
+cleanup() { [[ ! -d $temporary ]] || rm -rf -- "$temporary"; }
+trap cleanup EXIT
+cp -a -- "$source_default/." "$temporary/"
+rm -rf -- "$destination/default"
+mv -- "$temporary" "$destination/default"
+temporary=''
+# User-created themes and profiles always win over the shipped defaults.
+theme=$destination/themes/default/config.ini
+profile=$destination/profiles/default/profile.ini
+if [[ ! -e $theme ]]; then
+  mkdir -p -- "${theme%/*}"
+  cp -- "$source_default/theme.ini" "$theme"
+fi
+if [[ ! -e $profile ]]; then
+  mkdir -p -- "${profile%/*}"
+  cp -- "$source_default/profile.ini" "$profile"
+fi

@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# Validate the installed runtime schema and profile/bundle boundaries.
+set -euo pipefail
+fail() { printf 'Runtime config: %s\n' "$*" >&2; exit 1; }
+[[ ${UI_SHELL_ROOT-} == /project && $HOME == /home/test && -f ${UI_SHELL_RUNTIME-} ]] || fail 'private installed runtime required'
+runtime=$UI_SHELL_RUNTIME
+config_root=$(jq -er '.configRoot' "$runtime")
+reader=$(jq -er '.commands.readIni' "$runtime")
+resolver=$(jq -er '.commands.readShellConfig' "$runtime")
+prepare=$(jq -er '.commands.prepareRuntime' "$runtime")
+scratch=$(mktemp -d "$XDG_CACHE_HOME/runtime-contract.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+
+# Staging installs every runtime helper and nothing from the development or
+# test harness. The helper inventory itself must match the source runtime set.
+runtime_scripts=$(find /project/scripts -maxdepth 1 -type f -printf '%f\n' | sort)
+installed_scripts=$(find "$config_root/scripts" -maxdepth 1 -type f -printf '%f\n' | sort)
+[[ $installed_scripts == "$runtime_scripts" ]] || fail 'installed helper set differs from runtime scripts'
+[[ ! -e $config_root/tools && ! -e $config_root/tests ]] || fail 'development or test directories were installed'
+for helper in stage-config test-nested test-state nested-session; do
+  [[ ! -e $config_root/scripts/$helper ]] || fail "non-runtime helper installed: $helper"
+done
+while IFS= read -r helper; do
+  cmp -s -- "/project/scripts/$helper" "$config_root/scripts/$helper" || fail "installed helper differs: $helper"
+done <<<"$runtime_scripts"
+
+# Runtime JSON is a typed schema, with installation bootstrap kept separate
+# from the profile's saved colors and compiled native bundle.
+jq -e '
+  .schema == 1 and
+  (.bootstrap | keys == ["profileModule", "runtime", "wallpaperCatalog"]) and
+  (.profileRenderers | keys == ["hyprland", "hyprpaper", "quickshell"]) and
+  (.paths.profileCache | type == "string" and startswith("/")) and
+  (.wallpaper | type == "object" and .schema == 1 and (.default | type == "object") and (.monitors | type == "object")) and
+  (if .theme.source == "file" then
+     (.profileColors | type == "object" and (.defaultPalette | type == "object") and (.byOutput | type == "object"))
+   else .profileColors == null end) and
+  ([has("generated"), (.paths | has("registry")), (.theme | has("palette")), has("paletteOverrides")] | all(. == false))
+' "$runtime" >/dev/null || fail 'runtime schema or removed-field contract mismatch'
+jq -e '.theme.source == "file" or .theme.source == "wallpaper"' "$runtime" >/dev/null || fail 'missing selected profile source'
+
+# Keep strict manifest rejection checks and verify default XDG roots.
+for expression in 's/schema = 2/schema = 3/' \
+  's|profile = profiles/default/profile.ini|profile = ../escape|' \
+  's|profile = profiles/default/profile.ini|profile = themes/default/config.ini|' \
+  's|scripts = scripts|scripts = ../escape|' \
+  's|scripts = scripts|scripts = ${UNKNOWN}/scripts|'; do
+  sed "$expression" "$config_root/config.ini" >"$scratch/bad.ini"
+  if "$resolver" "$scratch/bad.ini" "$reader" >"$scratch/bad.json" 2>/dev/null; then fail 'invalid manifest accepted'; fi
+  [[ ! -s $scratch/bad.json ]] || fail 'invalid manifest emitted partial data'
+done
+if env XDG_CONFIG_HOME=relative "$resolver" "$config_root/config.ini" "$reader" >/dev/null 2>&1; then fail 'relative XDG root accepted'; fi
+env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u XDG_DATA_HOME \
+  "$resolver" "$config_root/config.ini" "$reader" >"$scratch/xdg-defaults.json"
+jq -e --arg home "$HOME" '.xdg.config == ($home + "/.config") and .xdg.cache == ($home + "/.cache")' "$scratch/xdg-defaults.json" >/dev/null
+
+# A profile is one self-contained schema 2 INI; reading it preserves scoped
+# wallpaper selections and complete colors instead of referring to sidecars.
+profile=$(jq -er '.theme.profile' "$runtime")
+[[ -f $profile ]] || fail 'selected durable profile is missing'
+profile_data=$("$(jq -er '.commands.readThemeProfile' "$runtime")" "$profile" "$config_root" \
+  "$(jq -er '.paths.profiles' "$runtime")" "$(jq -er '.paths.themes' "$runtime")" "$reader")
+jq -e '.theme.profile | type == "string"' <<<"$profile_data" >/dev/null
+rg -q '^\[profile\]$' "$profile"
+rg -q '^schema = 2$' "$profile"
+rg -q '^\[wallpaper\.default\]$' "$profile"
+if rg -q '^registry[[:space:]]*=|^palette[[:space:]]*=|^\[palette_overrides\]$' "$profile"; then
+  fail 'profile contains an external registry, palette path, or palette override section'
+fi
+
+# The six argument draft renderer writes raw JSON. Native Lua is produced only
+# by the configured registry renderer while the complete profile bundle builds.
+selection_renderer=$(jq -er '.commands.renderWallpaperSelection' "$runtime")
+folder=$(jq -er '.wallpaper.default.folder' "$runtime")
+name=$(jq -er '.wallpaper.default.path' "$runtime")
+fit=$(jq -er '.wallpaper.default.fit_mode' "$runtime")
+"$selection_renderer" "$runtime" '' "$folder" "$name" "$fit" "$scratch/selection.json" >/dev/null
+jq -e --arg folder "$folder" --arg name "$name" --arg fit "$fit" \
+  '.schema == 1 and .default.folder == $folder and .default.path == $name and .default.fit_mode == $fit and (.monitors | type == "object")' \
+  "$scratch/selection.json" >/dev/null || fail 'selection renderer did not emit raw selection JSON'
+"$(jq -er '.commands.renderWallpaperRegistry' "$runtime")" "$scratch/selection.json" "$scratch/selection.lua"
+lua - "$scratch/selection.lua" "$folder" "$name" <<'LUA'
+local registry = dofile(arg[1])
+assert(registry.default.folder == arg[2] and registry.default.path == arg[3])
+LUA
+
+# prepare-runtime compiles the full cache generation and writes only the
+# configured GeneratedRuntime bootstrap plus the runtime Lua projection.
+"$resolver" "$(jq -er '.configFile' "$runtime")" "$reader" >"$scratch/resolved.json"
+runtime=$("$prepare" "$scratch/resolved.json")
+export UI_SHELL_RUNTIME=$runtime UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$runtime")
+"$(jq -er '.commands.preparePalettes' "$runtime")"
+jq -e '.bundle.key | type == "string" and length == 64 and test("^[0-9a-f]+$")' "$runtime" >/dev/null ||
+  fail 'compiled bundle cache key must be a 64-character hex digest'
+jq -e '.bundle | del(.key) | all(.[]; type == "string" and startswith("/"))' "$runtime" >/dev/null ||
+  fail 'compiled bundle paths must be absolute'
+bundle=$(jq -er '.bundle.root' "$runtime")
+[[ -s $bundle/quickshell/qmldir && -s $bundle/quickshell/GeneratedPalette.qml &&
+   -s $bundle/quickshell/GeneratedPalettes.qml && -s $bundle/quickshell/WallpaperTargets.qml &&
+   -s $bundle/hyprland/colors.lua && -s $bundle/hyprland/outputs.lua && -s $bundle/hyprpaper/hyprpaper.conf &&
+   -s $(jq -er '.bootstrap.runtime' "$runtime") ]] || fail 'compiled profile bundle is incomplete'
+[[ $(rg -c '^singleton ' "$bundle/quickshell/qmldir") == 3 ]] || fail 'QML bundle singleton manifest mismatch'
+lua - "$(jq -er '.runtimeLua' "$runtime")" <<'LUA'
+local runtime = dofile(arg[1])
+assert(runtime.schema == 1 and runtime.bundle.root and runtime.bundle.key)
+assert(runtime.bundle.globalPalette and runtime.bundle.palettes and runtime.bundle.quickshell)
+assert(runtime.bundle.hyprPalette and runtime.bundle.wallpaperRegistry and runtime.bundle.hyprpaper)
+assert(runtime.bundle.hyprOutputPalettes)
+assert(runtime.bootstrap.runtime and runtime.bootstrap.wallpaperCatalog and runtime.bootstrap.profileModule)
+assert(runtime.paths.registry == nil and runtime.generated == nil and runtime.theme.palette == nil)
+LUA
+
+# Relocate the installed package into a shell-significant path. Every consumer
+# must follow the manifest role map after directories and helper names change.
+relocated="$scratch/package space ' dollar \$literal"
+cp -a -- "$config_root" "$relocated"
+mv -- "$relocated/scripts" "$relocated/helpers"
+mv -- "$relocated/quickshell" "$relocated/qml"
+mv -- "$relocated/themes" "$relocated/palettes"
+mv -- "$relocated/profiles" "$relocated/bundles"
+mv -- "$relocated/hypr" "$relocated/wm"
+# The moved default recipe contains Theme-definition paths as well as the
+# manifest's store path. Keep the selected definition inside the relocated
+# palette store before asking the runtime resolver to load it.
+sed 's|themes/|palettes/|g' "$relocated/bundles/default/profile.ini" >"$scratch/default-profile.ini"
+mv -- "$scratch/default-profile.ini" "$relocated/bundles/default/profile.ini"
+mv -- "$relocated/helpers/extract-colors" "$relocated/helpers/image-colors"
+mv -- "$relocated/helpers/render-wallpaper-selection" "$relocated/helpers/selection-renderer"
+sed \
+  -e 's|scripts = scripts|scripts = helpers|' -e 's|= scripts/|= helpers/|g' \
+  -e 's|quickshell = quickshell|quickshell = qml|' -e 's|= quickshell/|= qml/|g' \
+  -e 's|themes = themes|themes = palettes|' -e 's|= themes/|= palettes/|g' \
+  -e 's|profiles = profiles|profiles = bundles|' -e 's|= profiles/|= bundles/|g' \
+  -e 's|hypr = hypr|hypr = wm|' -e 's|= hypr/|= wm/|g' \
+  -e 's|extractColors = helpers/extract-colors|extractColors = helpers/image-colors|' \
+  -e 's|renderWallpaperSelection = helpers/render-wallpaper-selection|renderWallpaperSelection = helpers/selection-renderer|' \
+  -e "s|runtime = \${XDG_CACHE_HOME}/ui-shell/runtime|runtime = $scratch/relocated-runtime|" \
+  -e "s|profileCache = \${XDG_CACHE_HOME}/ui-shell/profiles|profileCache = $scratch/relocated-profiles|" \
+  -e 's|profile = profiles/|profile = bundles/|' \
+  "$config_root/config.ini" >"$relocated/config.ini"
+relocated_manifest=$relocated/config.ini
+relocated_helpers=$relocated/helpers
+relocated_reader=$relocated_helpers/read-ini
+"$relocated_helpers/read-shell-config" "$relocated_manifest" "$relocated_reader" >"$scratch/relocated-resolved.json"
+relocated_runtime=$("$relocated_helpers/prepare-runtime" "$scratch/relocated-resolved.json")
+export UI_SHELL_RUNTIME=$relocated_runtime
+jq -e --arg root "$relocated" '
+  .configRoot == $root and
+  .paths.scripts == ($root + "/helpers") and .paths.quickshell == ($root + "/qml") and
+  .paths.themes == ($root + "/palettes") and .paths.profiles == ($root + "/bundles") and
+  .paths.hypr == ($root + "/wm") and
+  .bootstrap.runtime == ($root + "/qml/config/GeneratedRuntime.qml") and
+  .bootstrap.profileModule == ($root + "/qml/config/ProfileBundle") and
+  ([.commands[]] | all(startswith($root + "/helpers/"))) and
+  ([.profileRenderers[]] | all(startswith($root + "/helpers/"))) and
+  .commands.extractColors == ($root + "/helpers/image-colors") and
+  .commands.renderWallpaperSelection == ($root + "/helpers/selection-renderer")
+' "$relocated_runtime" >/dev/null || fail 'runtime paths ignored relocated manifest roles'
+relocated_qml=$(jq -er '.bootstrap.runtime' "$relocated_runtime")
+jq -e '.bundle.quickshell as $module | .paths.profileCache as $cache | .paths.quickshell as $installed |
+  ($module | startswith($cache + "/")) and (($module | startswith($installed + "/")) | not)' \
+  "$relocated_runtime" >/dev/null || fail 'QML module import must resolve from the compiled cache bundle'
+profile_module=$(jq -er '.bootstrap.profileModule' "$relocated_runtime")
+[[ -L $profile_module ]] || fail 'bootstrap profile module must be an atomic symlink'
+bundle_quickshell=$(jq -er '.bundle.quickshell' "$relocated_runtime")
+[[ $(readlink -- "$profile_module") == "$bundle_quickshell" ]] || fail 'bootstrap profile module does not target bundle.quickshell'
+relative_module=$(realpath -ms --relative-to="${relocated_qml%/*}" -- "$profile_module")
+[[ $relative_module != /* ]] || fail 'runtime QML module import must be relative'
+native_import=$(jq -Rrn --arg module "$relative_module" '"import " + ($module | tojson) + " as Profile"')
+rg -Fq -- "$native_import" "$relocated_qml" || fail 'runtime QML import differs from the relative bootstrap.profileModule path'
+if rg -q '/project/(scripts|shell|hypr)' "$relocated_qml"; then fail 'checkout path survived relocated runtime rendering'; fi
+
+# Compile a schema 2 file profile with independent dark default and light
+# output snapshots through the configured renderer and relocated helpers.
+mkdir -p -- "$relocated/palettes/synthwave-dark" "$relocated/palettes/synthwave-day" \
+  "$relocated/bundles/relocation-contract"
+dark_source=/source/refs/100-themes/synthwave/dark/colors.toml
+light_source=/source/refs/100-themes/synthwave/day/colors.toml
+"$relocated_helpers/normalize-theme-colors" "$dark_source" "$scratch/dark.json" green yellow red
+"$relocated_helpers/normalize-theme-colors" "$light_source" "$scratch/light.json" green yellow red
+"$relocated_helpers/render-theme-colors" "$scratch/dark.json" "$relocated/palettes/synthwave-dark/config.ini"
+"$relocated_helpers/render-theme-colors" "$scratch/light.json" "$relocated/palettes/synthwave-day/config.ini"
+wallpaper_folder=$(jq -er '.wallpaper.default.folder' "$relocated_runtime")
+wallpaper_name=$(jq -er '.wallpaper.default.path' "$relocated_runtime")
+wallpaper_dir=$(jq -er --arg id "$wallpaper_folder" '.wallpaperFolders[] | select(.id == $id) | .path' "$relocated_runtime")
+wallpaper_key=$(sha256sum <"$wallpaper_dir/$wallpaper_name"); wallpaper_key=${wallpaper_key%% *}
+wallpaper_key="$wallpaper_key-dark-v2"
+selection_renderer=$(jq -er '.commands.renderWallpaperSelection' "$relocated_runtime")
+"$selection_renderer" "$relocated_runtime" '' "$wallpaper_folder" "$wallpaper_name" cover "$scratch/relocated-selection.json" >/dev/null
+jq -e --arg folder "$wallpaper_folder" --arg name "$wallpaper_name" \
+  '.default.folder == $folder and .default.path == $name' "$scratch/relocated-selection.json" >/dev/null ||
+  fail 'renamed wallpaper selection helper was not used through its configured role'
+cache_wallpaper_colors=$(jq -er '.commands.cacheWallpaperColors' "$relocated_runtime")
+cache_namespace=runtime-contract-relocated
+wallpaper_key=$("$cache_wallpaper_colors" "$wallpaper_dir/$wallpaper_name" dark "$cache_namespace")
+[[ $wallpaper_key == "$(sha256sum <"$wallpaper_dir/$wallpaper_name" | awk '{print $1}')-dark-v2" ]] ||
+  fail 'renamed color extractor was not used through its configured role'
+jq -n --slurpfile dark "$scratch/dark.json" --slurpfile light "$scratch/light.json" \
+  --arg folder "$wallpaper_folder" --arg image "$wallpaper_name" --arg key "$wallpaper_key" \
+  --arg definition "palettes/synthwave-dark/config.ini" --arg light_definition "palettes/synthwave-day/config.ini" \
+  --arg output TEST_OUTPUT_B --arg namespace "ui-shell/wallpapers" '
+  {id:"relocation-contract",source:"file",definition:$definition,
+   definitionOverrides:{($output):$light_definition},
+   wallpaper:{schema:1,cache_namespace:$namespace,color_mode:"dark",hyprpaper_ipc:true},
+   wallpapers:[{scope:"default",output:"",selection:{folder:$folder,path:$image,fit_mode:"cover",palette_key:$key}}],
+   palettes:[{scope:"default",output:"",palette:$dark[0]},
+     {scope:"output-test-output-b",output:$output,palette:$light[0]}]}
+' >"$scratch/recipe.json"
+"$relocated_helpers/render-theme-profile" "$scratch/recipe.json" \
+  "$relocated/bundles/relocation-contract/profile.ini"
+sed 's|profile = bundles/default/profile.ini|profile = bundles/relocation-contract/profile.ini|' \
+  "$relocated_manifest" >"$scratch/relocated.ini"
+mv -- "$scratch/relocated.ini" "$relocated_manifest"
+"$relocated_helpers/read-shell-config" "$relocated_manifest" "$relocated_reader" >"$scratch/relocated-resolved.json"
+relocated_runtime=$("$relocated_helpers/prepare-runtime" "$scratch/relocated-resolved.json")
+export UI_SHELL_RUNTIME=$relocated_runtime UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$relocated_runtime")
+jq -e '.theme.source == "file" and .profileColors.defaultPalette.mode == "dark" and
+  .profileColors.byOutput.TEST_OUTPUT_B.mode == "light"' "$relocated_runtime" >/dev/null ||
+  fail 'relocated full-palette profile lost dark/default and light/output snapshots'
+"$(jq -er '.commands.preparePalettes' "$relocated_runtime")"
+relocated_bundle=$(jq -er '.bundle.root' "$relocated_runtime")
+rg -Fq 'readonly property var defaultPalette:' "$relocated_bundle/quickshell/GeneratedPalettes.qml"
+rg -Fq '"TEST_OUTPUT_B": {' "$relocated_bundle/quickshell/GeneratedPalettes.qml"
+rg -Fq 'readonly property string mode: "dark"' "$relocated_bundle/quickshell/GeneratedPalette.qml"
+
+# Invalid committed snapshot data is rejected before runtime/native projections
+# are touched; restore the known-good profile after the negative case.
+relocated_profile=$relocated/bundles/relocation-contract/profile.ini
+runtime_lua=$(jq -er '.runtimeLua' "$relocated_runtime")
+projection_files=("$relocated_qml" "$runtime_lua" "$relocated_runtime"
+  "$relocated_bundle/quickshell/GeneratedPalette.qml"
+  "$relocated_bundle/quickshell/GeneratedPalettes.qml"
+  "$relocated_bundle/quickshell/WallpaperTargets.qml"
+  "$relocated_bundle/hyprland/colors.lua"
+  "$relocated_bundle/hyprpaper/hyprpaper.conf"
+  "$relocated_bundle/checksums.sha256")
+before_bad_profile=$(sha256sum -- "${projection_files[@]}")
+cp -- "$relocated_profile" "$scratch/good-profile.ini"
+sed 's/^accent =.*/accent = invalid/' "$relocated_profile" >"$scratch/bad-profile.ini"
+cp -- "$scratch/bad-profile.ini" "$relocated_profile"
+if "$relocated_helpers/prepare-runtime" "$scratch/relocated-resolved.json" >"$scratch/bad-runtime.json" 2>/dev/null; then
+  fail 'malformed saved palette snapshot was accepted by runtime preparation'
+fi
+[[ ! -s $scratch/bad-runtime.json && $(sha256sum -- "${projection_files[@]}") == "$before_bad_profile" ]] ||
+  fail 'malformed snapshot changed runtime projections'
+mv -- "$scratch/good-profile.ini" "$relocated_profile"
+printf '%s\n' 'Runtime config passed: runtime-only staging, strict schema/profile validation, relocated helper roles, dark/light snapshots, and malformed-profile projection safety.'

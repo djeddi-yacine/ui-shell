@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=UiShell Hidden Example
+Exec=/usr/bin/true
+NoDisplay=true

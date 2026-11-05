@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=${1:?output QML path required}
+shift
+
+(( $# >= 2 && $# % 2 == 0 )) || {
+  printf '%s\n' 'Expected monitor and colors.json pairs.' >&2
+  exit 1
+}
+
+command -v jq >/dev/null || {
+  printf '%s\n' 'jq is required for monitor palette rendering.' >&2
+  exit 1
+}
+
+entries='[]'
+declare -A seen_outputs=()
+default_count=0
+while (( $# > 0 )); do
+  monitor=$1
+  input=$2
+  shift 2
+
+  [[ $monitor != *$'\n'* && -f $input ]] || {
+    printf '%s\n' 'Monitor names must be single-line and palette inputs must exist.' >&2
+    exit 1
+  }
+  if [[ -n $monitor ]]; then
+    [[ ! ${seen_outputs[$monitor]+present} ]] || {
+      printf 'Duplicate palette output: %s\n' "$monitor" >&2
+      exit 1
+    }
+    seen_outputs[$monitor]=1
+  else
+    ((default_count += 1))
+  fi
+
+  entry=$(jq -cer --arg monitor "$monitor" '
+    def valid_border:
+      split(" ") as $parts |
+      ($parts[-1] | test("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)deg$")) as $angled |
+      (if $angled then $parts[:-1] else $parts end) as $stops |
+      ($stops | length) > 0 and all($stops[]; test("^(rgb\\([0-9A-Fa-f]{6}\\)|rgba\\([0-9A-Fa-f]{8}\\))$")) and (($angled | not) or ($stops | length) > 1);
+    . as $theme |
+  def complete_colors:
+    . as $colors | ["accent","selection","muted","background","dark_background","darker_background","lighter_background","foreground","dark_foreground","light_foreground","bright_foreground","red","yellow","orange","green","cyan","blue","magenta","brown","bright_red","bright_yellow","bright_green","bright_cyan","bright_blue","bright_magenta"] | all(.[]; . as $key | $colors | has($key));
+    if ($theme.colors | complete_colors | not) then error("missing named palette slots") else . end |
+    ["background","surface","surfaceVariant","elevated","text","textMuted","accent","positive","warning","negative","outline","focus","scrim"] as $roles |
+    def mode:
+      if .mode == "dark" or .mode == "light" then .mode else error("invalid mode") end;
+    def color($name):
+      .[$name] as $value
+      | if $value | type == "string" and test("^#[0-9A-Fa-f]{6}$") then $value else error("invalid " + $name) end;
+    if ($theme | type != "object" or .schema != 2 or (keys | sort) != (($roles + ["schema","mode","colors","hyprland"]) | sort)) then error("invalid schema-2 theme") else . end |
+    if ([$roles[] as $role | $theme[$role]] | all(type == "string" and test("^#[0-9A-Fa-f]{6}$")) | not) then error("invalid shell roles") else . end |
+    if ($theme.colors | type != "object" or length == 0 or (to_entries | all(.[]; (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string" and test("^#[0-9A-Fa-f]{6}$"))) | not)) then error("invalid named colors") else . end |
+    if ($theme.hyprland | type != "object" or (keys | sort) != ["active_border","inactive_border"] or
+        ([.active_border,.inactive_border] | all(type == "string" and valid_border) | not)) then error("invalid Hyprland metadata") else . end |
+    {
+      monitor: $monitor,
+      palette: ($theme + {
+        mode: mode,
+        background: color("background"), surface: color("surface"), surfaceVariant: color("surfaceVariant"),
+        elevated: color("elevated"), text: color("text"), textMuted: color("textMuted"), accent: color("accent"),
+        positive: color("positive"), warning: color("warning"), negative: color("negative"), outline: color("outline"),
+        focus: color("focus"), scrim: color("scrim")
+      })
+    }
+  ' "$input")
+  entries=$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$entries")
+done
+
+(( default_count == 1 )) || {
+  printf '%s\n' 'Exactly one default monitor palette is required.' >&2
+  exit 1
+}
+
+temporary=$(mktemp "${output}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+
+jq -er '
+  def palette($value): $value | @json;
+  (map(select(.monitor == "")) | .[0].palette) as $default
+  | (map(select(.monitor != ""))) as $overrides
+  | [
+    "pragma Singleton", "", "import QtQuick", "", "QtObject {",
+    "    readonly property var defaultPalette: (" + palette($default) + ")",
+    "    readonly property var byOutput: ({"
+  ]
+  + ($overrides | map("        " + (.monitor | @json) + ": " + palette(.palette) + ","))
+  + [
+    "    })", "",
+    "    function forOutput(outputName) {",
+    "        if (Object.prototype.hasOwnProperty.call(byOutput, outputName))",
+    "            return byOutput[outputName]",
+    "        return defaultPalette",
+    "    }",
+    "}", ""
+  ] | join("\n")
+' <<<"$entries" >"$temporary"
+
+mv -f -- "$temporary" "$output"

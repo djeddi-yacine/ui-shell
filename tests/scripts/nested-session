@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode=${1:?run or check mode required}
+source /source/tests/nested.conf
+for part in "${test_copied_project_parts[@]}"; do
+  cp -a -- "/source/$part" "$test_project/$part"
+done
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+bash "$test_project/tools/scripts/stage-config" "$test_project" "$test_config_root"
+if [[ -n ${UI_SHELL_TEST_MANAGER_BUS-} ]]; then
+  mkdir -p "$test_runtime/app2unit-bin"
+  ln -s "$test_project/$test_app_runner" "$test_runtime/app2unit-bin/systemd-run"
+  chmod +x "$test_project/$test_app_runner"
+  # Override only the staged user configuration. Production QML is untouched.
+  sed -i \
+    -e 's|readonly property string runnerExecutable: .*|readonly property string runnerExecutable: "/usr/bin/bash"|' \
+    -e "s|readonly property list<string> runnerArguments: .*|readonly property list<string> runnerArguments: [\"$test_project/$test_app_runner\"]|" \
+    -e 's|// Service mode hands off promptly; scope mode waits for the application.|// Test session adapter acknowledges a registered scope without waiting for app exit.|' \
+    "$test_config_root/quickshell/config/AppLauncher.qml"
+fi
+resolved=$(mktemp "$XDG_CACHE_HOME/.ui-shell-paths.XXXXXX")
+bash "$test_config_root/scripts/read-shell-config" "$test_config_root/config.ini" "$test_config_root/scripts/read-ini" >"$resolved"
+export UI_SHELL_RUNTIME
+if [[ $mode == import-themes ]]; then
+  # Definitions only: no profile compilation or native bootstrap writes.
+  trap 'rm -f -- "$resolved"' EXIT
+  bash "$test_project/tools/scripts/import-reference-themes" "$resolved" "/source/$test_theme_reference" \
+    "$test_theme_positive" "$test_theme_warning" "$test_theme_negative"
+  exit 0
+fi
+if [[ $mode == theme ]]; then
+  [[ $test_theme_sample =~ ^[a-z0-9-]+/(dark|day|high-contrast|day-high-contrast|oled)$ ]] || { printf '%s\n' 'Invalid test theme sample.' >&2; exit 2; }
+  UI_SHELL_RUNTIME=$resolved
+  "$(jq -er '.commands.normalizeThemeColors' "$resolved")" \
+    "/source/$test_theme_reference/$test_theme_sample/colors.toml" "$XDG_CACHE_HOME/test-theme.json" \
+    "$test_theme_positive" "$test_theme_warning" "$test_theme_negative"
+  jq -n --slurpfile colors "$XDG_CACHE_HOME/test-theme.json" \
+    '{source:"file",definition:"",definitionOverrides:{},defaultPalette:($colors|first),byOutput:{}}' >"$XDG_CACHE_HOME/test-policy.json"
+  jq '.wallpaper' "$resolved" >"$XDG_CACHE_HOME/test-wallpaper.json"
+  revision=$("$(jq -er '.commands.readThemeState' "$resolved")" "$resolved" | jq -er '.revision')
+  recipe=$("$(jq -er '.commands.publishThemeBundle' "$resolved")" "$resolved" default "$XDG_CACHE_HOME/test-policy.json" "$XDG_CACHE_HOME/test-wallpaper.json")
+  "$(jq -er '.commands.selectThemeProfile' "$resolved")" persist "$recipe" "$revision" ''
+  rm -f -- "$recipe"
+  bash "$test_config_root/scripts/read-shell-config" "$test_config_root/config.ini" "$test_config_root/scripts/read-ini" >"$resolved"
+fi
+UI_SHELL_RUNTIME=$(bash "$test_config_root/scripts/prepare-runtime" "$resolved")
+export UI_SHELL_RUNTIME_LUA
+UI_SHELL_RUNTIME_LUA=$(jq -r '.runtimeLua' "$UI_SHELL_RUNTIME")
+rm -f -- "$resolved"
+# Existing source-relative unit imports test the installed QML, not a second copy.
+mv -- "$test_project/shell" "$test_project/source-shell"
+ln -s -- "$test_config_root/quickshell" "$test_project/shell"
+
+case $mode in
+  run|smoke|snapshot|theme|profiles|motion|launcher|apps|app-launch|app-close|phantomat|borders) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/run-session" "$mode" ;;
+  check) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-sandbox" ;;
+  qml) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-qml" ;;
+  theme-config) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-theme-config" ;;
+  pipelines) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-pipelines" ;;
+  *) printf '%s\n' 'Mode must be run, smoke, snapshot, theme, import-themes, profiles, motion, launcher, apps, app-launch, app-close, phantomat, borders, check, qml, theme-config or pipelines.' >&2; exit 1 ;;
+esac

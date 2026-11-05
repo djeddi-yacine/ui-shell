@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+wallpaper=${1:?wallpaper path required}
+mode=${2:?color mode required}
+cache_namespace=${3:?cache namespace required}
+expected_key=${4-}
+cache_home=$(jq -er '.xdg.cache' "${UI_SHELL_RUNTIME:?resolved runtime data required}")
+
+[[ -f $wallpaper ]] || {
+  printf 'Wallpaper not found: %s\n' "$wallpaper" >&2
+  exit 1
+}
+[[ $mode == dark || $mode == light ]] || {
+  printf 'Cacheable color mode must be dark or light: %s\n' "$mode" >&2
+  exit 1
+}
+[[ $cache_namespace != /* && $cache_namespace != *".."* && $cache_namespace != *$'\n'* ]] || {
+  printf '%s\n' 'Cache namespace must be a relative, single-line path.' >&2
+  exit 1
+}
+
+command -v sha256sum >/dev/null || {
+  printf '%s\n' 'sha256sum is required for wallpaper cache keys.' >&2
+  exit 1
+}
+command -v jq >/dev/null || {
+  printf '%s\n' 'jq is required for wallpaper cache validation.' >&2
+  exit 1
+}
+
+hash=$(sha256sum <"$wallpaper"); hash=${hash%% *}
+palette_key="${hash}-${mode}-v2"
+cache_dir="$cache_home/$cache_namespace/$palette_key"
+colors="$cache_dir/colors.json"
+
+[[ -z $expected_key || $expected_key == "$palette_key" ]] || {
+  printf 'Wallpaper cache key does not match selected image: %s\n' "$expected_key" >&2
+  exit 1
+}
+
+mkdir -p -- "$cache_dir"
+# Recheck the cache under this key's lock; concurrent misses extract only once.
+exec {cache_lock}>"$cache_dir/.extract.lock"
+flock -x "$cache_lock"
+if [[ ! -f $colors ]] || ! jq -e '
+  def valid_border:
+    split(" ") as $parts |
+    ($parts[-1] | test("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)deg$")) as $angled |
+    (if $angled then $parts[:-1] else $parts end) as $stops |
+    ($stops | length) > 0 and all($stops[]; test("^(rgb\\([0-9A-Fa-f]{6}\\)|rgba\\([0-9A-Fa-f]{8}\\))$")) and (($angled | not) or ($stops | length) > 1);
+  def complete_colors:
+    . as $colors | ["accent","selection","muted","background","dark_background","darker_background","lighter_background","foreground","dark_foreground","light_foreground","bright_foreground","red","yellow","orange","green","cyan","blue","magenta","brown","bright_red","bright_yellow","bright_green","bright_cyan","bright_blue","bright_magenta"] | all(.[]; . as $key | $colors | has($key));
+  .schema == 2
+  and .mode == $mode
+  and ([.background, .surface, .surfaceVariant, .elevated, .text, .textMuted, .accent, .positive, .warning, .negative, .outline, .focus, .scrim]
+       | all(type == "string" and test("^#[0-9A-Fa-f]{6}$")))
+  and (.colors | complete_colors)
+  and (.colors | type == "object" and length > 0 and
+       (to_entries | all(.[]; (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string" and test("^#[0-9A-Fa-f]{6}$")))))
+  and (.hyprland | type == "object" and (keys | sort) == ["active_border", "inactive_border"] and
+       ([.active_border, .inactive_border] | all(type == "string" and valid_border)))
+' --arg mode "$mode" "$colors" >/dev/null; then
+  extractor=$(jq -er '.commands.extractColors' "${UI_SHELL_RUNTIME:?resolved runtime data required}")
+  "$extractor" "$wallpaper" "$mode" "$colors"
+fi
+
+printf '%s\n' "$palette_key"

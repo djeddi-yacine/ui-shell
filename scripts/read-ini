@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if (( $# != 1 )); then
+  printf '%s\n' 'Usage: read-ini INPUT' >&2
+  exit 2
+fi
+# Raw input is data: no quoting, interpolation, or inline comments.
+jq -Rn '
+  def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+  reduce inputs as $raw ({sections: {}, section: null};
+    ($raw | trim) as $line |
+    if $line == "" or ($line | test("^[#;]")) then .
+    elif ($line | test("^\\[[A-Za-z_][A-Za-z0-9_.-]*\\]$")) then
+      ($line[1:-1]) as $name |
+      if .sections | has($name) then error("duplicate section: " + $name)
+      else .section = $name | .sections[$name] = {} end
+    elif ($line | contains("=")) then
+      if .section == null then error("key before section") else
+        ($line | index("=")) as $equals |
+        {key: ($line[:$equals] | trim), value: $line[$equals + 1:]} as $pair |
+        if $pair.key == "" or ($pair.key | test("[[:cntrl:]]")) then error("invalid INI key")
+        elif .sections[.section] | has($pair.key) then error("duplicate key: " + $pair.key)
+        else .sections[.section][$pair.key] = ($pair.value | trim) end
+      end
+    else error("malformed INI line: " + $line) end
+  ) | .sections
+' < "$1"

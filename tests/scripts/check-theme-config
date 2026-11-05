@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /project/tests/nested.conf
+bash "$test_project/tests/scripts/check-theme-colors"
+bash "$test_project/tests/scripts/check-custom-themes" \
+  "$(jq -er '.commands.readIni' "$UI_SHELL_RUNTIME")" \
+  "$(jq -er '.commands.normalizeCustomColors' "$UI_SHELL_RUNTIME")" \
+  "$(jq -er '.commands.renderThemeColors' "$UI_SHELL_RUNTIME")" \
+  "$(jq -er '.commands.importThemeColors' "$UI_SHELL_RUNTIME")" \
+  "$(jq -er '.commands.normalizeThemeColors' "$UI_SHELL_RUNTIME")" "/source/$test_theme_reference"
+"$test_project/tests/scripts/check-theme-profiles" "/source/$test_theme_reference"
+python3 "$test_project/tests/scripts/check-theme-catalog"
+python3 "$test_project/tests/scripts/check-reference-themes" "/source/$test_theme_reference"
+bash "$test_project/tests/scripts/check-runtime-config"
+bash "$test_project/tests/scripts/check-defaults"
+bash "$test_project/tests/scripts/check-wallpaper-folders"
+printf '%s\n' 'Theme and configuration checks passed.'

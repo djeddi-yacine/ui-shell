@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Resolve and validate the installation manifest; emit intermediate data only.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: read-shell-config CONFIG_INI INI_READER' >&2; exit 2; }
+reader=$2
+manifest=$(realpath -m -- "$1")
+[[ -f $manifest && -x $reader ]] || { printf '%s\n' 'An existing manifest and executable INI reader are required.' >&2; exit 2; }
+root=${manifest%/*}
+home=${HOME:?HOME required}
+config_home=${XDG_CONFIG_HOME-$home/.config}
+cache_home=${XDG_CACHE_HOME-$home/.cache}
+data_home=${XDG_DATA_HOME-$home/.local/share}
+state_home=${XDG_STATE_HOME-$home/.local/state}
+for base in "$home" "$config_home" "$cache_home" "$data_home" "$state_home"; do
+  [[ $base == /* && $base != *$'\n'* && $base != *$'\r'* ]] || { printf '%s\n' 'HOME and XDG roots must be absolute single-line paths.' >&2; exit 2; }
+done
+resolved=$("$reader" "$manifest" | jq -e --arg root "$root" --arg manifest "$manifest" \
+  --arg home "$home" --arg config "$config_home" --arg cache "$cache_home" --arg data "$data_home" --arg state "$state_home" '
+  def exact($expected; $label):
+    if keys == ($expected | sort) then . else error("missing/unknown " + $label + " fields") end;
+  def path:
+    if type != "string" or length == 0 or test("[\u0000-\u001f\u007f]") then error("invalid path") else . end
+    | if startswith("${HOME}/") then $home + .[7:]
+      elif startswith("${XDG_CONFIG_HOME}/") then $config + .[18:]
+      elif startswith("${XDG_CACHE_HOME}/") then $cache + .[17:]
+      elif startswith("${XDG_DATA_HOME}/") then $data + .[16:]
+      elif startswith("${XDG_STATE_HOME}/") then $state + .[17:]
+      elif startswith("/") then . else $root + "/" + . end
+    | if contains("${") or (ltrimstr("/") | split("/") | any(. == "." or . == ".." or . == "")) then error("unresolved token or unsafe path") else . end;
+  exact(["ui_shell", "paths", "bootstrap", "profile_renderers", "commands", "theme", "wallpaper_folders"]; "manifest")
+  | (.ui_shell | exact(["schema"]; "ui_shell")) as $header
+  | if $header.schema != "2" then error("unsupported manifest schema") else . end
+  | .paths.scripts as $manifest_paths_scripts
+  | (.paths | exact(["scripts","quickshell","themes","hypr","phantomatLibrary","components","profiles","profileCache","runtime"]; "paths")) as $paths
+  | (.bootstrap | exact(["runtime","wallpaperCatalog","profileModule"]; "bootstrap")) as $bootstrap
+  | .profile_renderers as $renderers
+  | if ($renderers | type) != "object" or ($renderers | keys | any(test("^[a-z][a-z0-9-]*$") | not)) or
+      ($renderers | has("palettes")) or
+      ($renderers | has("quickshell") and has("hyprland") and has("hyprpaper") | not) then error("required/invalid profile renderers") else . end
+  # Manifests installed before renderControlTuning existed lack it; default it beside the other scripts.
+  | (.commands | (if has("renderControlTuning") then . else . + {renderControlTuning: (($manifest_paths_scripts // "scripts") + "/render-control-tuning")} end) | exact(["readIni","readShellConfig","prepareRuntime","readThemeProfile","readWallpaperSelections","readThemeState","themeCatalog","renderThemeEditor","readThemeEditor","readThemePalette","refreshTheme","saveThemeProfile","activateThemeProfile","selectThemeProfile","publishThemeBundle","compileThemeProfile","renderThemeProfile","renderWallpaperRegistry","renderRuntime","preparePalettes","extractColors","cacheWallpaperColors","renderHyprColors","renderShellColors","renderMonitorPalettes","renderHyprpaper","renderWallpaperCatalog","renderWallpaperTargets","selectWallpaper","renderWallpaperSelection","applyWallpaper","componentSettingsPath","readComponentSettings","saveComponentSettings","renderLauncherSettings","renderPickerSettings","renderControlTuning","normalizeCustomColors","normalizeThemeColors","renderThemeColors","importThemeColors"]; "commands")) as $commands
+  | (.theme | exact(["profile"]; "theme")) as $theme
+  | .wallpaper_folders as $folders
+  | if ($folders | length) == 0 or ($folders | keys | any(test("^[A-Za-z0-9_-]+$") | not)) then error("wallpaper_folders needs named folder IDs") else . end
+  | if ($theme.profile | startswith("/") or contains("${")) then error("theme.profile must be config-root-relative") else . end
+  | {schema:1, configFile:$manifest, configRoot:$root,
+     xdg:{home:$home, config:$config, cache:$cache, data:$data, state:$state},
+     paths:($paths | with_entries(.value |= path)),
+     bootstrap:($bootstrap | with_entries(.value |= path)),
+     profileRenderers:($renderers | with_entries(.value |= path)),
+     commands:($commands | with_entries(.value |= path)),
+     theme:{profile:($theme.profile | path)},
+     wallpaperFolders:($folders | to_entries | map({id:.key, path:(.value | path)}))}
+  | .runtimeFile = (.paths.runtime + "/config.json")
+  | .runtimeLua = (.paths.runtime + "/config.lua")
+')
+profile_reader=$(jq -er '.commands.readThemeProfile' <<<"$resolved")
+profile=$("$profile_reader" "$(jq -er '.theme.profile' <<<"$resolved")" "$root" \
+  "$(jq -er '.paths.profiles' <<<"$resolved")" "$(jq -er '.paths.themes' <<<"$resolved")" "$reader")
+while IFS= read -r definition; do
+  [[ -f $definition && ! -L $definition ]] || {
+    printf 'Selected Theme definition is missing from configured storage: %s\n' "$definition" >&2; exit 1;
+  }
+done < <(jq -r '[.theme.definition, (.theme.definitionOverrides | .[])] | .[] | select(length > 0)' <<<"$profile")
+jq -e --argjson profile "$profile" '. + $profile' <<<"$resolved"

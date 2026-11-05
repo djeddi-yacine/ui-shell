@@ -1,0 +1,13 @@
+module UiShell.Config
+singleton Config 1.0 Config.qml
+singleton AppLauncher 1.0 AppLauncher.qml
+singleton Keyboard 1.0 Keyboard.qml
+singleton ContextPanels 1.0 ContextPanels.qml
+singleton ErrorPanels 1.0 ErrorPanels.qml
+singleton Tuning 1.0 Tuning.qml
+singleton WallpaperPicker 1.0 WallpaperPicker.qml
+singleton Outputs 1.0 Outputs.qml
+singleton GeneratedLauncherOutput 1.0 GeneratedLauncherOutput.qml
+singleton GeneratedWallpapers 1.0 GeneratedWallpapers.qml
+singleton GeneratedRuntime 1.0 GeneratedRuntime.qml
+singleton ThemeEditor 1.0 ThemeEditor.qml

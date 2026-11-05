@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""List Theme records and palettes by filesystem metadata, never their contents."""
+import json
+import os
+import pathlib
+import re
+import sys
+
+
+def records(directory, filename):
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if entry.name == filename and entry.is_file(follow_symlinks=False):
+                yield entry.path
+
+
+def catalog(runtime):
+    profiles = pathlib.Path(runtime["paths"]["profiles"])
+    themes = pathlib.Path(runtime["paths"]["themes"])
+    saved = []
+    with os.scandir(profiles) as entries:
+        for entry in entries:
+            if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", entry.name) or not entry.is_dir(follow_symlinks=False):
+                continue
+            candidates = list(records(entry.path, "profile.ini"))
+            if candidates:
+                path = candidates[0]
+                saved.append({"id": entry.name,
+                              "label": " ".join(part[:1].upper() + part[1:] for part in entry.name.split("-")),
+                              "path": path})
+
+    palettes = []
+    with os.scandir(themes) as entries:
+        for entry in entries:
+            if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", entry.name) and entry.is_dir(follow_symlinks=False):
+                for path in records(entry.path, "config.ini"):
+                    palettes.append({"id": entry.name,
+                                     "label": " ".join(part[:1].upper() + part[1:] for part in entry.name.split("-")),
+                                     "path": path})
+    return {"profiles": sorted(saved, key=lambda item: item["id"]),
+            "palettes": sorted(palettes, key=lambda item: item["id"])}
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.exit("Usage: theme-catalog RESOLVED_RUNTIME")
+    try:
+        with open(sys.argv[1], encoding="utf-8") as source:
+            result = catalog(json.load(source))
+        print(json.dumps(result, separators=(",", ":")))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        sys.exit(f"Could not list Themes: {error}")

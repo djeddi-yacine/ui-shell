@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source /project/tests/nested.conf
+
+if [[ ${1-} == --app ]]; then
+  [[ $HOME == "$test_home" && $XDG_RUNTIME_DIR == "$test_runtime" ]]
+  [[ $XDG_CONFIG_HOME == "$HOME/.config" && $XDG_CACHE_HOME == "$HOME/.cache" ]]
+  [[ $XDG_DATA_HOME == "$HOME/.local/share" && $XDG_STATE_HOME == "$HOME/.local/state" ]]
+  [[ ! -e $UI_SHELL_HOST_PROJECT && ! -e /run/dbus/system_bus_socket ]]
+  [[ $DBUS_SESSION_BUS_ADDRESS != "$UI_SHELL_TEST_MANAGER_BUS" && $DBUS_SESSION_BUS_ADDRESS != *'/run/user/'* ]]
+  [[ $WAYLAND_DISPLAY != "$test_parent_display" && -n $HYPRLAND_INSTANCE_SIGNATURE ]]
+  [[ $PATH != *'/app2unit-bin:'* && ! -e $XDG_RUNTIME_DIR/systemd/private ]]
+  for namespace in pid mnt net; do
+    variable=UI_SHELL_HOST_${namespace^^}_NS
+    [[ $(readlink "/proc/self/ns/$namespace") != "${!variable}" ]]
+  done
+  rg -F "$UI_SHELL_TEST_APP_UNIT" /proc/self/cgroup >/dev/null
+  printf 'APP_ENV_PASS private HOME/XDG/PID/mount/network/D-Bus; nested display=%s; scope=%s\n' \
+    "$WAYLAND_DISPLAY" "$UI_SHELL_TEST_APP_UNIT" >/artifacts/application-env.log
+  exec qs --path "$test_project/tests/app2unit/app.qml"
+fi
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: check-app-launch nested-output' >&2; exit 2; }
+output=$1
+shell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+mkdir -p "$XDG_DATA_HOME/applications"
+cp "$test_project/tests/app2unit/org.ui-shell.test-sandbox.desktop" "$XDG_DATA_HOME/applications/"
+cp "$test_project/tests/app2unit/runner.qml" "$shell_directory/app2unit-test.qml"
+timeout --kill-after=1 "$test_ready_seconds" qs --path "$shell_directory/app2unit-test.qml" >/artifacts/app-runner.log 2>&1
+rg -F 'APP_LAUNCH_PASS' /artifacts/app-runner.log
+if rg -n 'APP_LAUNCH_FAIL| (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' /artifacts/app-runner.log; then
+  printf '%s\n' 'AppRunner integration failed; inspect app-runner.log.' >&2; exit 1;
+fi
+deadline=$((SECONDS + test_ready_seconds))
+while (( SECONDS < deadline )); do
+  hyprctl -j clients >/artifacts/app-clients.log
+  if jq -e 'any(.title == "ui-shell test application")' /artifacts/app-clients.log >/dev/null; then break; fi
+  sleep "$test_poll_seconds"
+done
+jq -e 'any(.title == "ui-shell test application")' /artifacts/app-clients.log >/dev/null
+rg -F 'APP_ENV_PASS' /artifacts/application-env.log
+sleep "$test_frame_settle_seconds"
+grim -o "$output" /artifacts/frame-app-launch.png
+printf '%s\n' 'Application launch passed: unchanged production AppRunner; native app2unit; live nested window; private app environment.'

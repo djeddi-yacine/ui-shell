@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Resolve full committed inputs without publishing any native output.
+set -euo pipefail
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: read-theme-state RESOLVED_RUNTIME' >&2; exit 2; }
+input=$1
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+reader=$(jq -er '.commands.readIni' "$input")
+profile_reader=$(jq -er '.commands.readThemeProfile' "$input")
+"$profile_reader" "$(jq -er '.theme.profile' "$input")" "$(jq -er '.configRoot' "$input")" \
+  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$reader" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$input" >"$work/runtime.json"
+runtime="$work/runtime.json"
+export UI_SHELL_RUNTIME="$runtime"
+"$(jq -er '.commands.readWallpaperSelections' "$runtime")" "$runtime" >"$work/selections.json"
+source=$(jq -er '.theme.source' "$runtime")
+mode=$(jq -er '.colorMode' "$work/selections.json")
+namespace=$(jq -er '.cacheNamespace' "$work/selections.json")
+renderer=$(jq -er '.commands.renderThemeColors' "$runtime")
+cache=$(jq -er '.commands.cacheWallpaperColors' "$runtime")
+jq -r '.recipeHash' "$runtime" >"$work/revision"
+sha256sum <"$(jq -er '.paths.hypr+"/user/monitors.lua"' "$runtime")" >>"$work/revision"
+if [[ $source == file ]]; then
+  jq -e '.profileColors' "$runtime" >"$work/palettes.json"
+  while IFS= read -r palette; do
+    printf '%s\n' "$palette" >"$work/palette.json"
+    "$renderer" "$work/palette.json" "$work/validated.ini"
+  done < <(jq -c '.defaultPalette,(.byOutput | to_entries | sort_by(.key)[] | .value)' "$work/palettes.json")
+fi
+: >"$work/wallpapers"
+while IFS= read -r entry; do
+  image=$(jq -er '.path' <<<"$entry")
+  key=$(jq -er '.paletteKey' <<<"$entry")
+  colors=$(jq -er '.colorsPath' <<<"$entry")
+  hash=$(sha256sum <"$image"); hash=${hash%% *}
+  [[ $key == "$hash-$mode-v2" ]] || { printf '%s\n' 'Wallpaper content changed; select it again.' >&2; exit 1; }
+  printf '%s\n' "$hash" >>"$work/revision"
+  if [[ $source == file ]]; then
+    jq -cn --argjson entry "$entry" '$entry | del(.colorsPath) | .colors=null' >>"$work/wallpapers"
+  else
+    "$cache" "$image" "$mode" "$namespace" "$key" >/dev/null
+    "$renderer" "$colors" "$work/validated.ini"
+    sha256sum <"$colors" >>"$work/revision"
+    jq -cn --argjson entry "$entry" --slurpfile colors "$colors" '$entry | del(.colorsPath) | .colors=($colors|first)' >>"$work/wallpapers"
+  fi
+done < <(jq -c '.wallpapers[]' "$work/selections.json")
+revision=$(sha256sum <"$work/revision"); revision=${revision%% *}
+jq -s '.' "$work/wallpapers" >"$work/wallpapers.json"
+jq -cn --slurpfile runtime "$runtime" --slurpfile selections "$work/selections.json" --slurpfile wallpapers "$work/wallpapers.json" --arg revision "$revision" '
+  ($runtime|first) as $runtime | ($selections|first) as $selections | ($wallpapers|first) as $wallpapers |
+  ($wallpapers | map({key:.id,value:.colors}) | from_entries) as $derived |
+  (if $runtime.theme.source=="file" then $runtime.profileColors else {defaultPalette:$derived[""],byOutput:($derived|del(.[""]))} end) as $palettes |
+  {profileId:$runtime.theme.id,profilePath:$runtime.theme.profile,revision:$revision,source:$runtime.theme.source,
+   definition:$runtime.theme.definition,definitionOverrides:$runtime.theme.definitionOverrides,
+   mode:$palettes.defaultPalette.mode,defaultPalette:$palettes.defaultPalette,byOutput:$palettes.byOutput,
+   globalPalette:(if $runtime.theme.source=="file" then $palettes.defaultPalette else $derived[$selections.primaryOutput] end),
+   wallpapers:$wallpapers,colorMode:$selections.colorMode,cacheNamespace:$selections.cacheNamespace}
+'

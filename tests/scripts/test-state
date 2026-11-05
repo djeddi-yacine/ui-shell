@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+usage() {
+  printf '%s\n' 'Usage: tests/scripts/test-state path [relative_directory] | clean [relative_directory]' >&2
+  exit 2
+}
+
+(( $# >= 1 && $# <= 2 )) || usage
+action=$1
+[[ $action == path || $action == clean ]] || usage
+
+project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$project_root/tests/nested.conf"
+[[ $test_state_schema =~ ^[1-9][0-9]*$ ]] || { printf '%s\n' 'Invalid test state schema.' >&2; exit 2; }
+relative_directory=${2:-${test_state_directory:?test_state_directory must be set in tests/nested.conf}}
+
+[[ $relative_directory =~ ^\.test-state/([A-Za-z0-9_.-]+)$ ]] || {
+  printf '%s\n' 'State directory must be exactly .test-state/<profile-name>.' >&2
+  exit 2
+}
+profile_name=${BASH_REMATCH[1]}
+[[ $profile_name != . && $profile_name != .. ]] || {
+  printf '%s\n' 'Invalid state profile name.' >&2
+  exit 2
+}
+
+state_parent="$project_root/.test-state"
+state_dir="$state_parent/$profile_name"
+lock_path="$state_dir.lock"
+current_uid=$(id -u)
+
+if [[ -L $state_parent ]]; then
+  printf '%s\n' 'Refusing symlink state parent.' >&2
+  exit 1
+fi
+if [[ -L $state_dir ]]; then
+  printf '%s\n' 'Refusing symlink state profile.' >&2
+  exit 1
+fi
+if [[ -L $lock_path ]]; then
+  printf '%s\n' 'Refusing symlink state lock.' >&2
+  exit 1
+fi
+if [[ -e $state_parent ]]; then
+  [[ -d $state_parent && $(stat -c '%u' -- "$state_parent") == "$current_uid" ]] || {
+    printf '%s\n' 'State parent must be a directory owned by the current user.' >&2; exit 1;
+  }
+fi
+if [[ -e $lock_path ]]; then
+  [[ -f $lock_path && $(stat -c '%u' -- "$lock_path") == "$current_uid" ]] || {
+    printf '%s\n' 'State lock must be a regular file owned by the current user.' >&2; exit 1;
+  }
+fi
+
+if [[ -e $state_dir ]]; then
+  [[ -d $state_dir ]] || { printf '%s\n' 'State profile is not a directory.' >&2; exit 1; }
+  profile_uid=$(stat -c '%u' -- "$state_dir")
+  [[ $profile_uid == "$current_uid" ]] || {
+    printf '%s\n' 'State profile is owned by a different user.' >&2
+    exit 1
+  }
+fi
+
+canonical_parent=$(realpath -m -- "$state_parent")
+canonical_state_dir=$(realpath -m -- "$state_dir")
+[[ $canonical_parent == "$project_root/.test-state" && $canonical_state_dir == "$project_root/.test-state/$profile_name" ]] || {
+  printf '%s\n' 'State path does not resolve to the project state directory.' >&2
+  exit 1
+}
+
+case $action in
+  path)
+    printf '%s\n' "$canonical_state_dir"
+    ;;
+  clean)
+    if [[ ! -e $state_dir && ! -e $lock_path ]]; then
+      printf 'No state profile exists at %s.\n' "$state_dir"
+      exit 0
+    fi
+
+    exec {state_lock_fd}>>"$lock_path"
+    if ! flock -n "$state_lock_fd"; then
+      printf '%s\n' 'State profile is in use by an active session.' >&2
+      exit 1
+    fi
+    if [[ ! -e $state_dir ]]; then
+      printf 'No state profile exists at %s.\n' "$state_dir"
+      exit 0
+    fi
+
+    owner_marker="$state_dir/.owner"
+    [[ ! -L $owner_marker && -f $owner_marker ]] || {
+      printf '%s\n' 'Refusing state profile without a regular, non-symlink owner marker.' >&2
+      exit 1
+    }
+    marker_size=$(wc -c <"$owner_marker")
+    marker_value=$(<"$owner_marker")
+    # Reset also accepts an older recognized layout version.
+    [[ $marker_value =~ ^ui-shell-test-state:[1-9][0-9]*$ && $marker_size -eq $((${#marker_value} + 1)) ]] || {
+      printf '%s\n' 'State profile owner marker is missing or invalid.' >&2
+      exit 1
+    }
+
+    # Read storage addresses only. A stale selected profile must not prevent reset.
+    config_path() {
+      "$project_root/scripts/read-ini" "$1" | jq -er --arg role "$2" \
+        --arg root "$test_config_root" --arg testHome "$test_home" '
+        .paths[$role] | select(type == "string" and length > 0)
+        | if startswith("${HOME}/") then $testHome + .[7:]
+          elif startswith("${XDG_CONFIG_HOME}/") then $testHome + "/.config" + .[18:]
+          elif startswith("${XDG_CACHE_HOME}/") then $testHome + "/.cache" + .[17:]
+          elif startswith("${XDG_DATA_HOME}/") then $testHome + "/.local/share" + .[16:]
+          elif startswith("${XDG_STATE_HOME}/") then $testHome + "/.local/state" + .[17:]
+          elif startswith("/") then . else $root + "/" + . end
+        | if startswith($root + "/") then ltrimstr($root + "/")
+          else error("reset storage must be inside the private configuration") end
+        | if contains("${") or test("[\u0000-\u001f\u007f]")
+            or (split("/") | any(. == "." or . == ".." or . == ""))
+          then error("unsafe reset storage path") else . end'
+    }
+    [[ $test_config_root == "$test_home/"* ]] || { printf '%s\n' 'Private configuration must be inside the test home.' >&2; exit 1; }
+    package_relative=${test_config_root#"$test_home/"}
+    private_config="$state_dir/home/$package_relative"
+    [[ $(realpath -m -- "$private_config") == "$private_config" && -d $private_config ]] || {
+      printf '%s\n' 'Private configuration is missing or redirected; refusing reset.' >&2; exit 1;
+    }
+    [[ -f $private_config/config.ini && ! -L $private_config/config.ini ]] || {
+      printf '%s\n' 'Private manifest is missing or redirected; refusing reset.' >&2; exit 1;
+    }
+    saved_themes="$private_config/$(config_path "$private_config/config.ini" themes)"
+    [[ $(realpath -m -- "$saved_themes") == "$saved_themes" && -d $saved_themes ]] || {
+      printf '%s\n' 'Theme definitions are missing or redirected; refusing reset.' >&2; exit 1;
+    }
+    default_themes=$(config_path "$project_root/tools/config.ini" themes)
+    # Prepare the replacement before touching existing data. Keep every palette,
+    # including invalid definitions and user edits; validation belongs to selection.
+    reset_work=$(mktemp -d "$state_parent/.clean-XXXXXX")
+    trap 'printf "Reset failed; staging/recovery data remains at %s.\n" "$reset_work" >&2' EXIT
+    replacement="$reset_work/new-state"
+    replacement_config="$replacement/home/$package_relative"
+    mkdir -p -- "$replacement_config/$default_themes"
+    cp -a -- "$saved_themes/." "$replacement_config/$default_themes/"
+    # The clean default seed refreshes default/ and seeds the standard runtime
+    # stores only when the retained definitions do not already provide them.
+    bash "$project_root/tools/scripts/stage-defaults" "$project_root" "$replacement_config"
+    cp -- "$project_root/tools/config.ini" "$replacement_config/config.ini"
+    printf 'ui-shell-test-state:%s\n' "$test_state_schema" >"$replacement/.owner"
+    mv -- "$state_dir" "$reset_work/old-state"
+    if ! mv -- "$replacement" "$state_dir"; then
+      mv -- "$reset_work/old-state" "$state_dir"
+      exit 1
+    fi
+    rm -rf --one-file-system -- "$reset_work"
+    trap - EXIT
+    printf 'Reset private choices and cache at %s; Theme definitions preserved.\n' "$state_dir"
+    ;;
+esac

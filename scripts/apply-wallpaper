@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+target=${1?target output argument required}
+# The caller selects Default explicitly; Hyprpaper encodes it as an empty output.
+wallpaper=${2:?wallpaper path required}
+fit_mode=${3:?wallpaper fit mode required}
+: "${HYPRLAND_INSTANCE_SIGNATURE:?An explicit Hyprland session is required}"
+[[ -f $wallpaper ]] || { printf 'Wallpaper not found: %s\n' "$wallpaper" >&2; exit 1; }
+# Hyprpaper reports canonical paths. Resolve only at this native boundary;
+# configured logical asset paths remain the picker's stable selection identity.
+wallpaper=$(realpath -e -- "$wallpaper")
+[[ $fit_mode == contain || $fit_mode == cover || $fit_mode == tile || $fit_mode == fill ]] || {
+  printf 'Unsupported wallpaper fit mode: %s\n' "$fit_mode" >&2; exit 1;
+}
+[[ $target != *,* && $wallpaper != *,* && ! $target =~ [[:cntrl:]] && ! $wallpaper =~ [[:cntrl:]] ]] || {
+  printf '%s\n' 'Hyprpaper targets and paths must not contain commas or control characters.' >&2; exit 1;
+}
+if [[ -n $target ]]; then
+  hyprctl -j monitors | jq -e --arg output "$target" 'any(.name == $output)' >/dev/null || {
+    printf 'Wallpaper target is not connected: %s\n' "$target" >&2; exit 1;
+  }
+fi
+reply=$(hyprctl hyprpaper wallpaper "$target,$wallpaper,$fit_mode")
+# Hyprpaper can acknowledge success with an empty response, not an "ok" token.
+[[ -z $reply || $reply == ok ]] || { printf 'Hyprpaper did not apply the wallpaper: %s\n' "$reply" >&2; exit 1; }
+if [[ -n $target ]]; then
+  hyprctl hyprpaper listactive | grep -Fxq -- "$target: $wallpaper" || {
+    printf 'Hyprpaper did not confirm the selected wallpaper on %s.\n' "$target" >&2; exit 1;
+  }
+fi

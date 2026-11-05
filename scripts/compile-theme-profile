@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Build all configured targets, then atomically publish one immutable generation.
+set -euo pipefail
+umask 077
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: compile-theme-profile RESOLVED_RUNTIME' >&2; exit 2; }
+input=$1
+cache=$(jq -er '.paths.profileCache' "$input")
+cache_home=$(jq -er '.xdg.cache' "$input")
+[[ $cache == "$cache_home/"* ]] || { printf '%s\n' 'Compiled profiles must live in XDG cache.' >&2; exit 1; }
+id=$(jq -er '.theme.id' "$input")
+[[ $id =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf '%s\n' 'Invalid profile ID.' >&2; exit 2; }
+base="$cache/$id"
+current=$base
+while [[ $current != "$cache_home" ]]; do
+  [[ ! -L $current && $current == "$cache_home/"* ]] || { printf '%s\n' 'Unsafe profile cache path.' >&2; exit 1; }
+  current=${current%/*}
+done
+mkdir -p -- "$base"
+work=$(mktemp -d "$base/.build.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+reader=$(jq -er '.commands.readIni' "$input")
+"$(jq -er '.commands.readThemeProfile' "$input")" "$(jq -er '.theme.profile' "$input")" "$(jq -er '.configRoot' "$input")" \
+  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$reader" >"$work/profile.json"
+[[ $(jq -er '.recipeHash' "$input") == $(jq -er '.recipeHash' "$work/profile.json") ]] || {
+  printf '%s\n' 'Profile changed before compilation; resolve it again.' >&2; exit 3;
+}
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first) | del(.bundle)' "$input" >"$work/runtime.json"
+export UI_SHELL_RUNTIME="$work/runtime.json"
+"$(jq -er '.commands.readThemeState' "$input")" "$work/runtime.json" >"$work/state.json"
+"$(jq -er '.commands.readWallpaperSelections' "$input")" "$work/runtime.json" >"$work/selections.json"
+jq -cS '{runtime:(. | del(.theme,.profileColors,.wallpaper,.recipeHash,.bundle)),recipeHash}' "$work/runtime.json" >"$work/fingerprint"
+jq -cS 'del(.profilePath,.revision)' "$work/state.json" >>"$work/fingerprint"
+# Every configured helper can affect a renderer; changes invalidate the build.
+while IFS= read -r helper; do
+  [[ -x $helper && -f $helper ]] || { printf 'Configured renderer/helper is not executable: %s\n' "$helper" >&2; exit 1; }
+  sha256sum <"$helper" >>"$work/fingerprint"
+done < <(jq -r '([.commands[],.profileRenderers[]] | unique | sort)[]' "$work/runtime.json")
+key=$(sha256sum <"$work/fingerprint"); key=${key%% *}
+root="$base/$key"
+[[ ! -L $base/.$key.lock ]] || { printf '%s\n' 'Build lock is a symlink.' >&2; exit 1; }
+exec {build_lock}>"$base/.$key.lock"
+flock -x "$build_lock"
+valid=false
+if [[ -s $root/quickshell/qmldir && -s $root/hyprland/colors.lua && -s $root/hyprland/outputs.lua && -s $root/hyprpaper/hyprpaper.conf &&
+      -s $root/checksums.sha256 && ! -L $root ]] &&
+   ! find "$root" -type l -print -quit | rg -q . &&
+   (cd -- "$root" && sha256sum --check --status checksums.sha256); then valid=true; fi
+if [[ $valid != true ]]; then
+  mkdir -p -- "$work/bundle/palettes"
+  jq -cS '.globalPalette' "$work/state.json" >"$work/bundle/global.json"
+  jq -cS '.wallpaper' "$work/runtime.json" >"$work/bundle/wallpapers.json"
+  jq --arg profile "$(jq -er '.paths.profiles' "$input")/$id/profile.ini" '.profilePath=$profile' "$work/state.json" >"$work/bundle/state.json"
+  : >"$work/entries"
+  while IFS= read -r entry; do
+    output=$(jq -r '.key' <<<"$entry")
+    if [[ -z $output ]]; then name=default; else name=$(printf '%s' "$output" | sha256sum); name=${name%% *}; fi
+    file="$work/bundle/palettes/$name.json"
+    jq -cS '.value' <<<"$entry" >"$file"
+    jq -cn --arg output "$output" --arg file "$file" '{output:$output,file:$file}' >>"$work/entries"
+  done < <(jq -c '[{key:"",value:.defaultPalette}]+(.byOutput | to_entries | sort_by(.key)) | .[]' "$work/state.json")
+  jq -s '.' "$work/entries" >"$work/palette-entries.json"
+  jq -n --slurpfile runtime "$work/runtime.json" --slurpfile state "$work/state.json" --slurpfile selections "$work/selections.json" \
+    --slurpfile entries "$work/palette-entries.json" --arg global "$work/bundle/global.json" \
+    '{runtime:($runtime|first),state:($state|first),selections:($selections|first),paletteEntries:($entries|first),globalPaletteFile:$global}' >"$work/inputs.json"
+  "$(jq -er '.commands.renderWallpaperRegistry' "$input")" "$work/bundle/wallpapers.json" "$work/bundle/wallpapers.lua"
+  while IFS= read -r target; do
+    name=$(jq -er '.key' <<<"$target")
+    renderer=$(jq -er '.value' <<<"$target")
+    [[ $name =~ ^[a-z][a-z0-9-]*$ ]] || { printf '%s\n' 'Unsafe target name.' >&2; exit 1; }
+    "$renderer" "$work/inputs.json" "$work/bundle/$name"
+  done < <(jq -c '.profileRenderers | to_entries | sort_by(.key)[]' "$input")
+  [[ -s $work/bundle/quickshell/qmldir && -s $work/bundle/hyprland/colors.lua && -s $work/bundle/hyprland/outputs.lua && -s $work/bundle/hyprpaper/hyprpaper.conf ]] || {
+    printf '%s\n' 'Required native profile outputs are missing.' >&2; exit 1;
+  }
+  if find "$work/bundle" -type l -print -quit | rg -q .; then printf '%s\n' 'Compiled outputs cannot contain symlinks.' >&2; exit 1; fi
+  (cd -- "$work/bundle" && find . -type f ! -name checksums.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum -- >checksums.sha256)
+  if [[ -e $root || -L $root ]]; then
+    [[ ! -L $root ]] || { printf '%s\n' 'Compiled generation is a symlink.' >&2; exit 1; }
+    retired=$(mktemp -d "$base/.invalid.XXXXXX")
+    mv -- "$root" "$retired/generation"
+  fi
+  mv -T -- "$work/bundle" "$root"
+fi
+jq -cn --arg root "$root" --arg key "$key" '
+  {root:$root,key:$key,globalPalette:($root+"/global.json"),palettes:($root+"/palettes"),
+   quickshell:($root+"/quickshell"),hyprPalette:($root+"/hyprland/colors.lua"),
+   hyprOutputPalettes:($root+"/hyprland/outputs.lua"),
+   wallpaperRegistry:($root+"/wallpapers.lua"),hyprpaper:($root+"/hyprpaper/hyprpaper.conf")}
+'

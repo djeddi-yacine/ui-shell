@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Persist a wallpaper choice; explicit activation remains a separate operation.
+set -euo pipefail
+[[ $# == 3 ]] || { printf '%s\n' 'Usage: select-wallpaper TARGET FOLDER_ID FILENAME' >&2; exit 2; }
+target=$1 folder=$2 name=$3
+bootstrap=${UI_SHELL_RUNTIME:?resolved runtime data required}
+work=$(mktemp -d)
+profile=''
+trap 'rm -rf -- "$work"; if [[ -n $profile ]]; then rm -f -- "$profile"; fi' EXIT
+runtime="$work/runtime.json"
+"$(jq -er '.commands.readShellConfig' "$bootstrap")" "$(jq -er '.configFile' "$bootstrap")" "$(jq -er '.commands.readIni' "$bootstrap")" >"$runtime"
+export UI_SHELL_RUNTIME="$runtime"
+expected=$("$(jq -er '.commands.readThemeState' "$runtime")" "$runtime" | jq -er '.revision')
+fit=$(jq -er --arg target "$target" '(.wallpaper.monitors[$target] // .wallpaper.default).fit_mode' "$runtime")
+key=$("$(jq -er '.commands.renderWallpaperSelection' "$runtime")" "$runtime" "$target" "$folder" "$name" "$fit" "$work/wallpapers.json")
+jq '{source:.theme.source}' "$runtime" >"$work/policy.json"
+profile=$("$(jq -er '.commands.publishThemeBundle' "$runtime")" "$runtime" "$(jq -er '.theme.id' "$runtime")" "$work/policy.json" "$work/wallpapers.json")
+"$(jq -er '.commands.selectThemeProfile' "$runtime")" persist "$profile" "$expected" "$target"
+printf '%s\n' "$key"

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Compile the selected recipe, then publish only installation bootstrap pointers.
+set -euo pipefail
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: prepare-runtime RESOLVED_JSON' >&2; exit 2; }
+input=$1
+jq -e '.schema == 1' "$input" >/dev/null
+while IFS= read -r executable; do
+  [[ -x $executable ]] || { printf 'Configured command is not executable: %s\n' "$executable" >&2; exit 1; }
+done < <(jq -r '.commands[], .profileRenderers[]' "$input")
+runtime_file=$(jq -er '.runtimeFile' "$input")
+runtime_lua=$(jq -er '.runtimeLua' "$input")
+runtime_qml=$(jq -er '.bootstrap.runtime' "$input")
+catalog=$(jq -er '.bootstrap.wallpaperCatalog' "$input")
+while IFS= read -r path; do mkdir -p -- "${path%/*}"; done < <(jq -r '.bootstrap[], .runtimeFile, .runtimeLua' "$input")
+work=$(mktemp -d)
+temporary='' link_stage=''
+trap 'rm -rf -- "$work"; if [[ -n $temporary ]]; then rm -f -- "$temporary"; fi; if [[ -n $link_stage ]]; then rm -f -- "$link_stage/module"; rmdir -- "$link_stage"; fi' EXIT
+"$(jq -er '.commands.readThemeProfile' "$input")" "$(jq -er '.theme.profile' "$input")" "$(jq -er '.configRoot' "$input")" \
+  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$(jq -er '.commands.readIni' "$input")" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first) | del(.bundle)' "$input" >"$work/resolved.json"
+"$(jq -er '.commands.compileThemeProfile' "$input")" "$work/resolved.json" >"$work/bundle.json"
+jq --slurpfile bundle "$work/bundle.json" '.bundle=($bundle|first)' "$work/resolved.json" >"$work/runtime.json"
+"$(jq -er '.commands.renderWallpaperCatalog' "$input")" "$work/runtime.json" "$work/catalog.qml"
+module=$(jq -er '.bootstrap.profileModule' "$input")
+shell=$(jq -er '.paths.quickshell' "$input")
+[[ $module == "$shell/"* && ( ! -e $module || -L $module ) ]] || {
+  printf '%s\n' 'Bootstrap profile module must be an owned link inside Quickshell.' >&2; exit 1;
+}
+# Quickshell blackholes relative imports escaping its root. A native module link
+# keeps resolution inside that root without copying compiled files into config.
+link_stage=$(mktemp -d "${module%/*}/.profile-link.XXXXXX")
+ln -s -- "$(jq -er '.quickshell' "$work/bundle.json")" "$link_stage/module"
+mv -Tf -- "$link_stage/module" "$module"
+rmdir -- "$link_stage"
+link_stage=''
+temporary=$(mktemp "${runtime_file}.XXXXXX")
+cp -- "$work/runtime.json" "$temporary"
+"$(jq -er '.commands.renderRuntime' "$input")" "$temporary" "$runtime_qml" "$runtime_lua"
+mv -f -- "$work/catalog.qml" "$catalog"
+mv -f -- "$temporary" "$runtime_file"
+temporary=''
+printf '%s\n' "$runtime_file"

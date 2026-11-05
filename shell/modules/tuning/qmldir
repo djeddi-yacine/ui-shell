@@ -1,0 +1,5 @@
+module UiShell.Tuning
+singleton TuningState 1.0 TuningState.qml
+TuningShortcut 1.0 TuningShortcut.qml
+TuningSurface 1.0 TuningSurface.qml
+TuningPanel 1.0 TuningPanel.qml

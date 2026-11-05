@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# Invoke only from tests/scripts/check-sandbox in the existing Bubblewrap environment.
+set -euo pipefail
+
+fail() { printf 'Wallpaper pipeline: %s\n' "$*" >&2; exit 1; }
+[[ ${UI_SHELL_ROOT-} == /project && ${PWD-} == /project ]] || fail 'private /project required'
+[[ $(realpath -- "${BASH_SOURCE[0]}") == /project/tests/scripts/check-wallpaper-pipeline ]] || fail 'sandbox copy required'
+source /project/tests/nested.conf
+[[ $test_project == /project && ${HOME-} == "$test_home" && ${XDG_RUNTIME_DIR-} == "$test_runtime" ]] || fail 'private HOME/runtime required'
+[[ ${XDG_CONFIG_HOME-} == "$test_home/.config" && ${XDG_CACHE_HOME-} == "$test_home/.cache" ]] || fail 'private config/cache required'
+[[ ${XDG_DATA_HOME-} == "$test_home/.local/share" && ${XDG_STATE_HOME-} == "$test_home/.local/state" ]] || fail 'private data/state required'
+[[ -n ${UI_SHELL_HOST_PID_NS-} && $(readlink /proc/self/ns/pid) != "$UI_SHELL_HOST_PID_NS" ]] || fail 'private PID namespace required'
+[[ -n ${UI_SHELL_HOST_PROJECT-} && ! -e $UI_SHELL_HOST_PROJECT ]] || fail 'host project must be absent'
+runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
+scratch=$(mktemp -d "$XDG_CACHE_HOME/wallpaper-pipeline.XXXXXX")
+# The outer sandbox owns cleanup; leave private scratch available on failure.
+manifest=$(jq -er '.configFile' "$runtime")
+resolver=$(jq -er '.commands.readShellConfig' "$runtime")
+reader=$(jq -er '.commands.readIni' "$runtime")
+prepare_runtime=$(jq -er '.commands.prepareRuntime' "$runtime")
+resolve_current() {
+  "$resolver" "$manifest" "$reader" >"$scratch/resolved.json"
+  runtime=$("$prepare_runtime" "$scratch/resolved.json")
+  registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
+  runtime_lua=$(jq -er '.runtimeLua' "$runtime")
+  export UI_SHELL_RUNTIME=$runtime UI_SHELL_RUNTIME_LUA=$runtime_lua
+}
+resolve_current
+registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
+wallpaper_folder=$test_apply_wallpaper_folder
+wallpaper_directory=$(jq -er --arg id "$wallpaper_folder" '.wallpaperFolders[] | select(.id == $id) | .path' "$runtime")
+lua - "$registry" <<'LUA'
+local registry = dofile(arg[1])
+assert(type(registry.default.folder) == "string" and registry.default.folder ~= "",
+  "default selection needs an explicit folder ID")
+LUA
+runtime_lua=$(jq -er '.runtimeLua' "$runtime")
+render_wallpaper_targets=$(jq -er '.commands.renderWallpaperTargets' "$runtime")
+cache_wallpaper_colors=$(jq -er '.commands.cacheWallpaperColors' "$runtime")
+render_hypr_colors=$(jq -er '.commands.renderHyprColors' "$runtime")
+render_shell_colors=$(jq -er '.commands.renderShellColors' "$runtime")
+render_monitor_palettes=$(jq -er '.commands.renderMonitorPalettes' "$runtime")
+select_wallpaper=$(jq -er '.commands.selectWallpaper' "$runtime")
+selection_renderer=$(jq -er '.commands.renderWallpaperSelection' "$runtime")
+registry_renderer=$(jq -er '.commands.renderWallpaperRegistry' "$runtime")
+[[ ! -w /source/hypr && ! -w "$wallpaper_directory" && -w "${registry%/*}" ]] || fail 'private writable registry and read-only assets required'
+[[ -z ${UI_SHELL_STATE_DIR+x} ]] || fail 'unexpected state directory override'
+for path in "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"; do
+  [[ -d $path && $(realpath -- "$path") == "$path" ]] || fail "non-private path: $path"
+done
+
+target=PIPELINE-TEST-1
+baseline_registry=$registry
+baseline_before=$(sha256sum -- "$baseline_registry")
+cp -- "$registry" "$scratch/before.lua"
+mapfile -t settings < <(lua - "$registry" "$target" <<'LUA'
+local registry = dofile(arg[1])
+assert(registry.schema == 1)
+assert(not registry.monitors[arg[2]], "test output already exists")
+assert(registry.color_mode == "dark" or registry.color_mode == "light")
+print(registry.color_mode)
+print(registry.cache_namespace)
+print(registry.default.fit_mode)
+LUA
+)
+[[ ${#settings[@]} == 3 ]] || fail 'invalid registry settings'
+mode=${settings[0]}
+namespace=${settings[1]}
+fit_mode=${settings[2]}
+[[ -n $namespace && $namespace != /* && $namespace != *..* ]] || fail 'unsafe cache namespace'
+jq -e '.bundle.root as $root | .bundle.key | type == "string" and length == 64' "$runtime" >/dev/null || fail 'compiled profile bundle identity missing'
+[[ -s $(jq -er '.bootstrap.runtime' "$runtime") &&
+   -s $(jq -er '.bootstrap.wallpaperCatalog' "$runtime") &&
+   $(realpath -e -- "$(jq -er '.bootstrap.profileModule' "$runtime")") == $(jq -er '.bundle.quickshell' "$runtime") ]] || fail 'generated bootstrap pointers do not reference the compiled generation'
+[[ -s $(jq -er '.bundle.quickshell + "/qmldir"' "$runtime") &&
+   -s $(jq -er '.bundle.hyprPalette' "$runtime") &&
+   -s $(jq -er '.bundle.hyprpaper' "$runtime") ]] || fail 'native profile bundle is incomplete'
+
+# Draft selection remains raw JSON; only the configured native registry
+# renderer turns the saved JSON model into Hyprland's Lua input.
+"$selection_renderer" "$runtime" "$target" "$wallpaper_folder" wallhaven-02.png "$fit_mode" "$scratch/selection.json" >/dev/null
+jq -e --arg target "$target" --arg folder "$wallpaper_folder" \
+  --arg key "$(sha256sum -- "$wallpaper_directory/wallhaven-02.png" | awk '{print $1}')-${mode}-v2" \
+  '.schema == 1 and .monitors[$target].folder == $folder and .monitors[$target].palette_key == $key and (.default | type == "object")' \
+  "$scratch/selection.json" >/dev/null || fail 'selection renderer did not emit a raw JSON registry'
+"$registry_renderer" "$scratch/selection.json" "$scratch/selection.lua"
+lua - "$scratch/selection.lua" "$target" "$wallpaper_folder" <<'LUA'
+local registry = dofile(arg[1])
+assert(registry.monitors[arg[2]].folder == arg[3])
+LUA
+
+select_and_resolve() {
+  local expected_key=$1 previous=$registry before
+  shift
+  before=$(sha256sum -- "$previous")
+  [[ $(bash "$select_wallpaper" "$@") == "$expected_key" ]] || fail 'selector returned wrong key'
+  resolve_current
+  [[ $registry != "$previous" ]] || fail 'selection did not compile a new immutable runtime generation'
+  [[ $(sha256sum -- "$previous") == "$before" ]] || fail 'selection rewrote the previous immutable generation'
+}
+
+render_targets() {
+  local name=$1 key=$2
+  # Each invocation rereads persisted selections, as a fresh process would.
+  lua - "$registry" "$scratch/targets.args" "$runtime_lua" <<'LUA'
+local registry = dofile(arg[1])
+local file = assert(io.open(arg[2], "wb"))
+local config = dofile(arg[3])
+local function write_entry(output, entry)
+  local folder_id = entry.folder
+  assert(type(folder_id) == "string" and folder_id ~= "", "selection needs an explicit folder ID")
+  local wallpaper_directory
+  for _, folder in ipairs(config.wallpaperFolders) do
+    if folder.id == folder_id then wallpaper_directory = folder.path; break end
+  end
+  assert(wallpaper_directory, "unknown wallpaper folder: " .. folder_id)
+  file:write(output, "\0", wallpaper_directory, "/", entry.path, "\0", entry.palette_key, "\0", entry.fit_mode, "\0")
+end
+write_entry("", registry.default)
+local outputs = {}
+for output in pairs(registry.monitors) do outputs[#outputs + 1] = output end
+table.sort(outputs)
+for _, output in ipairs(outputs) do write_entry(output, registry.monitors[output]) end
+assert(file:close())
+LUA
+  local -a quads
+  mapfile -d '' -t quads < "$scratch/targets.args"
+  bash "$render_wallpaper_targets" "$scratch/GeneratedWallpaperTargets.qml" "$target" "$mode" "$namespace" "${quads[@]}"
+  local expected
+  expected="        { id: \"$target\", label: \"$target\", path: \"$wallpaper_directory/$name\", paletteKey: \"$key\", fitMode: \"$fit_mode\" },"
+  [[ $(rg -Fc -- "$expected" "$scratch/GeneratedWallpaperTargets.qml") == 1 ]] || fail 'QML target selection mismatch'
+  [[ $(rg -Fc -- "{ id: \"$target\"," "$scratch/GeneratedWallpaperTargets.qml") == 1 ]] || fail 'duplicate QML output'
+  rg -Fqx -- "    readonly property string primaryOutput: \"$target\"" "$scratch/GeneratedWallpaperTargets.qml"
+  rg -Fqx -- "    readonly property string colorMode: \"$mode\"" "$scratch/GeneratedWallpaperTargets.qml"
+  rg -Fqx -- "    readonly property string cacheNamespace: \"$namespace\"" "$scratch/GeneratedWallpaperTargets.qml"
+  rg -Fq -- '        { id: "", label: "Default",' "$scratch/GeneratedWallpaperTargets.qml"
+}
+
+for name in wallhaven-02.png wallhaven-03.png; do
+  wallpaper="$wallpaper_directory/$name"
+  expected_key="$(sha256sum -- "$wallpaper" | awk '{print $1}')-${mode}-v2"
+  key=$(bash "$cache_wallpaper_colors" "$wallpaper" "$mode" "$namespace" "$expected_key")
+  [[ $key == "$expected_key" ]] || fail 'incorrect content-addressed cache key'
+  cache="$XDG_CACHE_HOME/$namespace/$key"
+  [[ $(realpath -- "$cache") == "$cache" && -s $cache/colors.json ]] || fail 'missing or redirected cache asset'
+  jq -e --arg mode "$mode" '.schema == 2 and .mode == $mode and
+    ([.background, .surface, .surfaceVariant, .elevated, .text, .textMuted, .accent,
+      .positive, .warning, .negative, .outline, .focus, .scrim] |
+      all(type == "string" and test("^#[0-9A-Fa-f]{6}$"))) and
+    (.colors | type == "object" and length >= 16 and all(.[]; type == "string" and test("^#[0-9A-Fa-f]{6}$"))) and
+    (.hyprland | keys == ["active_border", "inactive_border"] and
+      all(.[]; type == "string" and length > 0))' "$cache/colors.json" >/dev/null
+  before=$(stat -c '%i:%y' "$cache/colors.json")
+  [[ $(bash "$cache_wallpaper_colors" "$wallpaper" "$mode" "$namespace" "$key") == "$key" ]] || fail 'cache reuse changed key'
+  [[ $(stat -c '%i:%y' "$cache/colors.json") == "$before" ]] || fail 'cache hit rewrote palette'
+  bash "$render_hypr_colors" "$cache/colors.json" "$scratch/hypr.lua"
+  mapfile -t colors < <(jq -r '.accent, .outline, .negative, .background' "$cache/colors.json")
+  lua - "$scratch/hypr.lua" "$mode" "${colors[@]}" <<'LUA'
+local palette = dofile(arg[1])
+local function rgb(color) return "rgb(" .. color:sub(2) .. ")" end
+assert(palette.mode == arg[2] and palette.background == arg[6])
+assert(palette.accent == arg[3] and palette.outline == arg[4] and palette.negative == arg[5])
+assert(palette.active_border == rgb(arg[3]) and palette.inactive_border == rgb(arg[4]))
+assert(palette.group_border_active == rgb(arg[3]) and palette.group_border_locked_active == rgb(arg[5]))
+LUA
+  bash "$render_shell_colors" "$cache/colors.json" "$scratch/GeneratedPalette.qml"
+  rg -Fq -- 'readonly property var colorData:' "$scratch/GeneratedPalette.qml"
+  rg -Fq -- 'readonly property var colors: colorData.colors' "$scratch/GeneratedPalette.qml"
+  rg -Fq -- 'readonly property var hyprland: colorData.hyprland' "$scratch/GeneratedPalette.qml"
+  bash "$render_monitor_palettes" "$scratch/GeneratedPalettes.qml" '' "$cache/colors.json" "$target" "$cache/colors.json"
+  rg -Fq -- 'readonly property var defaultPalette:' "$scratch/GeneratedPalettes.qml"
+  rg -Fq -- 'function forOutput(outputName)' "$scratch/GeneratedPalettes.qml"
+  rg -Fq -- 'Object.prototype.hasOwnProperty.call(byOutput, outputName)' "$scratch/GeneratedPalettes.qml"
+  rg -Fq -- 'return defaultPalette' "$scratch/GeneratedPalettes.qml"
+  if rg -q -- 'shared-palette|require-assignment|unassignedMode' "$scratch/GeneratedPalettes.qml"; then
+    fail 'obsolete palette policies were generated'
+  else
+    [[ $? == 1 ]] || fail 'could not inspect generated palette policies'
+  fi
+  while IFS=$'\t' read -r field value; do
+    rg -Fqx -- "    readonly property color $field: \"$value\"" "$scratch/GeneratedPalette.qml"
+    [[ $(rg -Fc -- "\"$field\":\"$value\"" "$scratch/GeneratedPalettes.qml") == 2 ]] || fail "monitor palette mismatch: $field"
+  done < <(jq -r 'to_entries[] | select(.key as $key | ["schema", "mode", "colors", "hyprland"] | index($key) | not) | [.key, .value] | @tsv' "$cache/colors.json")
+  select_and_resolve "$key" "$target" "$wallpaper_folder" "$name"
+  lua - "$registry" "$scratch/before.lua" "$target" "$name" "$key" "$wallpaper_folder" <<'LUA'
+local saved, before = dofile(arg[1]), dofile(arg[2])
+local target, name, key = arg[3], arg[4], arg[5]
+local function equal(left, right)
+  if type(left) ~= "table" then return left == right end
+  if type(right) ~= "table" then return false end
+  for k, value in pairs(left) do if not equal(value, right[k]) then return false end end
+  for k in pairs(right) do if left[k] == nil then return false end end
+  return true
+end
+local expected = {folder = arg[6], path = name, palette_key = key, fit_mode = before.default.fit_mode}
+assert(equal(saved.monitors[target], expected), "exact output selection was not persisted")
+saved.monitors[target] = nil
+assert(equal(saved, before), "save changed another selection or registry setting")
+LUA
+  [[ $(rg -Fc -- "[\"$target\"] = {" "$registry") == 1 ]] || fail 'duplicate saved output'
+  render_targets "$name" "$key"
+done
+
+# Updating the default keeps every named output override intact.
+before_default=$(lua - "$registry" <<'LUA'
+local registry = dofile(arg[1])
+local outputs = {}
+for output in pairs(registry.monitors) do outputs[#outputs + 1] = output end
+table.sort(outputs)
+for _, output in ipairs(outputs) do
+  local selection = registry.monitors[output]
+  assert(type(selection.folder) == "string" and selection.folder ~= "", "selection needs an explicit folder ID")
+  print(output .. "\t" .. selection.folder .. "\t" .. selection.path .. "\t" .. selection.fit_mode .. "\t" .. selection.palette_key)
+end
+LUA
+)
+default_name=wallhaven-03.png
+default_key="$(sha256sum -- "$wallpaper_directory/$default_name" | awk '{print $1}')-${mode}-v2"
+select_and_resolve "$default_key" '' "$wallpaper_folder" "$default_name"
+lua - "$registry" "$default_name" "$default_key" "$fit_mode" "$wallpaper_folder" <<'LUA'
+local registry = dofile(arg[1])
+assert(registry.default.path == arg[2] and registry.default.palette_key == arg[3])
+assert(registry.default.fit_mode == arg[4])
+assert(registry.default.folder == arg[5], "default folder was not persisted")
+LUA
+after_default=$(lua - "$registry" <<'LUA'
+local registry = dofile(arg[1])
+local outputs = {}
+for output in pairs(registry.monitors) do outputs[#outputs + 1] = output end
+table.sort(outputs)
+for _, output in ipairs(outputs) do
+  local selection = registry.monitors[output]
+  assert(type(selection.folder) == "string" and selection.folder ~= "", "selection needs an explicit folder ID")
+  print(output .. "\t" .. selection.folder .. "\t" .. selection.path .. "\t" .. selection.fit_mode .. "\t" .. selection.palette_key)
+end
+LUA
+)
+[[ $before_default == "$after_default" ]] || fail 'default selection changed named output overrides'
+
+# A first selection for a new output inherits the current default fit mode.
+new_target=PIPELINE-FIRST-OVERRIDE
+select_and_resolve "$(sha256sum -- "$wallpaper_directory/wallhaven-02.png" | awk '{print $1}')-${mode}-v2" "$new_target" "$wallpaper_folder" wallhaven-02.png
+lua - "$registry" "$new_target" "$fit_mode" "$wallpaper_folder" <<'LUA'
+local registry = dofile(arg[1])
+assert(registry.monitors[arg[2]].fit_mode == arg[3], "first override did not inherit default fit mode")
+assert(registry.monitors[arg[2]].folder == arg[4], "first override did not persist folder")
+LUA
+
+[[ $(sha256sum -- "$baseline_registry") == "$baseline_before" ]] || fail 'selection rewrote the baseline immutable bundle registry'
+printf '%s\n' 'Wallpaper pipeline passed: cache reuse, palette renderers, exact output persistence, refreshed QML targets and immutable bundle generations without duplicates.'

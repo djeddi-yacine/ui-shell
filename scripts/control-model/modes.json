@@ -1,0 +1,190 @@
+[
+  {
+    "key": "tonal",
+    "label": "Tonal",
+    "description": "Material-style: selected rows and applied items carry a soft wash of the accent.",
+    "values": {},
+    "behavior": {}
+  },
+  {
+    "key": "wash",
+    "label": "Wash",
+    "description": "Neutral washes only, as in Omarchy: fills never take the accent, which appears in text; hairline borders.",
+    "values": {
+      "containerChroma": 0,
+      "currentChroma": 0,
+      "currentShift": 0,
+      "containerShift": 0.07,
+      "focusLayer": 0.08,
+      "pressedLayer": 0.22,
+      "hoverTextMix": 0,
+      "activeTextMix": 1,
+      "outlineTextMix": 0.6
+    },
+    "behavior": {
+      "families": {
+        "outline": {
+          "states": {
+            "focus": {
+              "fill": "hoverSurface"
+            },
+            "select": {
+              "border": "none"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "key": "ink",
+    "label": "Ink",
+    "description": "High legibility: stronger layers, near-neutral fills, 10:1 text and bold borders.",
+    "values": {
+      "hoverLayer": 0.14,
+      "focusLayer": 0.18,
+      "pressedLayer": 0.26,
+      "containerShift": 0.16,
+      "containerChroma": 0.15,
+      "currentShift": 0.12,
+      "currentChroma": 0.15,
+      "hoverTextMix": 0.3,
+      "activeTextMix": 0.9,
+      "textContrast": 10,
+      "mutedContrast": 7.5,
+      "outlineTextMix": 0.85,
+      "focusMix": 1,
+      "disabledContent": 0.5
+    },
+    "behavior": {
+      "flags": {
+        "focusVisible": "always"
+      },
+      "families": {
+        "outline": {
+          "states": {
+            "hover": {
+              "border": "hover"
+            },
+            "select": {
+              "border": "primary"
+            },
+            "current": {
+              "border": "current"
+            },
+            "pressed": {
+              "border": "primary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "key": "hush",
+    "label": "Hush",
+    "description": "Quiet: faint layers and borders, small steps, text near the floor.",
+    "values": {
+      "hoverLayer": 0.05,
+      "focusLayer": 0.06,
+      "pressedLayer": 0.1,
+      "containerShift": 0.06,
+      "containerChroma": 0.25,
+      "currentShift": 0.05,
+      "currentChroma": 0.25,
+      "hoverTextMix": 0.1,
+      "activeTextMix": 0.6,
+      "textContrast": 5.5,
+      "mutedContrast": 4.5,
+      "outlineTextMix": 0.3,
+      "disabledContent": 0.3
+    },
+    "behavior": {
+      "flags": {
+        "restingBorder": "none",
+        "animate": false,
+        "currentMarker": false
+      }
+    }
+  },
+  {
+    "key": "cursor",
+    "label": "Cursor",
+    "description": "Keyboard-first: pointer hover does nothing, the selected row is outlined rather than filled, and changes are instant.",
+    "values": {
+      "focusLayer": 0.14,
+      "pressedLayer": 0.2,
+      "outlineTextMix": 0.6,
+      "hoverTextMix": 0
+    },
+    "behavior": {
+      "flags": {
+        "hover": "none",
+        "focusVisible": "always",
+        "animate": false
+      },
+      "families": {
+        "outline": {
+          "states": {
+            "select": {
+              "fill": "surface",
+              "fg": "containerText",
+              "border": "primary"
+            },
+            "pressed": {
+              "fill": "pressedSurface",
+              "fg": "text",
+              "border": "primary"
+            },
+            "current": {
+              "fill": "surface",
+              "border": "none"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "key": "neon",
+    "label": "Neon",
+    "description": "Vivid: full-chroma accent fills and accent-coloured active text.",
+    "values": {
+      "containerShift": 0.12,
+      "containerChroma": 1,
+      "currentShift": 0.1,
+      "currentChroma": 1,
+      "pressedLayer": 0.2,
+      "hoverTextMix": 0.4,
+      "activeTextMix": 1,
+      "outlineTextMix": 0.25
+    },
+    "behavior": {
+      "families": {
+        "outline": {
+          "states": {
+            "hover": {
+              "border": "hover"
+            },
+            "select": {
+              "border": "primary"
+            },
+            "current": {
+              "border": "current"
+            },
+            "pressed": {
+              "border": "primary"
+            }
+          }
+        },
+        "solid": {
+          "states": {
+            "hover": {
+              "border": "primaryText"
+            }
+          }
+        }
+      }
+    }
+  }
+]

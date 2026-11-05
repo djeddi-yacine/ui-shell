@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Test-only launcher diagnostics on the private display.
+set -euo pipefail
+[[ ${UI_SHELL_ROOT-} == /project && ${HOME-} == /home/test && ${XDG_RUNTIME_DIR-} == /run/test ]]
+quickshell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+qs --path "$quickshell_directory" kill --any-display
+UI_SHELL_OPEN_APPS=0 timeout --kill-after=2 65 qs --path "$quickshell_directory/launcher-test.qml" >/artifacts/launcher-test.log 2>&1
+rg -F 'LAUNCHER_PASS' /artifacts/launcher-test.log
+[[ -s /artifacts/frame-launcher.png ]]
+[[ -s /artifacts/frame-launcher-search-candidate.png ]]
+[[ -s /artifacts/frame-launcher-info.png ]]
+[[ -s /artifacts/frame-launcher-settings.png ]]
+[[ -s /artifacts/frame-launcher-dropdown.png ]]
+[[ -s /artifacts/frame-launcher-error.png && -s /artifacts/frame-settings-error.png ]]
+source /project/tests/nested.conf
+colors=$(magick /artifacts/frame-launcher.png -format '%k' info:)
+(( colors >= test_min_frame_colors ))
+if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' /artifacts/launcher-test.log; then
+  printf '%s\n' 'Launcher produced a QML warning/error.' >&2
+  exit 1
+fi
+printf '%s\n' 'Launcher passed: native catalog, search focus, real app2unit dry-run/error, retained panel and single close. No host/systemd application was started.'

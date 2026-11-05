@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Rebuild current native palettes after a picker save; never reapply wallpaper.
+set -Eeuo pipefail
+shopt -s inherit_errexit
+[[ $# == 0 ]] || { printf '%s\n' 'Usage: refresh-theme' >&2; exit 2; }
+trap 'printf "%s\n" "Wallpaper applied/saved, but colors refresh failed." >&2; exit 4' ERR
+bootstrap=$UI_SHELL_RUNTIME
+manifest=$(jq -er '.configFile' "$bootstrap")
+resolver=$(jq -er '.commands.readShellConfig' "$bootstrap")
+reader=$(jq -er '.commands.readIni' "$bootstrap")
+lock="$manifest.theme.lock"
+[[ ! -L $lock ]]
+exec {lock_fd}>"$lock"
+flock -x "$lock_fd"
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+"$resolver" "$manifest" "$reader" >"$work/runtime.json"
+prepare_runtime=$(jq -er '.commands.prepareRuntime' "$work/runtime.json")
+editor=$(jq -er '.commands.readThemeEditor' "$work/runtime.json")
+"$prepare_runtime" "$work/runtime.json" >&2
+export UI_SHELL_RUNTIME UI_SHELL_RUNTIME_LUA
+UI_SHELL_RUNTIME=$(jq -er '.runtimeFile' "$work/runtime.json")
+UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$work/runtime.json")
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE-} ]]; then hyprctl reload >&2; fi
+selection_reader=$(jq -er '.commands.readWallpaperSelections' "$work/runtime.json")
+"$selection_reader" "$work/runtime.json" >"$work/selections.json"
+choice=$(jq -ce '.wallpapers[]|select(.id=="")' "$work/selections.json")
+folder_id=$(jq -er '.folderId' <<<"$choice")
+wallpaper_name=$(jq -er '.name' <<<"$choice")
+fit_mode=$(jq -er '.fitMode' <<<"$choice")
+snapshot=$("$editor" '' '' "$folder_id" "$wallpaper_name" "$fit_mode" policy)
+printf '%s\n' "$snapshot"

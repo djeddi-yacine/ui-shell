@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Render an immutable, instantiable editor snapshot from intermediate data.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-theme-editor SNAPSHOT_JSON OUTPUT_QML' >&2; exit 2; }
+input=$1 output=$2
+mkdir -p -- "$(dirname -- "$output")"
+temporary=$(mktemp "$output.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+jq -er '
+  ["profileId","profilePath","revision","baseRevision","source","definition","mode","colorMode","cacheNamespace"] as $strings
+  | if keys != (($strings + ["definitionOverrides","defaultPalette","globalPalette","byOutput","wallpapers","profiles","palettes","draftWallpaper"])|sort)
+    then error("missing/unknown editor snapshot fields") else . end
+  | ["import QtQuick","","QtObject {"]
+    + [to_entries[] | "    readonly property " + (if .key as $key|$strings|index($key) then "string" else "var" end)
+       + " " + .key + ": " + (if (.value|type)=="object" then "(" + (.value|tojson) + ")" else (.value|tojson) end)]
+    + ["}",""] | join("\n")
+' "$input" >"$temporary"
+mv -f -- "$temporary" "$output"

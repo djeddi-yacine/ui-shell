@@ -1,0 +1,3 @@
+module UiShell.Themes
+ThemeEditor 1.0 ThemeEditor.qml
+ThemeEditorPopup 1.0 ThemeEditorPopup.qml

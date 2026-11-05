@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Ensure the project wallpapers listed in wallpapers/manifest.txt are present and
+# match their SHA-512. The images are not tracked in git: each manifest line is
+#   <sha512>  <file name>  <https url>
+# A file is downloaded only when it is missing or its hash differs, and a download
+# is kept only after its hash matches, so a changed or dead host link can never
+# leave a wrong image behind. Anything an unreliable host serves is untrusted until
+# the hash agrees.
+#
+#   tools/scripts/fetch-wallpapers            # fetch what is missing or wrong
+#   tools/scripts/fetch-wallpapers --check    # verify only; exit 1 if anything is off
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+manifest=$root/wallpapers/manifest.txt
+check_only=0
+[[ ${1-} != --check ]] || check_only=1
+[[ $# -le 1 && ( $# -eq 0 || $check_only == 1 ) ]] || { printf '%s\n' 'Usage: fetch-wallpapers [--check]' >&2; exit 2; }
+[[ -f $manifest ]] || { printf 'fetch-wallpapers: missing %s\n' "$manifest" >&2; exit 1; }
+
+hash_of() { sha512sum -- "$1" | cut -d' ' -f1; }
+
+cd "$root/wallpapers"
+failed=0
+while read -r hash name url extra; do
+  [[ -z $hash || $hash == \#* ]] && continue
+  [[ $hash =~ ^[0-9a-f]{128}$ && $name =~ ^[A-Za-z0-9._-]+$ && $url == https://* && -z $extra ]] || {
+    printf 'fetch-wallpapers: malformed manifest line for %s\n' "${name:-?}" >&2; exit 1; }
+  if [[ -f $name && $(hash_of "$name") == "$hash" ]]; then continue; fi
+  if (( check_only )); then printf 'fetch-wallpapers: %s is missing or does not match\n' "$name" >&2; failed=1; continue; fi
+  command -v curl >/dev/null || { printf '%s\n' 'fetch-wallpapers: curl is required.' >&2; exit 1; }
+  printf 'fetch-wallpapers: downloading %s\n' "$name" >&2
+  temporary=$(mktemp ".$name.XXXXXX")
+  trap 'rm -f -- "$temporary"' EXIT
+  # Bounded size and time; a few retries because the host is a free image service.
+  if ! curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --max-filesize 50000000 \
+       --connect-timeout 20 --max-time 180 --retry 3 --retry-delay 2 --output "$temporary" "$url"; then
+    printf 'fetch-wallpapers: download failed for %s (%s)\n' "$name" "$url" >&2; failed=1
+    rm -f -- "$temporary"; trap - EXIT; continue
+  fi
+  if [[ $(hash_of "$temporary") != "$hash" ]]; then
+    printf 'fetch-wallpapers: checksum mismatch for %s; the host served different bytes\n' "$name" >&2
+    failed=1; rm -f -- "$temporary"; trap - EXIT; continue
+  fi
+  mv -f -- "$temporary" "$name"
+  trap - EXIT
+done <"$manifest"
+exit "$failed"

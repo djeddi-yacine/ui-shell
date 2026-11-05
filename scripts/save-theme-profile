@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Commit full draft inputs as one recipe, then activate a complete cached bundle.
+set -euo pipefail
+shopt -s inherit_errexit
+umask 077
+[[ $# == 13 ]] || { printf '%s\n' 'Usage: save-theme-profile ID EXPECTED_ACTIVE_REV EXPECTED_BASE_REV TARGET SOURCE MODE BASE_PROFILE_PATH FOLDER_ID FILENAME FIT_MODE DEFINITION_ACTION SELECTED_DEFINITION_PATH THEME_JSON' >&2; exit 2; }
+profile_id=$1 expected=$2 expected_base=$3 target=$4 source=$5 mode=$6 base_profile=$7 folder_id=$8 wallpaper_name=$9
+shift 9
+fit_mode=$1 definition_action=$2 selected_definition=$3 theme_json=$4
+[[ $definition_action == retain || ( $definition_action == save && $source == file ) ]] || { printf '%s\n' 'Invalid definition action.' >&2; exit 2; }
+[[ $profile_id =~ ^[a-z0-9]+(-[a-z0-9]+)*$ && $expected =~ ^[a-f0-9]{64}$ && $expected_base =~ ^[a-f0-9]{64}$ ]] || { printf '%s\n' 'Invalid profile ID or revision.' >&2; exit 2; }
+[[ $source == file || $source == wallpaper ]] && [[ $mode == dark || $mode == light ]] || { printf '%s\n' 'Invalid source or mode.' >&2; exit 2; }
+jq -en --arg target "$target" '$target|test("[=\u0000-\u001f\u007f]|^\\s|\\s$")|not' >/dev/null
+bootstrap=$UI_SHELL_RUNTIME
+manifest=$(jq -er '.configFile' "$bootstrap")
+resolver=$(jq -er '.commands.readShellConfig' "$bootstrap")
+reader=$(jq -er '.commands.readIni' "$bootstrap")
+lock="$manifest.theme.lock"
+[[ ! -L $lock ]] || { printf '%s\n' 'Theme lock is a symlink.' >&2; exit 1; }
+exec {lock_fd}>"$lock"
+flock -x "$lock_fd"
+work=$(mktemp -d)
+profile=''
+trap 'rm -rf -- "$work"; if [[ -n $profile ]]; then rm -f -- "$profile"; fi' EXIT
+runtime="$work/runtime.json"
+"$resolver" "$manifest" "$reader" >"$runtime"
+state_reader=$(jq -er '.commands.readThemeState' "$runtime")
+catalog=$(jq -er '.commands.themeCatalog' "$runtime")
+publisher=$(jq -er '.commands.publishThemeBundle' "$runtime")
+selector=$(jq -er '.commands.selectThemeProfile' "$runtime")
+profiles=$(jq -er '.paths.profiles' "$runtime")
+themes=$(jq -er '.paths.themes' "$runtime")
+# Validate the complete named theme before creating any durable assets.
+jq -cen --argjson theme "$theme_json" --arg mode "$mode" '
+  $theme | if .schema == 2 and .mode == $mode then . else error("invalid theme schema or mode") end
+' >"$work/colors.json"
+"$(jq -er '.commands.renderThemeColors' "$runtime")" "$work/colors.json" "$work/validated.ini"
+"$state_reader" "$runtime" >"$work/state.json"
+[[ $(jq -er '.revision' "$work/state.json") == "$expected" ]] || { printf '%s\n' 'Stale theme revision.' >&2; exit 3; }
+"$catalog" "$runtime" >"$work/catalog.json"
+active_id=$(jq -er '.profileId' "$work/state.json")
+root=$(jq -er '.configRoot' "$runtime")
+profile_reader=$(jq -er '.commands.readThemeProfile' "$runtime")
+[[ -n $base_profile ]] || base_profile=$(jq -er '.theme.profile' "$runtime")
+[[ $base_profile == /* ]] || base_profile="$root/$base_profile"
+[[ $(realpath -e -- "$base_profile") == "$(realpath -e -- "$profiles")/"* ]] || { printf '%s\n' 'Draft base must be in the profiles directory.' >&2; exit 1; }
+"$profile_reader" "$base_profile" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$runtime" >"$work/base.json"
+"$state_reader" "$work/base.json" >"$work/base-state.json"
+[[ $(jq -er '.revision' "$work/base-state.json") == "$expected_base" ]] || { printf '%s\n' 'Stale base theme revision.' >&2; exit 3; }
+base_id=$(jq -er '.profileId' "$work/base-state.json")
+selected_id=$(jq -r --arg path "$selected_definition" '.palettes[]|select(.path==$path)|.id' "$work/catalog.json")
+if [[ -n $selected_definition && -z $selected_id ]]; then
+  printf '%s\n' 'Selected Theme definition is not in configured storage.' >&2; exit 1
+fi
+if [[ $profile_id != "$active_id" && $profile_id != "$base_id" && $profile_id != "$selected_id" ]] && { [[ -e $profiles/$profile_id ]] || jq -e --arg id "$profile_id" '.profiles|any(.id==$id)' "$work/catalog.json" >/dev/null; }; then
+  printf '%s\n' 'Profile ID already belongs to another bundle.' >&2; exit 1
+fi
+definition=''
+if [[ $definition_action == save ]]; then
+  themes=$(jq -er '.paths.themes' "$runtime")
+  definition=$(jq -r --arg id "$profile_id" '.palettes[]|select(.id==$id)|.path' "$work/catalog.json")
+  if [[ -n $definition && $profile_id != "$active_id" && $profile_id != "$base_id" && $definition != "$selected_definition" ]]; then
+    printf '%s\n' 'Theme name already belongs to another definition.' >&2; exit 1
+  fi
+  [[ -n $definition ]] || definition="$themes/$profile_id/config.ini"
+  current=$definition
+  while [[ $current != "$themes" ]]; do
+    [[ ! -L $current && $current == "$themes/"* ]] || { printf '%s\n' 'Unsafe Theme definition path.' >&2; exit 1; }
+    current=$(dirname -- "$current")
+  done
+fi
+chosen_definition=$selected_definition
+if [[ $definition_action == save ]]; then chosen_definition=$definition; fi
+if [[ $source == wallpaper ]]; then chosen_definition=''; fi
+if [[ -n $target && -n ${HYPRLAND_INSTANCE_SIGNATURE-} ]]; then
+  hyprctl -j monitors >"$work/monitors.json"
+  jq -e --arg target "$target" 'any(.name==$target)' "$work/monitors.json" >/dev/null || { printf '%s\n' 'Draft output is not connected.' >&2; exit 2; }
+fi
+transformer=$(jq -er '.commands.renderWallpaperSelection' "$runtime")
+"$transformer" "$work/base.json" "$target" "$folder_id" "$wallpaper_name" "$fit_mode" "$work/wallpapers.json" >/dev/null
+# Wallpaper -> file snapshots every output before replacing the chosen scope.
+jq --arg source "$source" --arg target "$target" --arg definition "$chosen_definition" --slurpfile colors "$work/colors.json" '
+  if $source=="wallpaper" then {source:$source,definition:"",definitionOverrides:{}}
+  else {source:$source,defaultPalette:.defaultPalette,byOutput:.byOutput,
+        definition:.definition,definitionOverrides:(. as $base | .byOutput | keys
+          | map({key:.,value:($base.definitionOverrides[.] // $base.definition)}) | from_entries)}
+    | if $target=="" then .defaultPalette=($colors|first) | .definition=$definition
+      else .byOutput[$target]=($colors|first) | .definitionOverrides[$target]=$definition end
+  end
+' "$work/base-state.json" >"$work/policy.json"
+profile=$("$publisher" "$work/base.json" "$profile_id" "$work/policy.json" "$work/wallpapers.json")
+"$profile_reader" "$profile" "$root" "$profiles" "$themes" "$reader" >"$work/draft-profile.json"
+jq --slurpfile profile "$work/draft-profile.json" '. + ($profile|first) | del(.bundle)' "$runtime" >"$work/candidate.json"
+# All configured subsystems must build before overwriting a reusable definition.
+"$(jq -er '.commands.compileThemeProfile' "$runtime")" "$work/candidate.json" >"$work/bundle.json"
+# Re-resolve the base before final activation, including edits to its profile file.
+"$profile_reader" "$base_profile" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$runtime" >"$work/base-current.json"
+"$state_reader" "$work/base-current.json" >"$work/base-current-state.json"
+[[ $(jq -er '.revision' "$work/base-current-state.json") == "$expected_base" ]] || { printf '%s\n' 'Stale base theme revision.' >&2; exit 3; }
+if [[ $definition_action == save ]]; then
+  mkdir -p -- "$(dirname -- "$definition")"
+  "$(jq -er '.commands.renderThemeColors' "$runtime")" "$work/colors.json" "$definition"
+fi
+UI_SHELL_THEME_LOCK_FD="$lock_fd" UI_SHELL_RUNTIME="$runtime" "$selector" activate "$profile" "$expected" "$target"

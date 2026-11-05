@@ -1,0 +1,8 @@
+module UiShell.Wallpaper
+PickerShortcut 1.0 PickerShortcut.qml
+singleton PickerState 1.0 PickerState.qml
+PickerSurface 1.0 PickerSurface.qml
+PickerPanel 1.0 PickerPanel.qml
+WallpaperTile 1.0 WallpaperTile.qml
+PickerHeader 1.0 PickerHeader.qml
+PickerFooter 1.0 PickerFooter.qml

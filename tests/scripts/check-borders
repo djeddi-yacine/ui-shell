@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Real rendered border pixels, entirely inside the disposable test session.
+set -euo pipefail
+source /project/tests/nested.conf
+[[ ${HOME-} == "$test_home" && ${UI_SHELL_TEST_STATE_MODE-} == ephemeral ]]
+primary=${1:?initial nested output required}
+scratch=$(mktemp -d "$XDG_CACHE_HOME/border-check.XXXXXX")
+client_pids=()
+cleanup() {
+  if (( ${#client_pids[@]} )); then kill -TERM "${client_pids[@]}" 2>/dev/null || true; fi
+  rm -rf -- "$scratch"
+}
+trap cleanup EXIT
+
+hyprctl -j monitors >"$scratch/before.json"
+hyprctl output create headless
+hyprctl -j monitors >"$scratch/after.json"
+secondary=$(jq -er --slurpfile before "$scratch/before.json" '
+  [.[] | .name as $name | select(all($before[0][]; .name != $name))] |
+  if length == 1 then .[] | .name else error("one new headless output required") end
+' "$scratch/after.json")
+# Build through the same profile renderer and activation boundary as the editor.
+state_reader=$(jq -er '.commands.readThemeState' "$UI_SHELL_RUNTIME")
+"$state_reader" "$UI_SHELL_RUNTIME" >"$scratch/state.json"
+jq --arg output "$secondary" '
+  .defaultPalette as $colors |
+  {source:"file",definition:"",definitionOverrides:{},
+   defaultPalette:($colors | .hyprland={active_border:"rgb(ff0000)",inactive_border:"rgb(771111)"}),
+   byOutput:{($output):($colors | .hyprland={active_border:"rgba(50ece0ee) rgba(98bffeee) 45deg",inactive_border:"rgb(45697a)"})}}
+' "$scratch/state.json" >"$scratch/policy.json"
+jq '.wallpaper' "$UI_SHELL_RUNTIME" >"$scratch/wallpaper.json"
+recipe=$("$(jq -er '.commands.publishThemeBundle' "$UI_SHELL_RUNTIME")" "$UI_SHELL_RUNTIME" \
+  border-check "$scratch/policy.json" "$scratch/wallpaper.json")
+"$(jq -er '.commands.selectThemeProfile' "$UI_SHELL_RUNTIME")" activate "$recipe" \
+  "$(jq -er '.revision' "$scratch/state.json")" '' >/artifacts/border-activation.log
+rm -f -- "$recipe"
+[[ -z $(hyprctl configerrors) ]]
+hyprctl eval 'hl.config({ input = { follow_mouse = 0 } })'
+
+for client in first second; do
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$primary\" })"
+  qs --path /project/tests/app2unit/app.qml >"/artifacts/border-$client-client.log" 2>&1 &
+  client_pids+=("$!")
+  pid=$!
+  deadline=$((SECONDS + test_ready_seconds))
+  address=''
+  while (( SECONDS < deadline )); do
+    address=$(hyprctl -j clients | jq -r --argjson pid "$pid" '.[] | select(.pid == $pid) | .address')
+    [[ -z $address ]] || break
+    sleep "$test_poll_seconds"
+  done
+  [[ -n $address ]] || { printf '%s\n' 'Border test client failed to open.' >&2; exit 1; }
+  declare "${client}_address=$address"
+done
+
+probe() {
+  local label=$1 address=$2 expected=$3 output geometry x y frame
+  # getprop does not expose the read-only border_color on this build. Capture
+  # actual rendered pixels after the configured color transition has settled.
+  sleep "$test_frame_settle_seconds"
+  hyprctl -j clients >"$scratch/clients.json"
+  hyprctl -j monitors >"$scratch/monitors.json"
+  output=$(jq -er --arg address "$address" --slurpfile monitors "$scratch/monitors.json" '
+    .[] | select(.address == $address and .visible) | .monitor as $id |
+    $monitors[0][] | select(.id == $id) | .name
+  ' "$scratch/clients.json")
+  geometry=$(jq -er --arg address "$address" --slurpfile monitors "$scratch/monitors.json" '
+    .[] | select(.address == $address) as $window | $monitors[0][] | select(.id == $window.monitor) |
+    if .scale != 1 then error("border test requires the configured scale 1") else
+      [($window.at[0]-.x+($window.size[0]/4|floor)),($window.at[1]-.y-1),($window.size[0]/2|floor)] | @tsv
+    end
+  ' "$scratch/clients.json")
+  local span
+  IFS=$'\t' read -r x y span <<<"$geometry"
+  frame="$scratch/$label.png"
+  grim -o "$output" "$frame"
+  local left right
+  left=$(magick "$frame" -format "%[hex:p{$x,$y}]" info:)
+  right=$(magick "$frame" -format "%[hex:p{$((x+span)),$y}]" info:)
+  printf '%s %s %s\n' "$label" "$left" "$right" | tee "/artifacts/border-$label.log"
+  if [[ $expected == gradient ]]; then
+    [[ $left != "$right" ]]
+    for pixel in "$left" "$right"; do
+      (( 16#${pixel:0:2} < 190 && 16#${pixel:2:2} > 130 && 16#${pixel:4:2} > 150 )) || {
+        printf 'Wrong output gradient pixel: %s\n' "$pixel" >&2; return 1;
+      }
+    done
+  else
+    # Native edge coverage/color conversion can shift a low channel slightly.
+    # Keep a tight per-channel tolerance, far below these distinct test hues.
+    for pixel in "$left" "$right"; do
+      for channel in 0 2 4; do
+        difference=$((16#${pixel:channel:2} - 16#${expected:channel:2}))
+        (( difference >= -12 && difference <= 12 )) || {
+          printf 'Expected %s border, got %s.\n' "$expected" "$pixel" >&2; return 1;
+        }
+      done
+    done
+  fi
+  [[ $label != default-active ]] || cp "$frame" /artifacts/frame-borders-default.png
+  [[ $label != output-active ]] || cp "$frame" /artifacts/frame-borders-output.png
+}
+hyprctl dispatch "hl.dsp.focus({ window = \"address:$first_address\" })"
+probe default-active "$first_address" FF0000
+probe default-inactive "$second_address" 771111
+hyprctl dispatch "hl.dsp.window.move({ window = \"address:$first_address\", monitor = \"$secondary\", follow = true })"
+probe output-active "$first_address" gradient
+hyprctl dispatch "hl.dsp.focus({ window = \"address:$second_address\" })"
+probe output-inactive "$first_address" 45697A
+hyprctl dispatch "hl.dsp.focus({ window = \"address:$first_address\" })"
+workspace=$(hyprctl -j clients | jq -er --arg address "$first_address" '.[] | select(.address == $address) | .workspace.name')
+hyprctl dispatch "hl.dsp.workspace.move({ workspace = \"$workspace\", monitor = \"$primary\" })"
+hyprctl dispatch "hl.dsp.focus({ window = \"address:$first_address\" })"
+probe workspace-moved "$first_address" FF0000
+hyprctl reload
+[[ -z $(hyprctl configerrors) ]]
+hyprctl eval 'hl.config({ input = { follow_mouse = 0 } })'
+hyprctl dispatch "hl.dsp.focus({ window = \"address:$first_address\" })"
+probe reloaded "$first_address" FF0000
+hyprctl dispatch "hl.dsp.window.move({ window = \"address:$first_address\", monitor = \"$secondary\", follow = true })"
+probe reloaded-output "$first_address" gradient
+hyprctl -j clients >/artifacts/border-clients.log
+hyprctl -j monitors >/artifacts/border-monitors.log
+printf '%s\n' 'Native borders passed: shared defaults, gradient/alpha output colors, active/inactive focus, window/workspace moves and reload.'

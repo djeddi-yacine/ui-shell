@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Test-only palette editor on a private 720p headless output; the host-sized
+# nested window is not a stable viewport. No host preferences are used.
+set -euo pipefail
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: check-theme-editor PRIMARY_OUTPUT' >&2; exit 2; }
+primary_output=$1
+[[ ${UI_SHELL_ROOT-} == /project && ${HOME-} == /home/test && ${XDG_RUNTIME_DIR-} == /run/test ]]
+source /project/tests/nested.conf
+runtime=${UI_SHELL_RUNTIME:?resolved private runtime required}
+wallpaper_folder=$test_apply_wallpaper_folder
+wallpaper_directory=$(jq -er --arg id "$wallpaper_folder" '.wallpaperFolders[] | select(.id == $id) | .path' "$runtime")
+wallpaper="$wallpaper_directory/$test_apply_wallpaper_name"
+[[ -f $wallpaper ]]
+scratch=$(mktemp -d "$XDG_CACHE_HOME/theme-editor-check.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+hyprctl -j monitors >"$scratch/monitors-before.json"
+jq -e --arg name "$primary_output" 'any(.[]; .name == $name)' "$scratch/monitors-before.json" >/dev/null
+hyprctl output create headless >/dev/null
+output=''
+deadline=$((SECONDS + test_ready_seconds))
+while (( SECONDS < deadline )); do
+  if hyprctl -j monitors >"$scratch/monitors-after.json" 2>/dev/null; then
+    candidate=$(jq -er --slurpfile before "$scratch/monitors-before.json" '
+      [.[] | .name as $name | select(all($before[0][]; .name != $name))] |
+      if length == 1 then .[] | .name else empty end
+    ' "$scratch/monitors-after.json" 2>/dev/null) || candidate=''
+    if [[ -n $candidate ]] && jq -e --arg name "$candidate" \
+      '.[] | select(.name == $name and .width >= 720 and .height >= 720)' \
+      "$scratch/monitors-after.json" >/dev/null; then
+      output=$candidate
+      break
+    fi
+  fi
+  sleep "$test_poll_seconds"
+done
+[[ -n $output ]] || {
+  printf 'Theme editor needs a 720x720 headless output, got %s.\n' \
+    "$(jq -c --arg primary "$primary_output" '[.[] | select(.name != $primary) | {name, width, height}]' "$scratch/monitors-after.json" 2>/dev/null)" >&2
+  exit 1
+}
+shell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+qs --path "$shell_directory" kill --any-display
+UI_SHELL_TEST_OUTPUT="$output" UI_SHELL_TEST_WALLPAPER="$wallpaper" \
+  UI_SHELL_TEST_FRAME_SETTLE_MS="$((test_frame_settle_seconds * 1000))" \
+  timeout --kill-after=2 150 qs --path "$shell_directory/theme-editor-test.qml" >/artifacts/theme-editor-test.log 2>&1
+rg -F 'THEME_EDITOR_PASS' /artifacts/theme-editor-test.log
+result=$(rg -F 'THEME_EDITOR_PASS ' /artifacts/theme-editor-test.log)
+result=${result#*THEME_EDITOR_PASS }
+"$(jq -er '.commands.readThemeState' "$runtime")" "$runtime" >/artifacts/theme-state.log
+saved_id=$(jq -er '.themeId' <<<"$result")
+definition="$(jq -er '.paths.themes' "$runtime")/$saved_id/config.ini"
+profile=$(jq -er '.theme.profile' "$runtime")
+profiles=$(jq -er '.paths.profiles' "$runtime")
+[[ -f $definition && $profile == "$profiles/$saved_id/"* && -f $profile ]]
+[[ $(find "${definition%/*}" -mindepth 1 -maxdepth 1 | wc -l) == 1 ]]
+rg -q '^\[profile\]$' "$profile"
+rg -q '^schema = 2$' "$profile"
+rg -q '^\[wallpaper\.default\]$' "$profile"
+rg -q '^\[palette\.default\]$' "$profile"
+rg -q '^\[colors\.default\]$' "$profile"
+rg -q '^\[hyprland\.default\]$' "$profile"
+if rg -q '^registry[[:space:]]*=|^palette[[:space:]]*=|^\[palette_overrides\]$' "$profile"; then
+  printf '%s\n' 'Saved profile contains an external registry or palette reference.' >&2
+  exit 1
+fi
+"$(jq -er '.commands.normalizeCustomColors' "$runtime")" "$definition" \
+  /artifacts/theme-definition.log "$(jq -er '.commands.readIni' "$runtime")"
+jq -e --arg id "$saved_id" --arg output "$output" \
+  --arg accent "$(jq -er '.accent' <<<"$result")" --arg image "$wallpaper" \
+  '.profileId == $id and .byOutput[$output].accent == $accent
+    and any(.wallpapers[]; .id == $output and .path == $image)' /artifacts/theme-state.log >/dev/null
+jq -e --arg accent "$(jq -er '.accent' <<<"$result")" '.accent == $accent' /artifacts/theme-definition.log >/dev/null
+jq -e '.schema == 2 and (.colors | type == "object" and length > 0) and
+  (.hyprland | keys == ["active_border", "inactive_border"])' /artifacts/theme-definition.log >/dev/null
+for frame in frame-theme-editor.png frame-theme-error.png; do
+  [[ -s /artifacts/$frame ]]
+  colors=$(magick "/artifacts/$frame" -format '%k' info:)
+  (( colors >= test_min_frame_colors ))
+done
+if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' /artifacts/theme-editor-test.log; then
+  printf '%s\n' 'Theme editor produced a QML warning/error.' >&2
+  exit 1
+fi
+cp "$(jq -er '.configFile' "$UI_SHELL_RUNTIME")" /artifacts/theme-manifest.log
+printf '%s\n' 'Theme editor passed: flat saved definition, separate committed profile, combined activation, draft/cancel preservation, and scoped copyable read/save failures.'

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+(( $# == 2 )) || { printf '%s\n' 'Usage: check-window-close artifacts-directory sandbox-pid' >&2; exit 2; }
+artifacts=$1
+sandbox_pid=$2
+[[ -d $artifacts && $sandbox_pid =~ ^[1-9][0-9]*$ ]] || { printf '%s\n' 'Invalid artifacts directory or sandbox PID.' >&2; exit 2; }
+project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$project_root/tests/nested.conf"
+deadline=$((SECONDS + test_ready_seconds))
+while [[ ! -f $artifacts/app-close-ready.log ]]; do
+  kill -0 "$sandbox_pid" 2>/dev/null || { printf '%s\n' 'Sandbox exited before app-close-ready.log.' >&2; exit 1; }
+  (( SECONDS < deadline )) || { printf '%s\n' 'Timed out waiting for app-close-ready.log.' >&2; exit 1; }
+  sleep "$test_poll_seconds"
+done
+kill -0 "$sandbox_pid" 2>/dev/null || { printf '%s\n' 'Sandbox exited before window close.' >&2; exit 1; }
+
+mapfile -t compositor_pids < <(pgrep -x Hyprland --env "UI_SHELL_TEST_RUN=$artifacts" || true)
+(( ${#compositor_pids[@]} == 1 )) || { printf 'Expected one tagged host Hyprland, found %s.\n' "${#compositor_pids[@]}" >&2; exit 1; }
+compositor_pid=${compositor_pids[0]}
+mapfile -t addresses < <(hyprctl -j clients | jq -r --arg pid "$compositor_pid" '.[] | select((.pid | tostring) == $pid) | .address')
+(( ${#addresses[@]} == 1 )) && [[ -n ${addresses[0]} && ${addresses[0]} != null ]] || {
+  printf 'Expected one client for tagged Hyprland PID %s, found %s.\n' "$compositor_pid" "${#addresses[@]}" >&2; exit 1;
+}
+address=${addresses[0]}
+started=$SECONDS
+hyprctl dispatch closewindow "address:$address" >/dev/null
+
+deadline=$((SECONDS + test_exit_seconds))
+while kill -0 "$sandbox_pid" 2>/dev/null && (( SECONDS < deadline )); do sleep "$test_poll_seconds"; done
+if kill -0 "$sandbox_pid" 2>/dev/null; then
+  pgrep -a --env "UI_SHELL_TEST_RUN=$artifacts" >"$artifacts/close-processes.log" || true
+  printf 'Timed out waiting for sandbox PID %s to exit; see %s/close-processes.log.\n' "$sandbox_pid" "$artifacts" >&2
+  exit 1
+fi
+if pgrep -x Hyprland --env "UI_SHELL_TEST_RUN=$artifacts" >/dev/null; then
+  printf '%s\n' 'Tagged host Hyprland remains after sandbox exit.' >&2
+  exit 1
+fi
+remaining=$(hyprctl -j clients | jq --arg pid "$compositor_pid" '[.[] | select((.pid | tostring) == $pid)] | length')
+[[ $remaining == 0 ]] || { printf 'Window address:%s remains after close.\n' "$address" >&2; exit 1; }
+printf 'WINDOW_CLOSE_PASS elapsed=%ss address:%s\n' "$((SECONDS - started))" "$address"

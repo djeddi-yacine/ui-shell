@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Serialize recipe inputs; activation belongs to the selector.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-theme-profile RECIPE_JSON OUTPUT_INI' >&2; exit 2; }
+temporary=$(mktemp "${2}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+jq -er '
+  def section($name; $data):
+    ["["+$name+"]"] + ($data | to_entries | sort_by(.key) | map(.key+" = "+(.value | tostring))) + [""];
+  section("profile"; {schema:2,id:.id}) +
+  section("theme"; {source:.source,definition:.definition}) +
+  section("definition_overrides"; .definitionOverrides) +
+  section("wallpaper"; .wallpaper | del(.default,.monitors)) +
+  section("palette_outputs"; .palettes | map({key:.scope,value:.output}) | from_entries) +
+  ([.wallpapers[] | section("wallpaper."+.scope; .selection + {output:.output})] | add // []) +
+  ([.palettes[] | .scope as $scope | .palette as $palette |
+    section("palette."+$scope; $palette | del(.colors,.hyprland)) +
+    section("colors."+$scope; $palette.colors) +
+    section("hyprland."+$scope; $palette.hyprland)] | add // []) | join("\n")
+' "$1" >"$temporary"
+mv -f -- "$temporary" "$2"

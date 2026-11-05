@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Regenerate checked-in default colors from default/default.png.
+# Development only: runtime staging never generates or rewrites defaults.
+set -euo pipefail
+(( $# == 1 )) || { printf '%s\n' 'Usage: generate-default DEFAULT_DIRECTORY' >&2; exit 2; }
+default_directory=$(realpath -e -- "$1")
+root=$(realpath -e -- "$default_directory/..")
+image=$default_directory/default.png
+extract=$root/scripts/extract-colors
+render_theme=$root/scripts/render-theme-colors
+render_profile=$root/scripts/render-theme-profile
+fail() { printf 'Generate default: %s\n' "$*" >&2; exit 1; }
+[[ -f $image ]] || fail "missing $image"
+[[ -x $extract && -x $render_theme && -x $render_profile ]] || fail 'runtime renderers must be executable'
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+"$extract" "$image" dark "$work/theme.json"
+mode=$(jq -er '.mode' "$work/theme.json")
+palette_key=$(sha256sum <"$image"); palette_key=${palette_key%% *}
+palette_key="$palette_key-$mode-v2"
+"$render_theme" "$work/theme.json" "$work/theme.ini"
+jq -n --slurpfile theme "$work/theme.json" --arg key "$palette_key" '
+  {id:"default",source:"file",definition:"themes/default/config.ini",
+   definitionOverrides:{},
+   wallpaper:{schema:1,cache_namespace:"ui-shell/wallpapers",color_mode:$theme[0].mode,hyprpaper_ipc:true},
+   wallpapers:[{scope:"default",output:"",
+     selection:{folder:"default",path:"default.png",fit_mode:"cover",palette_key:$key}}],
+   palettes:[{scope:"default",output:"",palette:$theme[0]}]}
+' >"$work/recipe.json"
+"$render_profile" "$work/recipe.json" "$work/profile.ini"
+chmod 0644 -- "$work/theme.ini" "$work/profile.ini"
+# Publish both files only after every input rendered successfully.
+mv -f -- "$work/theme.ini" "$default_directory/theme.ini"
+mv -f -- "$work/profile.ini" "$default_directory/profile.ini"
+printf '%s\n' 'Default theme and profile regenerated from default/default.png.'

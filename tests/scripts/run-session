@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode=${1:?session mode required}
+source /project/tests/nested.conf
+shell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+hypr_directory=$(jq -er '.paths.hypr' "$UI_SHELL_RUNTIME")
+config=$test_hypr_config
+[[ $mode != phantomat ]] || config=$test_phantomat_config
+if [[ $mode == smoke ]]; then
+  # Quickshell imports cannot escape the entrypoint's config root.
+  cp "$test_project/tests/picker-apply/shell.qml" "$shell_directory/picker-apply-test.qml"
+fi
+if [[ $mode == motion ]]; then
+  cp "$test_project/tests/picker-motion/shell.qml" "$shell_directory/picker-motion-test.qml"
+fi
+if [[ $mode == profiles ]]; then
+  cp "$test_project/tests/theme-editor/shell.qml" "$shell_directory/theme-editor-test.qml"
+fi
+if [[ $mode == launcher ]]; then
+  cp "$test_project/tests/launcher/shell.qml" "$shell_directory/launcher-test.qml"
+  mkdir -p "$XDG_DATA_HOME/applications"
+  cp "$test_project/tests/launcher/entries/"*.desktop "$XDG_DATA_HOME/applications/"
+fi
+# nested-session prepared the complete private bundle before launching Hyprland.
+"${test_compositor_command[@]}" --config "$hypr_directory/${config#hypr/}" &
+compositor_pid=$!
+cleanup() {
+  trap - EXIT INT TERM
+  # Stop launched apps while their private display/bus are still alive. The
+  # host harness repeats this cleanup if the session dies unexpectedly.
+  if [[ -n ${UI_SHELL_TEST_MANAGER_BUS-} && -f /artifacts/app-units.log ]]; then
+    while IFS= read -r unit; do
+      [[ $unit =~ ^${UI_SHELL_TEST_PREFIX}-[a-zA-Z0-9]+\.scope$ ]] || continue
+      timeout --kill-after=1 "$test_cleanup_seconds" env -u XDG_RUNTIME_DIR \
+        DBUS_SESSION_BUS_ADDRESS="$UI_SHELL_TEST_MANAGER_BUS" \
+        systemctl --user stop "$unit" 2>/dev/null || true
+    done </artifacts/app-units.log
+  fi
+  # These commands can see only this test's PID namespace and native sockets.
+  timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory" kill --any-display 2>/dev/null || true
+  [[ $mode != smoke ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/picker-apply-test.qml" kill --any-display 2>/dev/null || true
+  [[ $mode != motion ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/picker-motion-test.qml" kill --any-display 2>/dev/null || true
+  [[ $mode != profiles ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/theme-editor-test.qml" kill --any-display 2>/dev/null || true
+  [[ $mode != launcher ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/launcher-test.qml" kill --any-display 2>/dev/null || true
+  pkill -TERM -x hyprpaper || true
+  kill -TERM "$compositor_pid" 2>/dev/null || true
+  if ! timeout --kill-after=1 "$test_cleanup_seconds" tail --pid="$compositor_pid" -s "$test_poll_seconds" -f /dev/null; then
+    kill -KILL "$compositor_pid" 2>/dev/null || true
+  fi
+  # The PID namespace owner is released even if a child cannot be reaped.
+  if ! kill -0 "$compositor_pid" 2>/dev/null; then wait "$compositor_pid" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ $mode == run ]]; then
+  printf '%s\n' 'Interactive nested session. Ctrl+Alt+Q opens foot; Ctrl+Alt+Escape exits gracefully from any submap.'
+else
+  # Fail fast on a broken config, shell or plugin before handing the session over.
+  bash "$test_project/tests/scripts/check-runtime" "$mode" "$compositor_pid"
+fi
+if [[ $mode == phantomat ]]; then
+  printf '%s\n' 'Phantomat is loaded and verified. Ctrl+Shift+F5 toggles the canvas, Ctrl+Shift+O opens the navigator; Ctrl+Alt+Escape exits. Artifacts are kept in /artifacts.'
+fi
+# Interactive modes stay up until the compositor is closed by hand.
+if [[ $mode != smoke && $mode != snapshot && $mode != theme && $mode != profiles && $mode != motion && $mode != launcher && $mode != app-launch && $mode != borders ]]; then
+  wait "$compositor_pid"
+fi

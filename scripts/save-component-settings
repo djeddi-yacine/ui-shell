@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+[[ $# -ge 4 ]] || { printf '%s\n' 'Usage: save-component-settings COMPONENT SCOPE OUTPUT EXPECTED_REV [VALUE...]' >&2; exit 2; }
+component=$1 scope=$2 output=$3 expected=$4
+values=("${@:5}")
+[[ $expected == absent || $expected =~ ^[[:xdigit:]]{64}$ ]] || { printf '%s\n' 'Expected revision must be absent or a SHA-256 digest.' >&2; exit 2; }
+runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
+case $component in
+  launcher) renderer=$(jq -er '.commands.renderLauncherSettings' "$runtime") ;;
+  wallpaper) renderer=$(jq -er '.commands.renderPickerSettings' "$runtime") ;;
+  controls) renderer=$(jq -er '.commands.renderControlTuning' "$runtime") ;;
+  *) printf '%s\n' 'Unknown component.' >&2; exit 2 ;;
+esac
+resolver=$(jq -er '.commands.componentSettingsPath' "$runtime")
+rendered=$("$renderer" "${values[@]}")
+path=$("$resolver" "$component" "$scope" "$output")
+directory=${path%/*}
+
+base=$(jq -er '.paths.components' "$runtime")
+# Check before and after mkdir -p: concurrent writers may create shared parents.
+"$resolver" "$component" "$scope" "$output" >/dev/null
+mkdir -p -- "$directory"
+"$resolver" "$component" "$scope" "$output" >/dev/null
+[[ -d $directory && ! -L $directory ]] || { printf 'Invalid settings directory: %s\n' "$directory" >&2; exit 1; }
+# Keep the settings-owned subtree private, including directories another writer created.
+current=$base
+chmod 700 -- "$current"
+IFS=/ read -r -a private_parts <<<"${directory#"$base/"}"
+for part in "${private_parts[@]}"; do
+  current+="/$part"
+  [[ -d $current && ! -L $current ]] || { printf 'Invalid settings directory: %s\n' "$current" >&2; exit 1; }
+  chmod 700 -- "$current"
+done
+[[ ! -L $path ]] || { printf '%s\n' 'Settings file is a symlink.' >&2; exit 1; }
+lock=$path.lock
+[[ ! -L $lock ]] || { printf '%s\n' 'Settings lock is a symlink.' >&2; exit 1; }
+exec {lock_fd}>"$lock"
+[[ ! -L $lock ]] || { printf '%s\n' 'Settings lock became a symlink.' >&2; exit 1; }
+chmod 600 -- "$lock"
+flock -x "$lock_fd"
+[[ ! -L $path ]] || { printf '%s\n' 'Settings file became a symlink.' >&2; exit 1; }
+if [[ -e $path ]]; then
+  [[ -f $path ]] || { printf '%s\n' 'Settings path is not a regular file.' >&2; exit 1; }
+  current_rev=$(sha256sum -- "$path"); current_rev=${current_rev%% *}
+else
+  current_rev=absent
+fi
+[[ $current_rev == "$expected" ]] || { printf '%s\n' 'Stale settings revision.' >&2; exit 3; }
+
+temporary=$(mktemp "$directory/.component-settings.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+chmod 600 "$temporary"
+printf '%s\n' "$rendered" >"$temporary"
+mv -f -- "$temporary" "$path"
+trap - EXIT
+revision=$(sha256sum -- "$path"); printf '%s\n' "${revision%% *}"

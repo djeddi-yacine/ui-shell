@@ -1,0 +1,181 @@
+{
+  "vocabulary": {
+    "fill": [
+      "surface",
+      "hoverSurface",
+      "focusSurface",
+      "pressedSurface",
+      "container",
+      "containerHover",
+      "containerPressed",
+      "currentContainer",
+      "disabledSurface",
+      "primary",
+      "primaryHover",
+      "primaryFocus",
+      "primaryPressed",
+      "none"
+    ],
+    "fg": [
+      "text",
+      "hoverText",
+      "muted",
+      "containerText",
+      "currentText",
+      "disabledText",
+      "primaryText"
+    ],
+    "border": [
+      "none",
+      "rest",
+      "outline",
+      "focus",
+      "hover",
+      "primary",
+      "current",
+      "text",
+      "primaryText",
+      "disabledBorder",
+      "disabledSurface"
+    ]
+  },
+  "flagValues": {
+    "hover": [
+      "pointer",
+      "none"
+    ],
+    "focusVisible": [
+      "keyboard",
+      "always"
+    ],
+    "focusRing": [
+      true,
+      false
+    ],
+    "currentMarker": [
+      true,
+      false
+    ],
+    "animate": [
+      true,
+      false
+    ],
+    "restingBorder": [
+      "outline",
+      "none"
+    ]
+  },
+  "flags": {
+    "hover": "pointer",
+    "focusVisible": "keyboard",
+    "focusRing": true,
+    "currentMarker": true,
+    "animate": true,
+    "restingBorder": "outline"
+  },
+  "precedence": [
+    "disabled",
+    "pressed",
+    "select",
+    "focus",
+    "current",
+    "hover",
+    "normal"
+  ],
+  "emphasis": {
+    "outline": {
+      "family": "outline",
+      "rest": "outline"
+    },
+    "flat": {
+      "family": "outline",
+      "rest": "none"
+    },
+    "solid": {
+      "family": "solid",
+      "rest": "primary"
+    }
+  },
+  "families": {
+    "outline": {
+      "hoverLift": true,
+      "states": {
+        "normal": {
+          "fill": "surface",
+          "fg": "text",
+          "border": "rest"
+        },
+        "hover": {
+          "fill": "hoverSurface",
+          "fg": "hoverText",
+          "border": "rest"
+        },
+        "focus": {
+          "fill": "focusSurface",
+          "fg": "text",
+          "border": "focus"
+        },
+        "select": {
+          "fill": "container",
+          "fg": "containerText",
+          "border": "rest"
+        },
+        "current": {
+          "fill": "currentContainer",
+          "fg": "currentText",
+          "border": "rest"
+        },
+        "pressed": {
+          "fill": "containerPressed",
+          "fg": "containerText",
+          "border": "rest"
+        },
+        "disabled": {
+          "fill": "surface",
+          "fg": "disabledText",
+          "border": "disabledBorder"
+        }
+      }
+    },
+    "solid": {
+      "hoverLift": false,
+      "states": {
+        "normal": {
+          "fill": "primary",
+          "fg": "primaryText",
+          "border": "primary"
+        },
+        "hover": {
+          "fill": "primaryHover",
+          "fg": "primaryText",
+          "border": "primary"
+        },
+        "focus": {
+          "fill": "primaryFocus",
+          "fg": "primaryText",
+          "border": "primaryText"
+        },
+        "select": {
+          "fill": "primaryPressed",
+          "fg": "primaryText",
+          "border": "primary"
+        },
+        "current": {
+          "fill": "primaryFocus",
+          "fg": "primaryText",
+          "border": "primary"
+        },
+        "pressed": {
+          "fill": "primaryPressed",
+          "fg": "primaryText",
+          "border": "primary"
+        },
+        "disabled": {
+          "fill": "disabledSurface",
+          "fg": "disabledText",
+          "border": "disabledBorder"
+        }
+      }
+    }
+  }
+}

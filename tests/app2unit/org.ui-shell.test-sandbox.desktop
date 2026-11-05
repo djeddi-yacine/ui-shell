@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Sandbox launch check
+Exec=/usr/bin/bash /project/tests/scripts/check-app-launch --app
+Terminal=false
+Categories=Utility;

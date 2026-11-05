@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Global compositor colors and an explicit index of native output palettes.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-profile-hyprland INPUTS_JSON OUTPUT_DIRECTORY' >&2; exit 2; }
+input=$1 output=$2
+jq -e 'all(.paletteEntries[]; .output == "" or
+  (.output | type == "string" and (test("[\\s\\[\\]]") | not)))' "$input" >/dev/null || {
+  printf '%s\n' 'Output border rules require exact port names without spaces or brackets.' >&2; exit 1;
+}
+mkdir -p -- "$output/outputs"
+renderer=$(jq -er '.runtime.commands.renderHyprColors' "$input")
+"$renderer" "$(jq -er '.globalPaletteFile' "$input")" "$output/colors.lua"
+printf '%s\n' '-- Generated output palette index. Paths are relative to this file.' 'return {' >"$output/outputs.lua"
+while IFS= read -r entry; do
+  name=$(jq -r '.output' <<<"$entry")
+  [[ -n $name ]] || continue
+  # Validate the installed native target's border limits before publication.
+  jq -e '
+    def native_gradient:
+      split(" ") as $parts |
+      (if $parts[-1] | endswith("deg") then
+         ($parts[-1] | test("^[+-]?[0-9]+deg$")) and ($parts | length) <= 11
+       else ($parts | length) <= 10 end);
+    (.hyprland.active_border | native_gradient) and
+    (.hyprland.inactive_border | split(" ") | length == 1)
+  ' "$(jq -er '.file' <<<"$entry")" >/dev/null || {
+    printf 'Hyprland 0.56.2 output borders require an active gradient with integer angle/at most ten stops, and a solid inactive color: %s\n' "$name" >&2; exit 1;
+  }
+  hash=$(printf '%s' "$name" | sha256sum); hash=${hash%% *}
+  "$renderer" "$(jq -er '.file' <<<"$entry")" "$output/outputs/$hash.lua"
+  jq -nr --arg name "$name" --arg hash "$hash" '
+    "  { output = " + ($name | @json) + ", id = " + ($hash | @json) +
+    ", palette = " + ("outputs/" + $hash + ".lua" | @json) + " },"
+  ' >>"$output/outputs.lua"
+done < <(jq -c '.paletteEntries[]' "$input")
+printf '%s\n' '}' >>"$output/outputs.lua"

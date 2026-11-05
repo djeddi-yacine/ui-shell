@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Normalize a flat Omarchy colors.toml file into the schema-2 theme model."""
+import json
+import os
+import re
+import sys
+import tempfile
+import tomllib
+
+
+ROLES = (
+    "background", "surface", "surfaceVariant", "elevated", "text", "textMuted",
+    "accent", "positive", "warning", "negative", "outline", "focus", "scrim",
+)
+SOURCE_ROLES = {
+    "background": "background", "surface": "background",
+    "surfaceVariant": "selection", "elevated": "lighter_background",
+    "text": "foreground", "textMuted": "dark_foreground", "accent": "accent",
+    "positive": None, "warning": None, "negative": None,
+    "outline": "muted", "focus": "accent", "scrim": None,
+}
+HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+NAMED_COLORS = (
+    "accent", "selection", "muted", "background", "dark_background", "darker_background",
+    "lighter_background", "foreground", "dark_foreground", "light_foreground", "bright_foreground",
+    "red", "yellow", "orange", "green", "cyan", "blue", "magenta", "brown",
+    "bright_red", "bright_yellow", "bright_green", "bright_cyan", "bright_blue", "bright_magenta",
+)
+
+
+def valid_border(value):
+    if not isinstance(value, str) or not value or any(c in value for c in "\t\r\n\0;{}\\\"'`$"):
+        return False
+    tokens = value.split(" ")
+    if any(not token for token in tokens):
+        return False
+    stop = re.compile(r"^(?:rgb\([0-9A-Fa-f]{6}\)|rgba\([0-9A-Fa-f]{8}\))$")
+    angle = re.compile(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)deg$")
+    has_angle = bool(tokens and angle.fullmatch(tokens[-1]))
+    stops = tokens[:-1] if has_angle else tokens
+    return bool(stops) and all(stop.fullmatch(item) for item in stops) and (not has_angle or len(stops) > 1)
+
+
+def main():
+    if len(sys.argv) != 6:
+        raise ValueError("Usage: normalize-theme-colors INPUT_TOML OUTPUT_JSON POSITIVE_FIELD WARNING_FIELD NEGATIVE_FIELD")
+    source_path, output, positive, warning, negative = sys.argv[1:]
+    if not os.path.isfile(source_path):
+        raise ValueError(f"Palette input does not exist: {source_path}")
+    with open(source_path, "rb") as stream:
+        source = tomllib.load(stream)
+    if any(not isinstance(key, str) for key in source):
+        raise ValueError("palette keys must be strings")
+    if source.get("mode") not in ("dark", "light"):
+        raise ValueError("mode must be dark or light")
+    required = set(NAMED_COLORS) | {positive, warning, negative}
+    missing = sorted(required - source.keys())
+    if missing:
+        raise ValueError("missing palette fields: " + ", ".join(missing))
+
+    colors = {}
+    borders = {}
+    for key, value in source.items():
+        if key == "mode":
+            continue
+        if key in ("hyprland_active_border", "hyprland_inactive_border"):
+            if not valid_border(value):
+                raise ValueError(f"invalid Hyprland border expression: {key}")
+            borders["active_border" if key == "hyprland_active_border" else "inactive_border"] = value
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) and isinstance(value, str) and HEX.fullmatch(value):
+            colors[key] = value
+        else:
+            raise ValueError(f"palette value must be a named hex color or supported border expression: {key}")
+    if set(borders) != {"active_border", "inactive_border"}:
+        raise ValueError("both Hyprland border fields are required")
+    if not all(name in colors for name in required - {"mode"}):
+        raise ValueError("required source fields must be hex colors")
+
+    roles = {}
+    for role, source_key in SOURCE_ROLES.items():
+        key = {"positive": positive, "warning": warning, "negative": negative}.get(role, source_key)
+        if role == "scrim":
+            roles[role] = "#000000"
+        else:
+            roles[role] = colors[key]
+    result = {"schema": 2, "mode": source["mode"], **roles, "colors": colors, "hyprland": borders}
+
+    output_dir = os.path.dirname(os.path.abspath(output))
+    fd, temporary = tempfile.mkstemp(prefix="." + os.path.basename(output) + ".", dir=output_dir, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(result, stream, separators=(",", ":"), sort_keys=True)
+            stream.write("\n")
+        os.replace(temporary, output)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, tomllib.TOMLDecodeError, ValueError, TypeError) as error:
+        print(f"Palette normalization failed: {error}", file=sys.stderr)
+        sys.exit(1)

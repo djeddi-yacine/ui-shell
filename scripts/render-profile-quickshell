@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Native shell projections for one resolved profile generation.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-profile-quickshell INPUTS_JSON OUTPUT_DIRECTORY' >&2; exit 2; }
+input=$1 output=$2
+mkdir -p -- "$output"
+"$(jq -er '.runtime.commands.renderShellColors' "$input")" "$(jq -er '.globalPaletteFile' "$input")" "$output/GeneratedPalette.qml"
+args=("$output/GeneratedPalettes.qml")
+while IFS= read -r entry; do
+  args+=("$(jq -r '.output' <<<"$entry")" "$(jq -er '.file' <<<"$entry")")
+done < <(jq -c '.paletteEntries[]' "$input")
+"$(jq -er '.runtime.commands.renderMonitorPalettes' "$input")" "${args[@]}"
+args=("$output/WallpaperTargets.qml" "$(jq -r '.selections.primaryOutput' "$input")" "$(jq -er '.selections.colorMode' "$input")" "$(jq -er '.selections.cacheNamespace' "$input")")
+while IFS= read -r entry; do
+  args+=("$(jq -r '.id' <<<"$entry")" "$(jq -er '.path' <<<"$entry")" "$(jq -er '.paletteKey' <<<"$entry")" "$(jq -er '.fitMode' <<<"$entry")")
+done < <(jq -c '.selections.wallpapers[]' "$input")
+"$(jq -er '.runtime.commands.renderWallpaperTargets' "$input")" "${args[@]}"
+printf '%s\n' 'singleton GlobalPalette 1.0 GeneratedPalette.qml' 'singleton OutputPalettes 1.0 GeneratedPalettes.qml' 'singleton WallpaperTargets 1.0 WallpaperTargets.qml' >"$output/qmldir"

@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# Invoke only inside the existing private Bubblewrap environment; no UI launch.
+set -euo pipefail
+fail() { printf 'Wallpaper folders: %s\n' "$*" >&2; exit 1; }
+[[ ${UI_SHELL_ROOT-} == /project && ${PWD-} == /project ]] || fail 'private /project required'
+[[ $(realpath -- "${BASH_SOURCE[0]}") == /project/tests/scripts/check-wallpaper-folders ]] || fail 'sandbox copy required'
+source /project/tests/nested.conf
+[[ $test_project == /project && ${HOME-} == "$test_home" && ${XDG_RUNTIME_DIR-} == "$test_runtime" ]] || fail 'private HOME/runtime required'
+[[ ${XDG_CONFIG_HOME-} == "$test_home/.config" && ${XDG_CACHE_HOME-} == "$test_home/.cache" ]] || fail 'private config/cache required'
+[[ ${XDG_DATA_HOME-} == "$test_home/.local/share" && ${XDG_STATE_HOME-} == "$test_home/.local/state" ]] || fail 'private data/state required'
+[[ -n ${UI_SHELL_HOST_PID_NS-} && $(readlink /proc/self/ns/pid) != "$UI_SHELL_HOST_PID_NS" ]] || fail 'private PID namespace required'
+[[ -n ${UI_SHELL_HOST_PROJECT-} && ! -e $UI_SHELL_HOST_PROJECT && ! -w /source/hypr ]] || fail 'host project must be absent and source read-only'
+original=${UI_SHELL_RUNTIME:?resolved runtime required}
+original_registry=$(jq -er '.bundle.wallpaperRegistry' "$original")
+original_manifest=$(jq -er '.configFile' "$original")
+original_profile=$(jq -er '.theme.profile' "$original")
+original_before=$(sha256sum -- "$original" "$original_manifest" "$original_profile" "$original_registry")
+scratch=$(mktemp -d "$XDG_CACHE_HOME/wallpaper-folders.XXXXXX")
+# The outer sandbox owns cleanup, including scratch retained for failures.
+package=$scratch/package
+bash "$test_project/tools/scripts/stage-config" "$test_project" "$package" >/dev/null
+
+# Copy two different real images from configured read-only roots, never a literal root.
+first_asset= second_asset= first_hash=
+while IFS= read -r folder; do
+  [[ -d $folder && ! -w $folder ]] || fail 'configured source root must be read-only'
+  while IFS= read -r -d '' asset; do
+    hash=$(sha256sum -- "$asset" | awk '{print $1}')
+    if [[ -z $first_asset ]]; then first_asset=$asset; first_hash=$hash
+    elif [[ $hash != "$first_hash" ]]; then second_asset=$asset; break
+    fi
+  done < <(find -H "$folder" -maxdepth 1 -type f -iname '*.png' -print0 | sort -z)
+  [[ -z $second_asset ]] || break
+done < <(jq -er '.wallpaperFolders[] | select(.id != "default") | .path' "$original")
+[[ -n $first_asset && -n $second_asset ]] || fail 'two distinct configured PNG assets required'
+mkdir -- "$package/first" "$package/second"
+name=same.png
+cp -- "$first_asset" "$package/first/$name"
+cp -- "$second_asset" "$package/second/$name"
+mkdir -- "$package/first/nested"
+cp -- "$first_asset" "$package/first/nested/ignored.png"
+ln -s -- "$package/second" "$package/second-link"
+first_root=$package/first
+second_root=$package/second-link
+mkdir -p -- "$package/profiles/folders"
+registry=$original_registry
+mapfile -t settings < <(jq -r '.wallpaper.color_mode, .wallpaper.cache_namespace, .wallpaper.default.fit_mode' "$original")
+[[ ${#settings[@]} == 3 ]] || fail 'invalid registry settings'
+mode=${settings[0]} namespace=${settings[1]} fit_mode=${settings[2]}
+first_key="$(sha256sum -- "$first_root/$name" | awk '{print $1}')-${mode}-v2"
+second_key="$(sha256sum -- "$second_root/$name" | awk '{print $1}')-${mode}-v2"
+[[ $first_key != "$second_key" ]] || fail 'fixture images have equal hashes'
+# Preserve the complete schema 2 snapshot while changing only fixture identity
+# and wallpaper choices; the profile remains one self-contained INI.
+sed -e 's/^id = default$/id = folders/' \
+  -e 's/^folder = default$/folder = first/' \
+  -e 's/^path = default\.png$/path = same.png/' \
+  -e "s/^palette_key = .*/palette_key = $first_key/" \
+  "$package/profiles/default/profile.ini" >"$package/profiles/folders/profile.ini"
+manifest=$package/config.ini
+# Put second first: the default image's explicit folder must win over list order.
+awk '
+  /^\[/ { section = $0 }
+  section == "[paths]" && /^runtime =/ { print "runtime = runtime"; next }
+  section == "[theme]" && /^profile =/ { print "profile = profiles/folders/profile.ini"; next }
+  section == "[wallpaper_folders]" {
+    if ($0 == section) print "[wallpaper_folders]\nsecond = second-link\nfirst = first"
+    next
+  }
+  { print }
+' "$manifest" >"$scratch/manifest.ini"
+mv -- "$scratch/manifest.ini" "$manifest"
+resolver=$(jq -er '.commands.readShellConfig' "$original")
+reader=$(jq -er '.commands.readIni' "$original")
+prepare_runtime=$(jq -er '.commands.prepareRuntime' "$original")
+project_runtime() {
+  "$resolver" "$manifest" "$reader" >"$scratch/resolved.json"
+  runtime=$("$prepare_runtime" "$scratch/resolved.json")
+  runtime_lua=$(jq -er '.runtimeLua' "$runtime")
+  registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
+  export UI_SHELL_RUNTIME=$runtime UI_SHELL_RUNTIME_LUA=$runtime_lua
+}
+project_runtime
+jq -e --arg root "$package" --arg manifest "$manifest" '
+  .configRoot == $root and .configFile == $manifest and
+  (.theme.profile | startswith($root + "/"))
+' "$runtime" >/dev/null || fail 'fixture profile assets must share the private config root'
+baseline_registry=$registry
+baseline_before=$(sha256sum -- "$baseline_registry")
+resolver=$(jq -er '.commands.readShellConfig' "$runtime")
+reader=$(jq -er '.commands.readIni' "$runtime")
+prepare_runtime=$(jq -er '.commands.prepareRuntime' "$runtime")
+catalog=$(jq -er '.bootstrap.wallpaperCatalog' "$runtime")
+targets=$scratch/targets.qml
+render_catalog=$(jq -er '.commands.renderWallpaperCatalog' "$runtime")
+render_targets=$(jq -er '.commands.renderWallpaperTargets' "$runtime")
+select_wallpaper=$(jq -er '.commands.selectWallpaper' "$runtime")
+target=FOLDER-TEST-SECOND
+
+select_and_resolve() {
+  local expected_key=$1 expected_version=$2 previous=$registry before
+  shift
+  shift
+  before=$(sha256sum -- "$previous")
+  [[ $(bash "$select_wallpaper" "$@") == "$expected_key" ]] || fail 'selector hashed the wrong same-named image'
+  project_runtime
+  if [[ $expected_version == new ]]; then
+    [[ $registry != "$previous" ]] || fail 'changed selection did not publish a new registry version'
+  else
+    [[ $registry == "$previous" ]] || fail 'unchanged selection published a duplicate registry version'
+  fi
+  [[ $(sha256sum -- "$previous") == "$before" ]] || fail 'selection rewrote the previous registry version'
+}
+check_catalog() {
+  local order
+  order=$(jq -c '[.wallpaperFolders[].id]' "$runtime")
+  bash "$render_catalog" "$runtime" "$catalog"
+  # Read the actual generated QML item objects, without a GUI or an invented catalog.
+  sed -n '/^[[:space:]]*{.*path:/p' "$catalog" |
+    sed -E 's/([A-Za-z][A-Za-z0-9]*):/"\1":/g; s/,[[:space:]]*$//' |
+    jq -s -e --arg first "$first_root" --arg second "$second_root" --arg name "$name" --argjson order "$order" '
+      length == 2 and (map(.folderId) == $order) and
+      (map(.name) | all(. == $name)) and (map(.path) | unique | length == 2) and
+      all(.searchKey | type == "string" and contains("same")) and
+      any(.folderId == "first" and .folderPath == $first and .path == ($first + "/" + $name)) and
+      any(.folderId == "second" and .folderPath == $second and .path == ($second + "/" + $name))
+    ' >/dev/null || fail 'catalog lost folder identity, order, basename or distinct source paths'
+}
+check_resolution() {
+  local selected_root=$1
+  # A fresh process loads the actual runtime projection and production resolver.
+  lua - "$runtime_lua" "$target" "$first_root/$name" "$selected_root/$name" "$scratch/targets.args" <<'LUA'
+local config = dofile(arg[1])
+assert(config.schema == 1 and config.wallpaper.schema == 1 and config.defaultFolder == nil)
+assert(config.paths.wallpapers == nil and #config.wallpaperFolders == 2)
+local registry = dofile(config.bundle.wallpaperRegistry)
+assert(registry.default.folder == "first", "fixture default needs an explicit folder ID")
+package.path = config.paths.hypr .. "/?.lua;" .. package.path
+local wallpapers = require("wallpaper")
+local default, default_count = nil, 0
+for _, entry in ipairs(wallpapers.entries) do
+  if entry.output == "" then default = entry; default_count = default_count + 1 end
+end
+assert(default_count == 1 and default.folder == "first"
+  and default.source == arg[3], "explicit default ID resolved to the wrong image")
+if registry.monitors[arg[2]] then
+  assert(registry.monitors[arg[2]].folder == "second")
+  local selected
+  for _, entry in ipairs(wallpapers.entries) do
+    if entry.output == arg[2] then selected = entry end
+  end
+  assert(selected and selected.folder == "second" and selected.source == arg[4],
+    "saved folder resolved to the wrong source path")
+end
+local file = assert(io.open(arg[5], "wb"))
+for _, entry in ipairs(wallpapers.entries) do
+  file:write(entry.output, "\0", entry.source, "\0", entry.palette_key, "\0", entry.fit_mode, "\0")
+end
+assert(file:close())
+LUA
+  local -a quads
+  mapfile -d '' -t quads <"$scratch/targets.args"
+  bash "$render_targets" "$targets" "$target" "$mode" "$namespace" "${quads[@]}"
+  rg -Fq -- "path: \"$first_root/$name\"" "$targets" || fail 'default target resolved to list-first folder'
+  if rg -Fq -- "{ id: \"$target\"," "$targets"; then
+    rg -Fq -- "path: \"$selected_root/$name\"" "$targets" || fail 'selected target resolved to wrong folder'
+  fi
+}
+check_catalog
+check_resolution "$second_root"
+select_and_resolve "$first_key" reused '' first "$name"
+lua - "$registry" "$name" "$first_key" "$fit_mode" <<'LUA'
+local entry = dofile(arg[1]).default
+assert(entry.folder == "first" and entry.path == arg[2])
+assert(entry.palette_key == arg[3] and entry.fit_mode == arg[4])
+LUA
+select_and_resolve "$second_key" new "$target" second "$name"
+lua - "$registry" "$target" "$name" "$second_key" "$fit_mode" <<'LUA'
+local entry = assert(dofile(arg[1]).monitors[arg[2]])
+assert(entry.folder == "second" and entry.path == arg[3])
+assert(entry.palette_key == arg[4] and entry.fit_mode == arg[5])
+LUA
+check_resolution "$second_root"
+
+# Reordering the catalog must not change either persisted folder selection.
+saved_before=$(sha256sum <"$registry")
+awk '
+  /^\[/ { folders = ($0 == "[wallpaper_folders]") }
+  folders && /^second =/ { second = $0; next }
+  { print }
+  folders && /^first =/ { print second }
+' "$manifest" >"$scratch/manifest.ini"
+mv -- "$scratch/manifest.ini" "$manifest"
+project_runtime
+check_catalog
+check_resolution "$second_root"
+[[ $(sha256sum <"$registry") == "$saved_before" ]] || fail 'folder reordering rewrote selections'
+
+# Relocate one source and edit only its configured path; saved identity is unchanged.
+saved_before=$(sha256sum <"$registry")
+cp -- "$runtime" "$scratch/before-move.json"
+mv -- "$package/second" "$package/relocated-second"
+second_root=$package/relocated-second
+awk '
+  /^\[/ { folders = ($0 == "[wallpaper_folders]") }
+  folders && /^second =/ { print "second = relocated-second"; next }
+  { print }
+' "$manifest" >"$scratch/manifest.ini"
+mv -- "$scratch/manifest.ini" "$manifest"
+project_runtime
+jq -e --slurpfile before "$scratch/before-move.json" '
+  ($before | first) as $old |
+  del(.wallpaperFolders,.bundle) == ($old | del(.wallpaperFolders,.bundle)) and
+  [.wallpaperFolders[].id] == [$old.wallpaperFolders[].id] and
+  ([.wallpaperFolders[] | select(.id != "second")] ==
+    [$old.wallpaperFolders[] | select(.id != "second")])
+' "$runtime" >/dev/null
+check_catalog
+check_resolution "$second_root"
+[[ $(sha256sum <"$registry") == "$saved_before" ]] || fail 'folder relocation rewrote saved folder/name'
+
+# Exercise the production native resolver with invalid default AND output entries.
+# Each fresh process uses a separate registry fixture; persisted state stays intact.
+native_before=$(sha256sum -- "$manifest" "$runtime" "$runtime_lua" "$registry" "$catalog")
+for selection in default monitor; do
+  for invalid in missing empty unknown; do
+    lua - "$runtime_lua" "$registry" "$scratch/invalid-registry.lua" "$target" "$selection" "$invalid" <<'LUA'
+local config = dofile(arg[1])
+local file = assert(io.open(arg[3], "wb"))
+file:write("local registry = dofile(", string.format("%q", arg[2]), ")\n")
+local selection = arg[5] == "default" and "registry.default"
+  or ("registry.monitors[" .. string.format("%q", arg[4]) .. "]")
+local folder = ({missing = "nil", empty = '\"\"', unknown = '\"unknown\"'})[arg[6]]
+assert(folder, "unknown negative case")
+file:write(selection, ".folder = ", folder, "\nreturn registry\n")
+assert(file:close())
+config.bundle.wallpaperRegistry = arg[3]
+package.path = config.paths.hypr .. "/?.lua;" .. package.path
+package.loaded.runtime = config
+local ok, err = pcall(require, "wallpaper")
+assert(not ok, "native resolver substituted a folder for " .. arg[5] .. "/" .. arg[6])
+assert(tostring(err):lower():find("folder", 1, true), "native resolver failed for an unrelated reason: " .. tostring(err))
+LUA
+    [[ $(sha256sum -- "$manifest" "$runtime" "$runtime_lua" "$registry" "$catalog") == "$native_before" ]] || fail 'native rejection changed manifest/runtime/registry/catalog'
+  done
+done
+
+reject_selection() {
+  local before profile
+  profile=$(jq -er '.theme.profile' "$runtime")
+  before=$(sha256sum -- "$manifest" "$profile" "$runtime" "$runtime_lua" "$registry" "$catalog")
+  if bash "$select_wallpaper" "$@" >"$scratch/rejected.out" 2>"$scratch/rejected.err"; then fail 'invalid selection accepted'; fi
+  [[ ! -s $scratch/rejected.out && -s $scratch/rejected.err ]] || fail 'selection failure needs an error and no success key'
+  [[ $(sha256sum -- "$manifest" "$profile" "$runtime" "$runtime_lua" "$registry" "$catalog") == "$before" ]] || fail 'rejected selection overwrote manifest/profile/runtime/registry/catalog'
+}
+reject_selection "$target" unknown "$name"
+reject_selection
+reject_selection "$target"
+reject_selection "$target" second
+reject_selection "$target" second "$name" extra
+reject_selection "$target" '' "$name"
+reject_selection "$target" 'bad.id' "$name"
+reject_selection "$target" second ''
+reject_selection "$target" second "../$name"
+reject_selection "$target" second 'bad"name.png'
+reject_selection "$target" second 'bad\name.png'
+reject_selection "$target" second $'bad\nname.png'
+reject_selection 'bad"output' second "$name"
+reject_selection 'bad\output' second "$name"
+reject_selection $'bad\noutput' second "$name"
+reject_selection "$target" second missing.png
+cp -- "$manifest" "$scratch/good.ini"
+awk '
+  /^\[/ { folders = ($0 == "[wallpaper_folders]") }
+  folders && /^second =/ { print "second = missing-directory"; next }
+  { print }
+' "$manifest" >"$scratch/manifest.ini"
+mv -- "$scratch/manifest.ini" "$manifest"
+"$resolver" "$manifest" "$reader" >"$scratch/missing-folder.json"
+invalid_before=$(sha256sum -- "$runtime" "$runtime_lua" "$registry" "$catalog")
+if "$prepare_runtime" "$scratch/missing-folder.json" >"$scratch/rejected.out" 2>"$scratch/rejected.err"; then
+  fail 'missing folder profile compilation accepted'
+fi
+[[ -s $scratch/rejected.err && $(sha256sum -- "$runtime" "$runtime_lua" "$registry" "$catalog") == "$invalid_before" ]] ||
+  fail 'missing folder preparation changed the valid runtime generation'
+export UI_SHELL_RUNTIME=$scratch/missing-folder.json
+reject_selection "$target" second "$name"
+catalog_before=$(sha256sum -- "$manifest" "$runtime" "$registry" "$catalog")
+if bash "$render_catalog" "$scratch/missing-folder.json" "$catalog" >"$scratch/rejected.out" 2>"$scratch/rejected.err"; then fail 'missing folder catalog accepted'; fi
+[[ -s $scratch/rejected.err && $(sha256sum -- "$manifest" "$runtime" "$registry" "$catalog") == "$catalog_before" ]] || fail 'missing folder changed manifest/runtime/registry/catalog or omitted error'
+cp -- "$scratch/good.ini" "$manifest"
+project_runtime
+[[ $(sha256sum -- "$baseline_registry") == "$baseline_before" ]] || fail 'selection rewrote the baseline bundle registry'
+[[ $(sha256sum -- "$original" "$original_manifest" "$original_profile" "$original_registry") == "$original_before" ]] || fail 'isolated folder test changed installed config/profile/registry'
+printf '%s\n' 'Wallpaper folders passed: duplicate basenames, ordered all-folder catalog, explicit selections, owned registry versions, folder reordering, symlink roots, selection hashes, native Lua folder rejection, relocation and rejection without writes.'

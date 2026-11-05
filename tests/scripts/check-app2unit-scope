@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The same file is the host launcher, registered scope and harmless test app.
+if [[ ${1-} == --app ]]; then
+  source /source/tests/nested.conf
+  [[ $HOME == "$test_home" && $XDG_RUNTIME_DIR == "$test_runtime" ]]
+  [[ $XDG_CONFIG_HOME == "$HOME/.config" && $XDG_CACHE_HOME == "$HOME/.cache" ]]
+  [[ $XDG_DATA_HOME == "$HOME/.local/share" && $XDG_STATE_HOME == "$HOME/.local/state" ]]
+  for namespace in pid mnt net; do
+    variable=UI_SHELL_HOST_${namespace^^}_NS
+    [[ $(readlink "/proc/self/ns/$namespace") != "${!variable}" ]]
+  done
+  [[ ! -e $UI_SHELL_HOST_PROJECT && ! -e /run/dbus/system_bus_socket ]]
+  [[ ! -e $XDG_RUNTIME_DIR/systemd/private && -n ${DBUS_SESSION_BUS_ADDRESS-} ]]
+  [[ $DBUS_SESSION_BUS_ADDRESS != *"/run/user/"* ]]
+  mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+  printf 'APP_PASS: private HOME=%s runtime=%s PID/mount/network namespaces; scope=%s\n' \
+    "$HOME" "$XDG_RUNTIME_DIR" "$UI_SHELL_TEST_UNIT"
+  exit 0
+fi
+
+project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$project_root/tests/nested.conf"
+if [[ ${1-} == --registered ]]; then
+  (( $# == 4 ))
+  unit=$2 slice=$3 artifacts=$4
+  [[ $unit =~ ^ui-shell-test-[a-zA-Z0-9]+\.scope$ && $slice =~ ^app-uishelltest[a-zA-Z0-9]+\.slice$ ]]
+  [[ $artifacts == /tmp/ui-shell-app2unit.* && -d $artifacts && ! -L $artifacts ]]
+  [[ $(systemctl --user show "$unit" -p ActiveState --value) == active ]]
+  [[ $(systemctl --user show "$unit" -p Slice --value) == "$slice" ]]
+  printf 'SCOPE_PASS: host manager registered %s in %s\n' "$unit" "$slice"
+  args=("${test_namespace_options[@]}" --clearenv)
+  for path in "${test_readonly_system_paths[@]}"; do args+=(--ro-bind "$path" "$path"); done
+  args+=(--symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64
+    --proc /proc --dev /dev --tmpfs /tmp
+    --perms 0700 --dir "$test_home" --perms 0700 --dir "$test_runtime"
+    --ro-bind "$project_root/tests" /source/tests --bind "$artifacts" /artifacts
+    --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 --setenv HOME "$test_home"
+    --setenv XDG_CONFIG_HOME "$test_home/.config" --setenv XDG_CACHE_HOME "$test_home/.cache"
+    --setenv XDG_DATA_HOME "$test_home/.local/share" --setenv XDG_STATE_HOME "$test_home/.local/state"
+    --setenv XDG_RUNTIME_DIR "$test_runtime" --setenv UI_SHELL_HOST_PROJECT "$project_root"
+    --setenv UI_SHELL_TEST_RUN "$artifacts" --setenv UI_SHELL_TEST_UNIT "$unit"
+    --chdir "$test_home")
+  for namespace in pid mnt net; do
+    args+=(--setenv "UI_SHELL_HOST_${namespace^^}_NS" "$(readlink "/proc/self/ns/$namespace")")
+  done
+  exec bwrap "${args[@]}" -- dbus-run-session --config-file="/source/$test_dbus_config" -- \
+    /usr/bin/bash /source/tests/scripts/check-app2unit-scope --app
+fi
+[[ $# == 0 ]] || { printf '%s\n' 'Usage: check-app2unit-scope' >&2; exit 2; }
+for dependency in bwrap dbus-run-session app2unit systemctl timeout pgrep rg; do
+  command -v "$dependency" >/dev/null || { printf 'Required dependency: %s\n' "$dependency" >&2; exit 1; }
+done
+manager_socket=${XDG_RUNTIME_DIR:?Host runtime directory required}/systemd/private
+[[ -S $manager_socket ]] || { printf '%s\n' 'Host systemd private socket is unavailable.' >&2; exit 1; }
+[[ $test_app2unit_seconds =~ ^[1-9][0-9]*$ && $test_log_parent == /tmp ]]
+
+artifacts=$(mktemp -d "$test_log_parent/ui-shell-app2unit.XXXXXX")
+run_id=${artifacts##*.}
+unit=ui-shell-test-$run_id.scope
+slice=app-uishelltest$run_id.slice
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  # Exact run-owned names only. Never stop app.slice or graphical-session.target.
+  for owned_unit in "$unit" "$slice"; do
+    timeout --kill-after=1 "$test_cleanup_seconds" systemctl --user stop "$owned_unit" \
+      >>"$artifacts/cleanup.log" 2>&1 || true
+  done
+  if ! systemctl --user show-environment | LC_ALL=C sort | sha256sum >"$artifacts/host-after.log"; then
+    status=1
+  elif ! cmp -s "$artifacts/host-before.log" "$artifacts/host-after.log"; then
+    printf '%s\n' 'FAIL: host manager environment changed.' >&2
+    status=1
+  fi
+  if pgrep -a --env "UI_SHELL_TEST_RUN=$artifacts" >"$artifacts/leftovers.log"; then
+    printf '%s\n' 'FAIL: sandbox processes remain.' >&2
+    status=1
+  fi
+  for owned_unit in "$unit" "$slice"; do
+    if [[ $(systemctl --user show "$owned_unit" -p ActiveState --value) != inactive ]]; then
+      printf 'FAIL: test unit remains active: %s\n' "$owned_unit" >&2
+      status=1
+    fi
+  done
+  if [[ $status == 0 ]]; then
+    printf '%s\n' 'PASS: real app2unit scope; private namespaces/HOME/XDG/bus; host environment unchanged; cleaned.'
+  fi
+  printf 'Test artifacts: %s\n' "$artifacts"
+  exit "$status"
+}
+systemctl --user show-environment | LC_ALL=C sort | sha256sum >"$artifacts/host-before.log"
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+printf 'Test artifacts: %s\n' "$artifacts"
+timeout --kill-after=1 "$test_app2unit_seconds" app2unit -t scope -c -x -s "$slice" -u "$unit" -- \
+  /usr/bin/bash "$project_root/tests/scripts/check-app2unit-scope" --registered "$unit" "$slice" "$artifacts" \
+  2>&1 | tee "$artifacts/probe.log"
+rg -q '^SCOPE_PASS:' "$artifacts/probe.log"
+rg -q '^APP_PASS:' "$artifacts/probe.log"

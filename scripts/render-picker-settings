@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-picker-settings WIDE_COLUMNS MAXIMUM_VISIBLE_ROWS' >&2; exit 2; }
+case $1 in undefined) ;; *) [[ $1 =~ ^[1-6]$ ]] || { printf '%s\n' 'wideColumns must be an integer from 1 to 6 or undefined.' >&2; exit 2; };; esac
+case $2 in undefined) ;; *) [[ $2 =~ ^[1-4]$ ]] || { printf '%s\n' 'maximumVisibleRows must be an integer from 1 to 4 or undefined.' >&2; exit 2; };; esac
+printf 'import QtQuick\n\nQtObject {\n    property var wideColumns: %s\n    property var maximumVisibleRows: %s\n}\n' "$1" "$2"

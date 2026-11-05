@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-shell-colors INPUT_JSON OUTPUT_QML' >&2; exit 2; }
+input=$1 output=$2
+
+command -v jq >/dev/null || {
+  printf '%s\n' 'jq is required for shell palette rendering.' >&2
+  exit 1
+}
+[[ -f $input ]] || {
+  printf 'Extract colors first: %s\n' "$input" >&2
+  exit 1
+}
+
+temporary=$(mktemp "${output}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+
+jq -er '
+  def valid_border:
+    split(" ") as $parts |
+    ($parts[-1] | test("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)deg$")) as $angled |
+    (if $angled then $parts[:-1] else $parts end) as $stops |
+    ($stops | length) > 0 and all($stops[]; test("^(rgb\\([0-9A-Fa-f]{6}\\)|rgba\\([0-9A-Fa-f]{8}\\))$")) and (($angled | not) or ($stops | length) > 1);
+  def mode($theme):
+    if $theme.mode == "dark" or $theme.mode == "light" then $theme.mode else error("invalid mode") end;
+  def color($theme; $name):
+    $theme[$name] as $value
+    | if $value | type == "string" and test("^#[0-9A-Fa-f]{6}$") then $value else error("invalid " + $name) end;
+  . as $theme |
+  def complete_colors:
+    . as $colors | ["accent","selection","muted","background","dark_background","darker_background","lighter_background","foreground","dark_foreground","light_foreground","bright_foreground","red","yellow","orange","green","cyan","blue","magenta","brown","bright_red","bright_yellow","bright_green","bright_cyan","bright_blue","bright_magenta"] | all(.[]; . as $key | $colors | has($key));
+  if ($theme.colors | complete_colors | not) then error("missing named palette slots") else . end |
+  ["background","surface","surfaceVariant","elevated","text","textMuted","accent","positive","warning","negative","outline","focus","scrim"] as $roles |
+  if ($theme.schema != 2 or (($theme | keys | sort) != (($roles + ["schema","mode","colors","hyprland"]) | sort)) or
+      ($theme.colors | type) != "object" or ($theme.colors | length) == 0 or
+      ($theme.colors | to_entries | all(.[]; (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string" and test("^#[0-9A-Fa-f]{6}$"))) | not) or
+      ($theme.hyprland | type != "object" or (keys | sort) != ["active_border","inactive_border"]) or
+      ([$theme.hyprland.active_border, $theme.hyprland.inactive_border] | all(type == "string" and valid_border) | not)) then error("invalid schema-2 theme") else . end |
+  [
+    "pragma Singleton", "", "import QtQuick", "", "QtObject {",
+    "    readonly property string mode: \"" + mode($theme) + "\"",
+    "    readonly property var colorData: (" + ($theme | @json) + ")",
+    "    readonly property var colors: colorData.colors",
+    "    readonly property var hyprland: colorData.hyprland",
+    "    readonly property color background: \"" + color($theme; "background") + "\"",
+    "    readonly property color surface: \"" + color($theme; "surface") + "\"",
+    "    readonly property color surfaceVariant: \"" + color($theme; "surfaceVariant") + "\"",
+    "    readonly property color elevated: \"" + color($theme; "elevated") + "\"",
+    "    readonly property color text: \"" + color($theme; "text") + "\"",
+    "    readonly property color textMuted: \"" + color($theme; "textMuted") + "\"",
+    "    readonly property color accent: \"" + color($theme; "accent") + "\"",
+    "    readonly property color positive: \"" + color($theme; "positive") + "\"",
+    "    readonly property color warning: \"" + color($theme; "warning") + "\"",
+    "    readonly property color negative: \"" + color($theme; "negative") + "\"",
+    "    readonly property color outline: \"" + color($theme; "outline") + "\"",
+    "    readonly property color focus: \"" + color($theme; "focus") + "\"",
+    "    readonly property color scrim: \"" + color($theme; "scrim") + "\"",
+    "}", ""
+  ] | join("\n")
+' "$input" >"$temporary"
+
+mv -f -- "$temporary" "$output"

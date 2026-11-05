@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Stage one self-contained recipe. Selection and native generation are separate.
+set -euo pipefail
+shopt -s inherit_errexit
+umask 077
+[[ $# == 4 ]] || { printf '%s\n' 'Usage: publish-theme-bundle RESOLVED_RUNTIME ID POLICY_JSON WALLPAPER_JSON' >&2; exit 2; }
+runtime=$1 id=$2 policy=$3 wallpaper=$4
+[[ $id =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf '%s\n' 'Invalid profile ID.' >&2; exit 2; }
+source=$(jq -er '.source | select(.=="wallpaper" or .=="file")' "$policy")
+root=$(jq -er '.configRoot' "$runtime")
+profiles=$(jq -er '.paths.profiles' "$runtime")
+themes=$(jq -er '.paths.themes' "$runtime")
+base="$profiles/$id"
+current=$base
+while [[ $current != "$root" ]]; do
+  [[ ! -L $current && $current == "$root/"* ]] || { printf '%s\n' 'Unsafe profile storage.' >&2; exit 1; }
+  current=${current%/*}
+done
+mkdir -p -- "$base"
+work=$(mktemp -d)
+recipe=$(mktemp "$base/.profile.XXXXXX.ini")
+keep=0
+trap 'rm -rf -- "$work"; if [[ $keep == 0 ]]; then rm -f -- "$recipe"; fi' EXIT
+if [[ $source == file ]]; then
+  if jq -e 'has("defaultPalette") and has("byOutput")' "$policy" >/dev/null; then
+    cp -- "$policy" "$work/policy.json"
+  else
+    "$(jq -er '.commands.readThemeState' "$runtime")" "$runtime" >"$work/state.json"
+    jq --slurpfile policy "$policy" '. + ($policy|first)' "$work/state.json" >"$work/policy.json"
+  fi
+else
+  jq -n '{source:"wallpaper",definition:"",definitionOverrides:{},byOutput:{}}' >"$work/policy.json"
+fi
+jq -n --slurpfile runtime "$runtime" --slurpfile policy "$work/policy.json" --slurpfile wallpaper "$wallpaper" --arg id "$id" --arg source "$source" '
+  def relative($root):
+    if .=="" then . elif type=="string" and startswith($root+"/") then ltrimstr($root+"/")
+    else error("Theme identity must be inside config root") end;
+  ($runtime|first) as $runtime | ($policy|first) as $policy | ($wallpaper|first) as $wallpaper |
+  {id:$id,source:$source,
+   definition:(if $source=="file" then ($policy.definition // $runtime.theme.definition | relative($runtime.configRoot)) else "" end),
+   definitionOverrides:(if $source=="file" then ($policy.definitionOverrides // $runtime.theme.definitionOverrides | with_entries(.value |= relative($runtime.configRoot))) else {} end),
+   wallpaper:$wallpaper,
+   palettes:(if $source=="file" then [{scope:"default",output:"",palette:$policy.defaultPalette}] +
+     ($policy.byOutput | to_entries | sort_by(.key) | map({scope:"",output:.key,palette:.value})) else [] end),
+   wallpapers:([{scope:"default",output:"",selection:$wallpaper.default}]+
+     ($wallpaper.monitors | to_entries | sort_by(.key) | map({scope:"",output:.key,selection:.value})))}
+' >"$work/recipe.json"
+# Stable scope aliases encode exact device names without INI section punctuation.
+while IFS= read -r output; do
+  hash=$(printf '%s' "$output" | sha256sum); hash=${hash%% *}
+  jq --arg output "$output" --arg scope "output-$hash" '
+    .palettes |= map(if .output==$output then .scope=$scope else . end) |
+    .wallpapers |= map(if .output==$output then .scope=$scope else . end)
+  ' "$work/recipe.json" >"$work/next.json"
+  mv -f -- "$work/next.json" "$work/recipe.json"
+done < <(jq -r '[.palettes[].output,.wallpapers[].output] | unique[] | select(length>0)' "$work/recipe.json")
+while IFS= read -r palette; do
+  printf '%s\n' "$palette" >"$work/palette.json"
+  "$(jq -er '.commands.renderThemeColors' "$runtime")" "$work/palette.json" "$work/validated.ini"
+done < <(jq -c '.palettes[].palette' "$work/recipe.json")
+"$(jq -er '.commands.renderThemeProfile' "$runtime")" "$work/recipe.json" "$recipe"
+"$(jq -er '.commands.readThemeProfile' "$runtime")" "$recipe" "$root" "$profiles" "$themes" \
+  "$(jq -er '.commands.readIni' "$runtime")" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$runtime" >"$work/candidate.json"
+"$(jq -er '.commands.readWallpaperSelections' "$runtime")" "$work/candidate.json" >/dev/null
+keep=1
+printf '%s\n' "$recipe"

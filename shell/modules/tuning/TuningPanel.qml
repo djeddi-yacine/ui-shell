@@ -1,0 +1,58 @@
+pragma ComponentBehavior: Bound
+import QtQuick
+import "../../adapters" as Adapters
+import "../../components" as Controls
+import "../../config" as Config
+import "../../theme" as Theme
+
+// The control-colour tuning panel: a card docked at the bottom edge so the bar
+// and everything above it stay visible while sliders and modes preview live.
+FocusScope {
+    id: root
+    required property string screenName
+    required property Controls.InputState inputState
+    readonly property Item cardItem: card
+    signal closed()
+
+    function activate() {
+        editor.begin()
+        motion.enter()
+    }
+    function requestClose() {
+        editor.discard()
+        motion.leave()
+    }
+    Keys.onPressed: event => {
+        inputState.keyboardUsed()
+        if (event.key === Config.Keyboard.cancelKey) { requestClose(); event.accepted = true }
+    }
+    Component.onCompleted: { if (visible) activate() }
+    Theme.MonitorStyle { id: styleTokens; palette: Theme.ActivePalettes.forOutput(root.screenName) }
+    Controls.PointerTracker { inputState: root.inputState }
+    Controls.PanelMotion { id: motion; surface: root; onClosed: root.closed() }
+
+    Rectangle {
+        id: card
+        width: Math.min(root.width - Config.Tuning.outerMargin * 2, Config.Tuning.maximumWidth)
+        height: editor.implicitHeight + Config.ContextPanels.padding * 2
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Config.Tuning.outerMargin
+        color: styleTokens.surfaceRaised
+        radius: styleTokens.surfaceRadius
+        border.width: Theme.Shape.borderWidth
+        border.color: styleTokens.controls.outline
+        transform: Translate { y: motion.offset }
+
+        Controls.ControlTuningEditor {
+            id: editor
+            x: Config.ContextPanels.padding
+            y: Config.ContextPanels.padding
+            width: card.width - Config.ContextPanels.padding * 2
+            style: styleTokens
+            inputState: root.inputState
+            store: Adapters.ControlTuningStore
+            onSaved: motion.leave()
+        }
+    }
+}

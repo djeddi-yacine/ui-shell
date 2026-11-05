@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /project/tests/nested.conf
+bash "$(jq -er '.commands.renderWallpaperCatalog' "$UI_SHELL_RUNTIME")" \
+  "$UI_SHELL_RUNTIME" "$(jq -er '.bootstrap.wallpaperCatalog' "$UI_SHELL_RUNTIME")"
+bash "$test_project/tests/scripts/check-wallpaper-pipeline"
+bash "$test_project/tests/scripts/check-component-settings"
+printf '%s\n' 'Wallpaper and component pipelines passed.'

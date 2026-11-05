@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Test-only wallpaper diagnostics on the private display.
+# Runs only inside the private, live nested session.
+set -euo pipefail
+source /project/tests/nested.conf
+output=${1:?exact nested output required}
+[[ ${UI_SHELL_ROOT-} == /project && ${HOME-} == "$test_home" && ${XDG_RUNTIME_DIR-} == "$test_runtime" ]]
+[[ -n ${UI_SHELL_HOST_PID_NS-} && $(readlink /proc/self/ns/pid) != "$UI_SHELL_HOST_PID_NS" ]]
+[[ ! -e $UI_SHELL_HOST_PROJECT && -w /project/hypr && ! -w /source/hypr ]]
+: "${HYPRLAND_INSTANCE_SIGNATURE:?nested Hyprland session required}"
+runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
+registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
+manifest=$(jq -er '.configFile' "$runtime")
+resolver=$(jq -er '.commands.readShellConfig' "$runtime")
+reader=$(jq -er '.commands.readIni' "$runtime")
+prepare_runtime=$(jq -er '.commands.prepareRuntime' "$runtime")
+baseline_registry=$registry
+baseline_profile=$(jq -er '.theme.profile' "$runtime")
+baseline_before=$(sha256sum -- "$baseline_registry")
+scratch=$(mktemp -d "$XDG_CACHE_HOME/live-wallpaper.XXXXXX")
+# The outer sandbox owns cleanup, including diagnostics retained for failures.
+wallpaper_folder=$test_apply_wallpaper_folder
+wallpaper_directory=$(jq -er --arg id "$wallpaper_folder" '.wallpaperFolders[] | select(.id == $id) | .path' "$runtime")
+quickshell_directory=$(jq -er '.paths.quickshell' "$runtime")
+wallpaper="$wallpaper_directory/$test_apply_wallpaper_name"
+native_wallpaper=$(realpath -e -- "$wallpaper")
+[[ -f $wallpaper && -f /artifacts/frame.png && -f $quickshell_directory/picker-apply-test.qml ]]
+diagnose_exit() {
+  local status=$?
+  trap - EXIT
+  # Capture real symptoms while the compositor is still alive, including failures.
+  hyprctl hyprpaper listactive >/artifacts/wallpaper-after.log || true
+  grim -o "$output" /artifacts/frame-applied.png || true
+  exit "$status"
+}
+trap diagnose_exit EXIT
+
+hyprctl hyprpaper listactive >/artifacts/wallpaper-before.log
+before_registry=$(sha256sum "$registry")
+before_manifest=$(sha256sum -- "$manifest")
+if rg -Fqx -- "$output: $native_wallpaper" /artifacts/wallpaper-before.log; then
+  printf '%s\n' 'Live test requires a wallpaper different from the initial assignment.' >&2; exit 1;
+fi
+initial_native=$(rg -F -- "$output:" /artifacts/wallpaper-before.log)
+registry_sha=${before_registry%% *}
+manifest_sha=${before_manifest%% *}
+profile_sha=$(sha256sum -- "$baseline_profile")
+profile_sha=${profile_sha%% *}
+
+qs --path "$quickshell_directory" kill --any-display
+UI_SHELL_TEST_OUTPUT="$output" UI_SHELL_TEST_WALLPAPER="$wallpaper" \
+UI_SHELL_TEST_REGISTRY_SHA="$registry_sha" UI_SHELL_TEST_MANIFEST="$manifest" \
+UI_SHELL_TEST_MANIFEST_SHA="$manifest_sha" UI_SHELL_TEST_INITIAL_NATIVE="$initial_native" \
+UI_SHELL_TEST_PROFILE="$baseline_profile" UI_SHELL_TEST_PROFILE_SHA="$profile_sha" \
+  timeout --kill-after=2 "$test_apply_seconds" qs --path "$quickshell_directory/picker-apply-test.qml" >/artifacts/picker-apply.log 2>&1
+rg -F 'PICKER_APPLY_PASS' /artifacts/picker-apply.log
+[[ -s /artifacts/frame-picker-info.png && -s /artifacts/frame-picker-settings.png && -s /artifacts/frame-picker-error.png ]]
+hyprctl hyprpaper listactive >/artifacts/wallpaper-after.log
+rg -Fx -- "$output: $native_wallpaper" /artifacts/wallpaper-after.log
+"$resolver" "$manifest" "$reader" >"$scratch/resolved.json"
+runtime=$("$prepare_runtime" "$scratch/resolved.json")
+export UI_SHELL_RUNTIME=$runtime
+export UI_SHELL_RUNTIME_LUA
+UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$runtime")
+registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
+[[ $registry != "$baseline_registry" && $(sha256sum -- "$baseline_profile") != "$profile_sha  $baseline_profile" ]]
+[[ $(sha256sum -- "$baseline_registry") == "$baseline_before" ]]
+lua - "$registry" "$output" "$test_apply_wallpaper_name" "$wallpaper_folder" <<'LUA'
+local registry = dofile(arg[1])
+local entry = assert(registry.monitors[arg[2]], "exact output selection missing")
+assert(entry.path == arg[3], "selected wallpaper was not persisted")
+assert(entry.folder == arg[4], "selected wallpaper folder was not persisted")
+assert(entry.palette_key ~= "", "selected palette key was not persisted")
+LUA
+sleep "$test_frame_settle_seconds"
+grim -o "$output" /artifacts/frame-applied.png
+# The bottom-left probe is outside the central picker and top bar.
+height=$(jq -r --arg output "$output" '.[] | select(.name == $output) | .height' /artifacts/monitors.log)
+probe="${test_wallpaper_probe_size}x${test_wallpaper_probe_size}+0+$((height - test_wallpaper_probe_size))"
+before_pixels=$(magick /artifacts/frame.png -crop "$probe" +repage -format '%#' info:)
+after_pixels=$(magick /artifacts/frame-applied.png -crop "$probe" +repage -format '%#' info:)
+[[ $before_pixels != "$after_pixels" ]] || { printf '%s\n' 'Live test failed: background probe pixels did not change.' >&2; exit 1; }
+printf '%s\n' 'Live wallpaper passed: draft had no native/registry/manifest effects; final Save and apply persisted and applied the selected wallpaper and palette.'
+trap - EXIT

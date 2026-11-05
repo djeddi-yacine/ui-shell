@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+wallpaper=${1:?"wallpaper path required"}
+mode=${2:?color mode required}
+output=${3:?output JSON path required}
+state_root=${output%/*}
+
+command -v matugen >/dev/null || {
+  printf '%s\n' 'matugen is required for wallpaper color extraction.' >&2
+  exit 1
+}
+command -v jq >/dev/null || {
+  printf '%s\n' 'jq is required for palette normalization.' >&2
+  exit 1
+}
+[[ -f $wallpaper ]] || {
+  printf 'Wallpaper not found: %s\n' "$wallpaper" >&2
+  exit 1
+}
+[[ $mode == dark || $mode == light || $mode == smart ]] || {
+  printf 'Unsupported mode: %s\n' "$mode" >&2
+  exit 1
+}
+
+mkdir -p -- "$state_root"
+temporary=$(mktemp "$state_root/.colors.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+
+matugen image "$wallpaper" --mode "$mode" --prefer saturation --json hex |
+  jq '
+    def color($colors; $mode; $name): $colors[$name][$mode].color;
+    def hex($value): ($value | type == "string" and test("^#[0-9A-Fa-f]{6}$"));
+    .mode as $mode | .colors as $colors |
+    ({
+      accent: color($colors; $mode; "primary"), selection: color($colors; $mode; "secondary_container"), muted: color($colors; $mode; "outline_variant"),
+      background: color($colors; $mode; "background"), dark_background: color($colors; $mode; "surface_container_lowest"), darker_background: color($colors; $mode; "surface_dim"),
+      lighter_background: color($colors; $mode; "surface_container_high"), foreground: color($colors; $mode; "on_surface"), dark_foreground: color($colors; $mode; "on_surface_variant"),
+      light_foreground: color($colors; $mode; "on_surface_variant"), bright_foreground: color($colors; $mode; "on_surface"),
+      red: color($colors; $mode; "error"), yellow: color($colors; $mode; "tertiary"), orange: color($colors; $mode; "secondary"), green: color($colors; $mode; "tertiary"),
+      cyan: color($colors; $mode; "primary"), blue: color($colors; $mode; "primary"), magenta: color($colors; $mode; "secondary"), brown: color($colors; $mode; "tertiary"),
+      bright_red: color($colors; $mode; "on_error_container"), bright_yellow: color($colors; $mode; "tertiary_fixed"), bright_green: color($colors; $mode; "tertiary_fixed"),
+      bright_cyan: color($colors; $mode; "primary_fixed"), bright_blue: color($colors; $mode; "primary_fixed"), bright_magenta: color($colors; $mode; "secondary_fixed")
+    }) as $named
+    | if ([$named[]] | all(hex(.))) then . else error("Matugen output is missing named hex colors") end
+    | {
+      schema: 2,
+      mode: $mode,
+      background: $named.background,
+      surface: color($colors; $mode; "surface_container_low"),
+      surfaceVariant: color($colors; $mode; "surface_variant"),
+      elevated: color($colors; $mode; "surface_container_high"),
+      text: color($colors; $mode; "on_surface"),
+      textMuted: color($colors; $mode; "on_surface_variant"),
+      accent: color($colors; $mode; "primary"),
+      positive: color($colors; $mode; "tertiary"),
+      warning: color($colors; $mode; "secondary"),
+      negative: color($colors; $mode; "error"),
+      outline: color($colors; $mode; "outline"),
+      focus: color($colors; $mode; "primary"),
+      scrim: color($colors; $mode; "scrim"),
+      colors: $named,
+      hyprland: {
+        active_border: "rgb(\(color($colors; $mode; "primary") | ltrimstr("#")))",
+        inactive_border: "rgb(\(color($colors; $mode; "outline") | ltrimstr("#")))"
+      }
+    }
+  ' >"$temporary"
+
+mv -f -- "$temporary" "$output"

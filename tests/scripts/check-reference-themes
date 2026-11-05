@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Exercise flat reference Theme import in an isolated install."""
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+import tomllib
+
+
+PROJECT = pathlib.Path(__file__).resolve().parent.parent.parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("reference_root", type=pathlib.Path)
+source_theme = parser.parse_args().reference_root.resolve(strict=True)
+nested_config = PROJECT / "tests" / "nested.conf"
+assert nested_config.is_file(), "tests/nested.conf required"
+config_text = nested_config.read_text()
+sample_match = re.search(r"^readonly\s+test_theme_sample=([^\s#]+)", config_text, re.MULTILINE)
+assert sample_match, "Explicit test_theme_sample required"
+theme_slug, sample_variant = sample_match.group(1).split("/", 1)
+assert theme_slug and "/" not in theme_slug
+assert source_theme.is_dir(), f"Reference themes not found: {source_theme}"
+
+
+def run(command, *args, ok=True, env):
+    result = subprocess.run(
+        [str(command), *map(str, args)], env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if ok:
+        assert result.returncode == 0, f"{command}: {result.stderr}"
+    else:
+        assert result.returncode != 0, f"Expected failure: {command} {' '.join(map(str, args))}"
+    return result
+
+
+def toml_color(path, field):
+    match = re.search(rf"^{re.escape(field)}\s*=\s*\"(#[0-9A-Fa-f]{{6}})\"\s*$",
+                      path.read_text(), re.MULTILINE)
+    assert match, f"Missing color field {field} in {path}"
+    return match.group(1)
+
+
+with tempfile.TemporaryDirectory(prefix="reference-themes-") as temporary:
+    scratch = pathlib.Path(temporary)
+    home = scratch / "home"
+    home.mkdir()
+    env = {key: value for key, value in os.environ.items() if key not in (
+        "HYPRLAND_INSTANCE_SIGNATURE", "UI_SHELL_RUNTIME", "UI_SHELL_RUNTIME_LUA",
+        "UI_SHELL_THEME_LOCK_FD",
+    )}
+    env["HOME"] = str(home)
+    for key, directory in (("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "cache"),
+                           ("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state")):
+        env[key] = str(home / directory)
+        (home / directory).mkdir()
+
+    installed = home / "config" / "installed shell"
+    installed.mkdir()
+    for name in ("scripts", "hypr"):
+        shutil.copytree(PROJECT / name, installed / name)
+    subprocess.run(
+        [str(PROJECT / "tools" / "scripts" / "stage-defaults"), str(PROJECT), str(installed)],
+        env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    (installed / "scripts").rename(installed / "helpers")
+    roles = {
+        "import-theme-colors": "reference-importer",
+        "normalize-theme-colors": "toml-normalizer",
+        "render-theme-colors": "palette-renderer",
+    }
+    for original, renamed in roles.items():
+        (installed / "helpers" / original).rename(installed / "helpers" / renamed)
+    manifest = installed / "config.ini"
+    manifest_text = (PROJECT / "tools" / "config.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/")
+    for original, renamed in roles.items():
+        manifest_text = manifest_text.replace("helpers/" + original, "helpers/" + renamed)
+    manifest.write_text(manifest_text)
+
+    read_config = installed / "helpers" / "read-shell-config"
+    resolved = scratch / "relocated-runtime.json"
+    resolved.write_text(run(read_config, manifest, installed / "helpers" / "read-ini", env=env).stdout)
+    runtime = json.loads(resolved.read_text())
+    env["UI_SHELL_RUNTIME"] = str(resolved)
+    role_importer = pathlib.Path(runtime["commands"]["importThemeColors"])
+    importer = PROJECT / "tools" / "scripts" / "import-reference-themes"
+    assert role_importer.name == roles["import-theme-colors"]
+    normalizer = pathlib.Path(runtime["commands"]["normalizeThemeColors"])
+    renderer = pathlib.Path(runtime["commands"]["renderThemeColors"])
+    custom_normalizer = pathlib.Path(runtime["commands"]["normalizeCustomColors"])
+    assert normalizer.name == roles["normalize-theme-colors"]
+    assert renderer.name == roles["render-theme-colors"]
+    themes = installed / "themes"
+
+    reference = scratch / "reference"
+    variants = ("dark", "day")
+    for variant in variants:
+        origin = source_theme / theme_slug / variant / "colors.toml"
+        assert origin.is_file(), f"Missing reference fixture: {origin}"
+        target = reference / theme_slug / variant / "colors.toml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(origin, target)
+        with target.open("a") as stream:
+            stream.write('\nlocal_extension = "#c0ffee"\n')
+    reference_before = {p.relative_to(reference): hashlib.sha256(p.read_bytes()).hexdigest()
+                        for p in reference.rglob("*") if p.is_file()}
+    source_before = {variant: hashlib.sha256((source_theme / theme_slug / variant / "colors.toml").read_bytes()).hexdigest()
+                     for variant in variants}
+
+    manifest_before = manifest.read_bytes()
+    profiles = pathlib.Path(runtime["paths"]["profiles"])
+    profiles_before = {p.relative_to(installed): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in profiles.rglob("*") if p.is_file()}
+    run(importer, resolved, reference, "green", "yellow", "red", env=env)
+
+    imported = sorted(themes / f"{theme_slug}-{variant}" / "config.ini" for variant in variants)
+    expected_files = {themes / f"{theme_slug}-{variant}" / "config.ini" for variant in variants}
+    assert set(imported) == expected_files, f"Expected one config.ini per variant: {imported}"
+    for variant in variants:
+        theme_dir = themes / f"{theme_slug}-{variant}"
+        assert sorted(path.name for path in theme_dir.iterdir()) == ["config.ini"], "import created extra Theme objects"
+    expected_modes = {"dark": "dark", "day": "light"}
+    for variant in variants:
+        palette = themes / f"{theme_slug}-{variant}" / "config.ini"
+        normalized = scratch / f"{variant}.json"
+        run(normalizer, reference / theme_slug / variant / "colors.toml", normalized,
+            "green", "yellow", "red", env=env)
+        colors = json.loads(normalized.read_text())
+        source_data = tomllib.loads((reference / theme_slug / variant / "colors.toml").read_text())
+        source_colors = {key: value for key, value in source_data.items()
+                         if key != "mode" and not key.startswith("hyprland_")}
+        assert colors["schema"] == 2
+        assert colors["colors"] == source_colors, f"named palette slots were lost: {variant}"
+        assert colors["hyprland"] == {
+            "active_border": source_data["hyprland_active_border"],
+            "inactive_border": source_data["hyprland_inactive_border"],
+        }, f"Hyprland metadata was lost: {variant}"
+        saved_json = scratch / f"{variant}-saved.json"
+        run(custom_normalizer, palette, saved_json, installed / "helpers" / "read-ini", env=env)
+        assert json.loads(saved_json.read_text()) == colors, f"saved palette semantics differ: {variant}"
+        assert colors["mode"] == expected_modes[variant]
+        source_palette = reference / theme_slug / variant / "colors.toml"
+        assert colors["positive"] == toml_color(source_palette, "green")
+        assert colors["warning"] == toml_color(source_palette, "yellow")
+        assert colors["negative"] == toml_color(source_palette, "red")
+        assert colors["surface"] == colors["background"] and colors["focus"] == colors["accent"]
+
+    assert manifest.read_bytes() == manifest_before, "import changed manifest"
+    assert profiles_before == {p.relative_to(installed): hashlib.sha256(p.read_bytes()).hexdigest()
+                               for p in profiles.rglob("*") if p.is_file()}, "import changed profiles"
+    assert reference_before == {p.relative_to(reference): hashlib.sha256(p.read_bytes()).hexdigest()
+                               for p in reference.rglob("*") if p.is_file()}
+    assert source_before == {variant: hashlib.sha256((source_theme / theme_slug / variant / "colors.toml").read_bytes()).hexdigest()
+                             for variant in variants}
+
+    def custom_snapshot():
+        result = {}
+        for path in themes.rglob("*"):
+            if path.is_file():
+                stat = path.stat()
+                result[path.relative_to(themes)] = (
+                    hashlib.sha256(path.read_bytes()).hexdigest(), stat.st_mtime_ns, stat.st_ino)
+        return result
+
+    # Regeneration replaces only reference IDs, even if their old format is invalid.
+    saved_palette = imported[0]
+    canonical = saved_palette.read_bytes()
+    saved_palette.write_text("[palette]\nschema = 1\n")
+    custom = themes / "my-authored/config.ini"
+    custom.parent.mkdir()
+    custom.write_text("unrelated user-owned colors\n")
+    custom_before = custom.read_bytes()
+    run(importer, resolved, reference, "green", "yellow", "red", env=env)
+    assert saved_palette.read_bytes() == canonical, "old reference definition was not regenerated"
+    assert custom.read_bytes() == custom_before, "regeneration changed unrelated custom Theme"
+    before_retry = custom_snapshot()
+    run(importer, resolved, reference, "green", "yellow", "red", env=env)
+    assert custom_snapshot() == before_retry, "retry changed config.ini content, mtime, or inode"
+
+    invalid = scratch / "invalid-reference"
+    shutil.copytree(reference, invalid)
+    (invalid / "broken" / "dark").mkdir(parents=True)
+    (invalid / "broken" / "dark" / "colors.toml").write_text("not a palette\n")
+    before_invalid = custom_snapshot()
+    run(importer, resolved, invalid, "green", "yellow", "red", ok=False, env=env)
+    assert custom_snapshot() == before_invalid, "invalid source published custom Themes"
+    unsafe = scratch / "unsafe-reference"
+    shutil.copytree(reference, unsafe)
+    unsafe_palette = unsafe / theme_slug / "dark" / "colors.toml"
+    with unsafe_palette.open("a") as stream:
+        stream.write('\nlocal_extension = "$(touch /tmp/should-not-run)"\n')
+    run(importer, resolved, unsafe, "green", "yellow", "red", ok=False, env=env)
+    assert custom_snapshot() == before_invalid, "arbitrary named value published custom Themes"
+    collision = scratch / "colliding-reference"
+    for relative, variant in (("foo/bar", "dark"), ("foo-bar", "dark")):
+        target = collision / relative / variant / "colors.toml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(reference / theme_slug / "dark" / "colors.toml", target)
+    before_collision = custom_snapshot()
+    run(importer, resolved, collision, "green", "yellow", "red", ok=False, env=env)
+    assert custom_snapshot() == before_collision, "flattened Theme ID collision published output"
+    overlap = themes / "overlap-source"
+    (overlap / "sample" / "dark").mkdir(parents=True)
+    shutil.copyfile(reference / theme_slug / "dark" / "colors.toml", overlap / "sample" / "dark" / "colors.toml")
+    before_overlap = custom_snapshot()
+    run(importer, resolved, overlap, "green", "yellow", "red", ok=False, env=env)
+    assert custom_snapshot() == before_overlap, "overlapping reference published custom Themes"
+    assert manifest.read_bytes() == manifest_before, "failure changed manifest"
+    assert profiles_before == {p.relative_to(installed): hashlib.sha256(p.read_bytes()).hexdigest()
+                               for p in profiles.rglob("*") if p.is_file()}, "failure changed profiles"
+    assert not pathlib.Path(runtime["paths"]["profileCache"]).exists(), "import compiled a profile"
+
+print("Reference themes passed: relocated roles, one config.ini per variant, read-only retries and invalid-input preflight.")

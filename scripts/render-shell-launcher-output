@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=${1:?output QML path required}
+mode=${2:?target mode required: screen-index or output-name}
+target=${3:?exact target required}
+[[ $# == 3 ]] || { printf '%s\n' 'Expected output, target mode, and exact target.' >&2; exit 1; }
+
+case $mode in
+  screen-index)
+    [[ $target =~ ^(0|[1-9][0-9]{0,8})$ ]] || {
+      printf '%s\n' 'Screen index must be a nonnegative integer.' >&2; exit 1;
+    }
+    index=$target
+    name='undefined'
+    ;;
+  output-name)
+    [[ $target != *$'\n'* && $target != *$'\r'* ]] || {
+      printf '%s\n' 'Output name must be nonempty and single-line.' >&2; exit 1;
+    }
+    index='undefined'
+    name=$(jq -cn --arg value "$target" '$value')
+    ;;
+  *) printf 'Unsupported launcher target mode: %s\n' "$mode" >&2; exit 1 ;;
+esac
+
+temporary=$(mktemp "${output}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+printf '%s\n' 'pragma Singleton' 'import QtQuick' '' 'QtObject {' \
+  "    readonly property var targetMode: \"$mode\"" \
+  "    readonly property var screenIndex: $index" \
+  "    readonly property var outputName: $name" '}' >"$temporary"
+mv -f -- "$temporary" "$output"

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Use the shared validation and activation boundary for an existing bundle.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: activate-theme-profile PROFILE_INI EXPECTED_ACTIVE_REVISION' >&2; exit 2; }
+profile=$1 expected=$2
+selector=$(jq -er '.commands.selectThemeProfile' "$UI_SHELL_RUNTIME")
+exec "$selector" activate "$profile" "$expected" ''

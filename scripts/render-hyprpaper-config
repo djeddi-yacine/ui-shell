@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=${1:?output config path required}
+ipc=${2:?IPC value required}
+shift 2
+state_root=${output%/*}
+[[ $ipc == true || $ipc == false ]] || {
+  printf 'Wallpaper IPC must be true or false: %s\n' "$ipc" >&2
+  exit 1
+}
+(( $# >= 3 && $# % 3 == 0 )) || {
+  printf '%s\n' 'Expected monitor, wallpaper path, and fit mode triples.' >&2
+  exit 1
+}
+
+mkdir -p -- "$state_root"
+temporary=$(mktemp "${output}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+
+{
+  printf '%s\n' 'splash = false' "ipc = $ipc" ''
+  while (( $# > 0 )); do
+    monitor=$1
+    wallpaper=$2
+    fit_mode=$3
+    shift 3
+
+    [[ -f $wallpaper ]] || {
+      printf 'Wallpaper not found: %s\n' "$wallpaper" >&2
+      exit 1
+    }
+    [[ $fit_mode == contain || $fit_mode == cover || $fit_mode == tile || $fit_mode == fill ]] || {
+      printf 'Unsupported wallpaper fit mode: %s\n' "$fit_mode" >&2
+      exit 1
+    }
+    [[ $wallpaper != *$'\n'* && $monitor != *$'\n'* ]] || {
+      printf '%s\n' 'Wallpaper paths and monitor names cannot contain newlines.' >&2
+      exit 1
+    }
+
+    printf '%s\n' \
+      'wallpaper {' \
+      "    monitor = $monitor" \
+      "    path = $wallpaper" \
+      "    fit_mode = $fit_mode" \
+      '}' \
+      ''
+  done
+} >"$temporary"
+
+mv -f -- "$temporary" "$output"

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=${1:?output QML path required}
+primary_output=${2?primary output argument required}
+color_mode=${3:?color mode required}
+cache_namespace=${4:?cache namespace required}
+shift 4
+
+[[ $color_mode == dark || $color_mode == light ]] || {
+  printf '%s\n' 'Color mode must be dark or light.' >&2
+  exit 1
+}
+[[ $cache_namespace != /* && $cache_namespace != *$'\n'* ]] || {
+  printf '%s\n' 'Cache namespace must be a relative, single-line path.' >&2
+  exit 1
+}
+
+(( $# >= 4 && $# % 4 == 0 )) || {
+  printf '%s\n' 'Expected output, wallpaper path, palette key, and fit mode quadruples.' >&2
+  exit 1
+}
+
+command -v jq >/dev/null || {
+  printf '%s\n' 'jq is required for wallpaper target rendering.' >&2
+  exit 1
+}
+
+items='[]'
+declare -A seen_outputs=()
+default_count=0
+while (( $# > 0 )); do
+  output_name=$1
+  wallpaper_path=$2
+  palette_key=$3
+  fit_mode=$4
+  shift 4
+
+  [[ $fit_mode == contain || $fit_mode == cover || $fit_mode == tile || $fit_mode == fill ]] || {
+    printf 'Unsupported wallpaper fit mode: %s\n' "$fit_mode" >&2; exit 1;
+  }
+
+  [[ $output_name != *$'\n'* && $wallpaper_path != *$'\n'* && $palette_key != *$'\n'* ]] || {
+    printf '%s\n' 'Wallpaper target values must be single-line.' >&2
+    exit 1
+  }
+  label=$output_name
+  if [[ -n $label ]]; then
+    [[ ! ${seen_outputs[$output_name]+present} ]] || {
+      printf 'Duplicate wallpaper output: %s\n' "$output_name" >&2
+      exit 1
+    }
+    seen_outputs[$output_name]=1
+  else
+    label='Default'
+    ((default_count += 1))
+  fi
+  item=$(jq -cn --arg id "$output_name" --arg label "$label" --arg path "$wallpaper_path" --arg palette_key "$palette_key" --arg fit_mode "$fit_mode" \
+    '{id: $id, label: $label, path: $path, paletteKey: $palette_key, fitMode: $fit_mode}')
+  items=$(jq -c --argjson item "$item" '. + [$item]' <<<"$items")
+done
+
+(( default_count == 1 )) || {
+  printf '%s\n' 'Exactly one default wallpaper target is required.' >&2
+  exit 1
+}
+
+temporary=$(mktemp "${output}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+
+jq -er --arg primary "$primary_output" --arg color_mode "$color_mode" --arg cache_namespace "$cache_namespace" '
+  [
+    "pragma Singleton", "", "import QtQuick", "", "QtObject {",
+    "    readonly property string primaryOutput: " + ($primary | @json),
+    "    readonly property string colorMode: " + ($color_mode | @json),
+    "    readonly property string cacheNamespace: " + ($cache_namespace | @json),
+    "    readonly property var items: ["
+  ]
+  + (map("        { id: " + (.id | @json) + ", label: " + (.label | @json) + ", path: " + (.path | @json) + ", paletteKey: " + (.paletteKey | @json) + ", fitMode: " + (.fitMode | @json) + " },"))
+  + ["    ]", "}", ""] | join("\n")
+' <<<"$items" >"$temporary"
+
+mv -f -- "$temporary" "$output"

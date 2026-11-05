@@ -1,0 +1,15 @@
+module UiShell.Theme
+singleton Style 1.0 Style.qml
+singleton Palette 1.0 Palette.qml
+singleton ActivePalettes 1.0 ActivePalettes.qml
+MonitorStyle 1.0 MonitorStyle.qml
+singleton Shape 1.0 Shape.qml
+singleton Density 1.0 Density.qml
+singleton Typography 1.0 Typography.qml
+singleton Motion 1.0 Motion.qml
+singleton Interaction 1.0 Interaction.qml
+singleton GeneratedControlTuning 1.0 GeneratedControlTuning.qml
+singleton ControlTuning 1.0 ControlTuning.qml
+ControlState 1.0 ControlState.qml
+ControlColors 1.0 ControlColors.qml
+ControlPalette 1.0 ControlPalette.qml

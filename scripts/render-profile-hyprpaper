@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Only native wallpaper configuration, never image extraction or activation.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-profile-hyprpaper INPUTS_JSON OUTPUT_DIRECTORY' >&2; exit 2; }
+input=$1 output=$2
+mkdir -p -- "$output"
+args=("$output/hyprpaper.conf" "$(jq -er '.runtime.wallpaper.hyprpaper_ipc | tostring' "$input")")
+while IFS= read -r entry; do
+  args+=("$(jq -r '.id' <<<"$entry")" "$(jq -er '.path' <<<"$entry")" "$(jq -er '.fitMode' <<<"$entry")")
+done < <(jq -c '.selections.wallpapers[]' "$input")
+"$(jq -er '.runtime.commands.renderHyprpaper' "$input")" "${args[@]}"

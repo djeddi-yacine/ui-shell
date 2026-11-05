@@ -1,0 +1,7 @@
+{
+  "qt-qml.qmlls.enabled": true,
+  "qt-qml.qmlls.customExePath": "/usr/lib/qt6/bin/qmlls",
+  "qt-qml.qmlls.customArgs": [],
+  "qt-qml.qmlls.additionalImportPaths": ["/usr/lib/qt6/qml"],
+  "qt-qml.qmlls.useNoCMakeCalls": true
+}

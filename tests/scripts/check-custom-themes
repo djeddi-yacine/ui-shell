@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+fail() { printf 'Custom themes: %s\n' "$*" >&2; exit 1; }
+if (( $# != 6 && $# != 7 )); then
+  printf '%s\n' 'Usage: check-custom-themes INI_READER NORMALIZE_CUSTOM RENDER_THEME IMPORTER NORMALIZE_REFERENCE REFERENCE_ROOT [DEFAULT_INI]' >&2
+  exit 2
+fi
+reader=$1 custom_normalizer=$2 renderer=$3 importer=$4 toml_normalizer=$5 reference=$6
+[[ ${UI_SHELL_ROOT-} == /project && $PWD == /project ]] || fail 'private /project required'
+[[ $(realpath -- "${BASH_SOURCE[0]}") == /project/tests/scripts/check-custom-themes ]] || fail 'sandbox copy required'
+[[ ${HOME-} == /home/test && ${XDG_CACHE_HOME-} == /home/test/.cache ]] || fail 'private HOME/cache required'
+[[ -n ${UI_SHELL_HOST_PROJECT-} && ! -e $UI_SHELL_HOST_PROJECT ]] || fail 'host project must be absent'
+[[ -d $reference && ! -w $reference ]] || fail 'read-only reference required'
+if (( $# == 7 )); then
+  default_ini=$7
+else
+  [[ -f ${UI_SHELL_RUNTIME-} ]] || fail 'UI_SHELL_RUNTIME required for staged default palette'
+  default_ini="$(jq -er '.paths.themes' "$UI_SHELL_RUNTIME")/default/config.ini"
+fi
+scratch=$(mktemp -d "$XDG_CACHE_HOME/custom-themes.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+
+"$custom_normalizer" "$default_ini" "$scratch/default.json" "$reader"
+"$renderer" "$scratch/default.json" "$scratch/canonical.ini"
+"$custom_normalizer" "$scratch/canonical.ini" "$scratch/roundtrip.json" "$reader"
+cmp -- "$scratch/default.json" "$scratch/roundtrip.json" || fail 'canonical JSON roundtrip'
+"$renderer" "$scratch/roundtrip.json" "$scratch/second.ini"
+cmp -- "$scratch/canonical.ini" "$scratch/second.ini" || fail 'canonical INI roundtrip'
+
+# All executable-looking strings must remain literal data, including quotes.
+printf '%s\n' '# comment' '; comment' '[palette_overrides]' '[literal]' \
+  'color = #abcdef' 'spaces = two words' 'empty =' 'equals = a=b' \
+  'shell = $(touch /tmp/custom-theme-injection) ${HOME} $HOME `id`' \
+  'quoted = "literal"' >"$scratch/literal.ini"
+"$reader" "$scratch/literal.ini" >"$scratch/literal.json"
+jq -e '.palette_overrides == {} and .literal == {color:"#abcdef",spaces:"two words",empty:"",equals:"a=b",
+  shell:"$(touch /tmp/custom-theme-injection) ${HOME} $HOME `id`",quoted:"\"literal\""}' \
+  "$scratch/literal.json" >/dev/null || fail 'literal INI data changed'
+[[ ! -e /tmp/custom-theme-injection ]] || fail 'INI injection executed'
+printf '%s\n' '[palette_overrides]' '1Display = themes/one.ini' 'Display with spaces = themes/two.ini' >"$scratch/outputs.ini"
+"$reader" "$scratch/outputs.ini" | jq -e '.palette_overrides == {"1Display":"themes/one.ini", "Display with spaces":"themes/two.ini"}' >/dev/null || fail 'literal output names changed'
+for content in 'key=value' '[broken' $'[x]\na=1\na=2' $'[x]\na=1\n[x]' $'[x]\nno equals' $'[x]\n  Display name = 1\nDisplay name   = 2' $'[x]\n = value'; do
+  printf '%s\n' "$content" >"$scratch/bad.ini"
+  if "$reader" "$scratch/bad.ini" >"$scratch/rejected.json" 2>/dev/null; then fail 'malformed INI accepted'; fi
+  [[ ! -s $scratch/rejected.json ]] || fail 'reader emitted partial JSON on error'
+done
+
+reject_custom() {
+  printf '%s\n' sentinel >"$scratch/preserved.json"
+  if "$custom_normalizer" "$scratch/bad.ini" "$scratch/preserved.json" "$reader" >/dev/null 2>&1; then fail 'invalid custom palette accepted'; fi
+  [[ $(<"$scratch/preserved.json") == sentinel ]] || fail 'normalization changed output on error'
+}
+for expression in 's/schema = 2/schema = 02/' 's/schema = 2/schema = 1/' \
+  's/mode = dark/mode = sepia/' '/^focus =/d' \
+  's/^accent =.*/accent = #12345/' 's/^accent =.*/accent = "#123456"/' \
+  's/^accent =.*/accent = #123456 # inline comment/' \
+  's/^accent =.*/accent = $(touch \/tmp\/custom-theme-injection)/'; do
+  sed "$expression" "$scratch/canonical.ini" >"$scratch/bad.ini"
+  reject_custom
+done
+for extra in 'extra = #123456' '[extra]' 'schema = 1' '[palette]'; do
+  cp -- "$scratch/canonical.ini" "$scratch/bad.ini"
+  printf '%s\n' "$extra" >>"$scratch/bad.ini"
+  reject_custom
+done
+[[ ! -e /tmp/custom-theme-injection ]] || fail 'normalizer injection executed'
+for filter in '.schema = "1"' '.schema = 1' '.mode = "sepia"' 'del(.focus)' \
+  '.extra = "#123456"' '.accent = "#12345"' '.accent = 123' '.accent = "$(touch /tmp/custom-theme-injection)"' \
+  '.scrim = null' 'del(.colors.bright_foreground)' '.hyprland.active_border = "$(touch /tmp/custom-theme-injection)"' '[]'; do
+  jq "$filter" "$scratch/default.json" >"$scratch/bad.json"
+  printf '%s\n' sentinel >"$scratch/preserved.ini"
+  if "$renderer" "$scratch/bad.json" "$scratch/preserved.ini" >/dev/null 2>&1; then fail 'invalid JSON palette accepted'; fi
+  [[ $(<"$scratch/preserved.ini") == sentinel ]] || fail 'render changed output on error'
+done
+printf '%s\n' '{}' '{}' >"$scratch/bad.json"
+if "$renderer" "$scratch/bad.json" "$scratch/preserved.ini" >/dev/null 2>&1; then fail 'JSON stream accepted'; fi
+[[ $(<"$scratch/preserved.ini") == sentinel ]] || fail 'stream changed output on error'
+
+# Extra named hex slots are lossless through JSON and canonical INI.
+jq -cS '.colors.operator_extra = "#123abc"' "$scratch/default.json" >"$scratch/extended.json"
+"$renderer" "$scratch/extended.json" "$scratch/extended.ini"
+"$custom_normalizer" "$scratch/extended.ini" "$scratch/extended-roundtrip.json" "$reader"
+jq -e '.colors.operator_extra == "#123abc"' "$scratch/extended-roundtrip.json" >/dev/null || fail 'extra named hex slot was dropped'
+cmp -- "$scratch/extended.json" "$scratch/extended-roundtrip.json" || fail 'extended palette JSON roundtrip'
+
+reference_snapshot() {
+  rg --files --hidden --no-ignore -0 "$reference" -g colors.toml | LC_ALL=C sort -z |
+    xargs -0 sha256sum -- >"$1"
+}
+reference_snapshot "$scratch/reference-before"
+"$importer" "$reference" "$scratch/imported" "$toml_normalizer" "$renderer" green yellow red
+mapfile -t sources < <(rg --files "$reference" -g colors.toml | LC_ALL=C sort)
+declare -A output_ids=()
+imported=()
+for source in "${sources[@]}"; do
+  relative=${source#"$reference"/}
+  [[ $relative =~ ^(.+)/(dark|day|high-contrast|day-high-contrast|oled)/colors\.toml$ ]] || fail "unsupported source path: $relative"
+  slug=${BASH_REMATCH[1]} variant=${BASH_REMATCH[2]}
+  id=${slug//\//-}-$variant
+  [[ ! -v output_ids[$id] ]] || fail "flattened ID collision: $id"
+  output_ids[$id]=1
+  ini="$scratch/imported/$id/config.ini"
+  [[ -f $ini ]] || fail "missing flat Theme: $id"
+  imported+=("$ini")
+done
+(( ${#imported[@]} == 500 )) || fail "expected 500 imported palettes, got ${#imported[@]}"
+[[ $(rg --files "$scratch/imported" | wc -l) == 500 ]] || fail 'import published extra files beside config.ini'
+[[ ! -e $scratch/imported/profile.ini && ! -e $scratch/imported/wallpapers.lua ]] || fail 'import published profile or registry data'
+for index in "${!imported[@]}"; do
+  ini=${imported[index]}
+  source_ini=${sources[index]}
+  relative=${source_ini#"$reference"/}
+  "$custom_normalizer" "$ini" "$scratch/check.json" "$reader"
+  "$renderer" "$scratch/check.json" "$scratch/check.ini"
+  cmp -s -- "$ini" "$scratch/check.ini" || fail "noncanonical import: $relative"
+  # Verify the caller's semantic choices against each original palette.
+  jq -Rn --slurpfile palette "$scratch/check.json" '
+    reduce inputs as $line ({};
+      if ($line | test("^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=")) then
+        ($line | capture("^(?<key>[A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"(?<value>[^\"]*)\"")) as $p |
+        .[$p.key] = $p.value else . end) |
+    . as $source | $palette[0] |
+    .mode == $source.mode and .background == $source.background and .surface == $source.background and
+    .surfaceVariant == $source.selection and .elevated == $source.lighter_background and
+    .text == $source.foreground and .textMuted == $source.dark_foreground and
+    .accent == $source.accent and .positive == $source.green and .warning == $source.yellow and
+    .negative == $source.red and .outline == $source.muted and .focus == $source.accent and .scrim == "#000000"
+  ' <"$source_ini" | jq -e . >/dev/null || fail "role mapping: $relative"
+done
+snapshot() {
+  for ini in "${imported[@]}"; do sha256sum -- "$ini"; stat -c '%n %y %i' -- "$ini"; done >"$1"
+}
+snapshot "$scratch/import-before"
+"$importer" "$reference" "$scratch/imported" "$toml_normalizer" "$renderer" green yellow red
+snapshot "$scratch/import-after"
+cmp -- "$scratch/import-before" "$scratch/import-after" || fail 'retry changed content, mtime, or inode'
+reference_snapshot "$scratch/reference-after"
+cmp -- "$scratch/reference-before" "$scratch/reference-after" || fail 'reference changed'
+
+# A failed conversion must not publish earlier successfully staged palettes.
+mkdir -p "$scratch/reference/a/dark" "$scratch/reference/z/dark"
+cp -- "${sources[0]}" "$scratch/reference/a/dark/colors.toml"
+printf '%s\n' 'invalid' >"$scratch/reference/z/dark/colors.toml"
+mkdir -p "$scratch/preserved/a-dark"
+printf '%s\n' sentinel >"$scratch/preserved/a-dark/config.ini"
+if "$importer" "$scratch/reference" "$scratch/preserved" "$toml_normalizer" "$renderer" green yellow red >/dev/null 2>&1; then fail 'invalid reference imported'; fi
+[[ $(<"$scratch/preserved/a-dark/config.ini") == sentinel && ! -e $scratch/preserved/z-dark ]] || fail 'failed import published outputs'
+if "$importer" "$scratch/reference" "$scratch/reference/out" "$toml_normalizer" "$renderer" green yellow red >/dev/null 2>&1; then fail 'overlapping destination accepted'; fi
+if "$importer" "$reference" "$scratch/imported" "$toml_normalizer" "$renderer" '' yellow red >/dev/null 2>&1; then fail 'implicit semantic mapping accepted'; fi
+mkdir -p "$scratch/collision/foo/bar/dark" "$scratch/collision/foo-bar/dark"
+cp -- "${sources[0]}" "$scratch/collision/foo/bar/dark/colors.toml"
+cp -- "${sources[1]}" "$scratch/collision/foo-bar/dark/colors.toml"
+if "$importer" "$scratch/collision" "$scratch/collision-out" "$toml_normalizer" "$renderer" green yellow red >/dev/null 2>&1; then fail 'flattened ID collision accepted'; fi
+[[ ! -e $scratch/collision-out ]] || fail 'ID collision published output'
+ln -s "$scratch/preserved" "$scratch/redirected"
+if "$importer" "$reference" "$scratch/redirected" "$toml_normalizer" "$renderer" green yellow red >/dev/null 2>&1; then fail 'redirected destination accepted'; fi
+[[ ! -e /tmp/custom-theme-injection ]] || fail 'render injection executed'
+printf '%s\n' 'Custom themes passed: strict literal INI, canonical roundtrip, error preservation, 500 config.ini imports, deterministic retries.'

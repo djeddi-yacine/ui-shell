@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() { printf 'Theme colors: %s\n' "$*" >&2; exit 1; }
+[[ ${UI_SHELL_ROOT-} == /project && ${PWD-} == /project ]] || fail 'private /project required'
+[[ $(realpath -- "${BASH_SOURCE[0]}") == /project/tests/scripts/check-theme-colors ]] || fail 'sandbox copy required'
+source /project/tests/nested.conf
+[[ $test_project == /project && ${HOME-} == "$test_home" ]] || fail 'private HOME required'
+[[ -n ${UI_SHELL_HOST_PROJECT-} && ! -e $UI_SHELL_HOST_PROJECT ]] || fail 'host project must be absent'
+[[ -d /source/refs/100-themes && ! -w /source/refs/100-themes ]] || fail 'read-only reference themes required'
+command -v jq >/dev/null || fail 'jq required'
+runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
+normalize_theme_colors=$(jq -er '.commands.normalizeThemeColors' "$runtime")
+render_shell_colors=$(jq -er '.commands.renderShellColors' "$runtime")
+render_monitor_palettes=$(jq -er '.commands.renderMonitorPalettes' "$runtime")
+render_hypr_colors=$(jq -er '.commands.renderHyprColors' "$runtime")
+
+scratch=$(mktemp -d "$XDG_CACHE_HOME/theme-normalizer.XXXXXX")
+cleanup() {
+  [[ $scratch == "$XDG_CACHE_HOME"/theme-normalizer.* && $(realpath -m -- "$scratch") == "$scratch" ]] || {
+    printf 'Refusing unsafe test cleanup: %s\n' "$scratch" >&2; return 1;
+  }
+  rm -rf -- "$scratch"
+}
+trap cleanup EXIT
+
+fixture=/project/tests/theme-fixtures/ImportedPalettes.qml
+mkdir -p -- "$(dirname -- "$fixture")"
+json_files=()
+tags=(synthwave-dark synthwave-day hacker-dark hacker-day lemonade-dark lemonade-day)
+themes=(synthwave synthwave hacker hacker lemonade lemonade)
+modes=(dark day dark day dark day)
+for i in "${!tags[@]}"; do
+  theme=${themes[$i]} variant=${modes[$i]}
+  input_file="/source/refs/100-themes/$theme/$variant/colors.toml"
+  [[ -f $input_file ]] || fail "missing reference palette: $theme/$variant"
+  output="$scratch/${tags[$i]}.json"
+  "$normalize_theme_colors" "$input_file" "$output" green yellow red
+  json_files+=("$output")
+  expected_mode=dark; [[ $variant == day ]] && expected_mode=light
+  jq -e --arg mode "$expected_mode" '
+    .schema == 2 and .mode == $mode and
+    .background == .surface and (.surfaceVariant | type == "string") and (.elevated | type == "string") and
+    (.text | type == "string") and (.textMuted | type == "string") and (.accent | type == "string") and
+    (.positive | type == "string") and (.warning | type == "string") and (.negative | type == "string") and
+    (.outline | type == "string") and .focus == .accent and .scrim == "#000000" and
+    ([.background, .surface, .surfaceVariant, .elevated, .text, .textMuted, .accent, .positive,
+      .warning, .negative, .outline, .focus, .scrim] | all(type == "string" and test("^#[0-9A-Fa-f]{6}$"))) and
+    (.colors | has("bright_foreground") and has("bright_red") and has("dark_background") and length >= 25) and
+    (.hyprland.active_border | type == "string") and (.hyprland.inactive_border | type == "string")
+  ' "$output" >/dev/null || fail "invalid normalized roles for ${tags[$i]}"
+  jq -e --argjson source "$(jq -Rn 'reduce inputs as $line ({}; if ($line | test("^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*\"[^\"]*\"[[:space:]]*$")) then ($line | capture("^(?<key>[A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"(?<value>[^\"]*)\"[[:space:]]*$")) as $pair | .[$pair.key] = $pair.value else . end)' < "$input_file")" '
+    . as $theme |
+    .background == $source.background and .surfaceVariant == $source.selection and
+    .elevated == $source.lighter_background and .text == $source.foreground and
+    .textMuted == $source.dark_foreground and .accent == $source.accent and
+    .positive == $source.green and .warning == $source.yellow and
+    .negative == $source.red and .outline == $source.muted and
+    ([$source | to_entries[] | select(.value | test("^#[0-9A-Fa-f]{6}$"))] as $hexes |
+     all($hexes[]; $theme.colors[.key] == .value))
+  ' "$output" >/dev/null || fail "role mapping mismatch for ${tags[$i]}"
+  bash "$render_shell_colors" "$output" "$scratch/${tags[$i]}-palette.qml"
+  bash "$render_monitor_palettes" "$scratch/${tags[$i]}-monitors.qml" '' "$output" TEST-OUTPUT "$output"
+  rg -Fq -- 'readonly property color scrim: "#000000"' "$scratch/${tags[$i]}-palette.qml" || fail 'shell renderer rejected normalized palette'
+  rg -Fq -- 'readonly property var colorData:' "$scratch/${tags[$i]}-palette.qml" || fail 'whole theme data missing from QML palette'
+  rg -Fq -- 'readonly property var colors: colorData.colors' "$scratch/${tags[$i]}-palette.qml" || fail 'named colors metadata missing from QML palette'
+  rg -Fq -- 'readonly property var defaultPalette:' "$scratch/${tags[$i]}-monitors.qml" || fail 'default palette missing'
+  rg -Fq -- '"TEST-OUTPUT": {' "$scratch/${tags[$i]}-monitors.qml" || fail 'output override missing'
+done
+
+bad="$scratch/bad.toml" result="$scratch/result.json"
+printf '%s\n' '{ sentinel: true }' >"$result"
+expect_rejected() {
+  if "$normalize_theme_colors" "$bad" "$result" green yellow red >/dev/null 2>&1; then fail 'invalid palette was accepted'; fi
+  [[ $(<"$result") == '{ sentinel: true }' ]] || fail 'failed normalization changed existing output'
+}
+
+# Glacier's native Hyprland gradient must survive normalization and become a Lua gradient table.
+glacier=/source/refs/100-themes/glacier/dark/colors.toml
+[[ -f $glacier ]] || fail 'missing glacier gradient fixture'
+"$normalize_theme_colors" "$glacier" "$scratch/glacier.json" green yellow red
+jq -e '.hyprland.active_border == "rgba(50ece0ee) rgba(98bffeee) 45deg" and
+  .colors.bright_foreground == "#f7fbfd" and .colors.dark_background == "#010b12"' "$scratch/glacier.json" >/dev/null || fail 'named slots or native gradient were lost'
+"$render_hypr_colors" "$scratch/glacier.json" "$scratch/glacier.lua"
+rg -Fq -- 'active_border = { colors = { "rgba(50ece0ee)", "rgba(98bffeee)" }, angle = 45 }' "$scratch/glacier.lua" || fail 'Hyprland gradient was not rendered natively'
+jq '.hyprland.active_border = "rgba(50ece0ee) rgba(98bffeee) +45deg"' "$scratch/glacier.json" >"$scratch/signed-gradient.json"
+"$render_hypr_colors" "$scratch/signed-gradient.json" "$scratch/signed-gradient.lua"
+lua - "$scratch/signed-gradient.lua" <<'LUA'
+local palette = dofile(arg[1])
+assert(palette.active_border.angle == 45 and #palette.active_border.colors == 2)
+LUA
+cp -- "$glacier" "$bad"
+sed 's/rgba(50ece0ee) rgba(98bffeee) 45deg/rgba(50ece0ee) 45deg/' "$glacier" >"$bad"
+expect_rejected
+sed 's/) rgba(/)  rgba(/' "$glacier" >"$bad"
+expect_rejected
+
+# Keep this generated, static QtObject in the private project for QML tests.
+printf '%s\n' 'import QtQuick' '' 'QtObject {' '    readonly property var items: [' >"$fixture"
+for i in "${!json_files[@]}"; do
+  comma=,; (( i == ${#json_files[@]} - 1 )) && comma=
+  jq -c --arg tag "${tags[$i]}" '. + {tag: $tag}' "${json_files[$i]}" | sed "s/^/        /; s/$/$comma/" >>"$fixture"
+done
+printf '%s\n' '    ]' '}' >>"$fixture"
+
+cat >"$bad" <<'TOML'
+mode = "dark"
+background = "#000000"
+TOML
+expect_rejected
+cat >"$bad" <<'TOML'
+mode = "dark"
+background = "#000000"
+selection = "#111111"
+lighter_background = "#222222"
+foreground = "#ffffff"
+dark_foreground = "#cccccc"
+accent = "#abcdef"
+muted = "#888888"
+green = "#00ff00"
+yellow = "#ffff00"
+red = "#ff0000"
+TOML
+sed 's/mode = "dark"/mode = "sepia"/' "$bad" >"$scratch/invalid-mode.toml"
+bad=$scratch/invalid-mode.toml
+expect_rejected
+bad="$scratch/bad.toml"
+cp -- "$glacier" "$scratch/valid.toml"
+cat >"$bad" <<'TOML'
+mode = "dark"
+mode = "light"
+TOML
+expect_rejected
+cat >"$bad" <<'TOML'
+mode = "dark"
+background = "#000000"
+selection = "#111111"
+lighter_background = "#222222"
+foreground = "#ffffff"
+dark_foreground = "#cccccc"
+accent = "#abcdef"
+muted = "#888888"
+green = "#00ff00"
+yellow = "#oops"
+red = "#ff0000"
+TOML
+expect_rejected
+cat >"$bad" <<'TOML'
+mode = "dark"
+background = "#000000"
+selection = "#111111"
+lighter_background = "#222222"
+foreground = "#ffffff"
+dark_foreground = "#cccccc"
+accent = "#abcdef"
+muted = "#888888"
+green = "#00ff00"
+yellow = "#ffff00"
+red = "#ff0000"
+exec = $(touch MARKER)
+TOML
+expect_rejected
+[[ ! -e MARKER ]] || fail 'TOML was executed'
+if "$normalize_theme_colors" "$bad" "$result" green yellow >/dev/null 2>&1; then fail 'missing argument was accepted'; fi
+[[ $(<"$result") == '{ sentinel: true }' ]] || fail 'missing-argument call changed output'
+if "$normalize_theme_colors" "$scratch/valid.toml" "$result" absent yellow red >/dev/null 2>&1; then fail 'unknown chosen field was accepted'; fi
+[[ $(<"$result") == '{ sentinel: true }' ]] || fail 'unknown field changed existing output'
+printf 'Theme colors passed; generated %s\n' "$fixture"

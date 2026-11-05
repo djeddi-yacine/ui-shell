@@ -1,0 +1,725 @@
+#!/usr/bin/env python3
+"""Focused standalone backend contract test; all state stays in a temporary HOME."""
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+project = pathlib.Path(__file__).resolve().parent.parent.parent
+if len(sys.argv) != 2:
+    sys.exit("Usage: check-theme-profiles REFERENCE_ROOT")
+reference = pathlib.Path(sys.argv[1])
+with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as temporary:
+    scratch = pathlib.Path(temporary)
+    home = scratch / "home"
+    home.mkdir()
+    env = {key: value for key, value in os.environ.items() if key not in ("HYPRLAND_INSTANCE_SIGNATURE", "UI_SHELL_RUNTIME", "UI_SHELL_RUNTIME_LUA", "UI_SHELL_THEME_LOCK_FD")}
+    env.update(HOME=str(home))
+    for key, name in [("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "cache"), ("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state")]:
+        env[key] = str(home / name)
+        (home / name).mkdir()
+    installed = home / "config" / "shell space ' $literal \\identity"
+    installed.mkdir()
+    for name in ("scripts", "hypr"):
+        shutil.copytree(project / name, installed / name)
+    subprocess.run(
+        [str(project / "tools" / "scripts" / "stage-defaults"), str(project), str(installed)],
+        env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    # Rename directories AND one dependency to prove role-based resolution.
+    (installed / "scripts").rename(installed / "helpers")
+    (installed / "helpers/read-theme-state").rename(installed / "helpers/state-reader")
+    (installed / "helpers/render-wallpaper-selection").rename(installed / "helpers/selection-renderer")
+    manifest = installed / "config.ini"
+    manifest.write_text((project / "tools" / "config.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/").replace("helpers/read-theme-state", "helpers/state-reader").replace("helpers/render-wallpaper-selection", "helpers/selection-renderer"))
+    # Selected images are referenced, never copied by bundle saves.
+    (installed / "wallpapers").symlink_to(project / "wallpapers", target_is_directory=True)
+    def run(command, *args, ok=True):
+        result = subprocess.run([str(command), *map(str, args)], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if ok:
+            assert result.returncode == 0, f"{command} exited {result.returncode}; stdout={result.stdout!r}; stderr={result.stderr!r}"
+        else:
+            assert result.returncode != 0, "Expected failure: " + str(command)
+        return result
+    helpers = installed / "helpers"
+    # A private wallpaper-source fixture keeps all three scopes used by the
+    # contract checks without relying on checked-in runtime stores.
+    mode = json.loads(run(helpers / "read-ini", installed / "default/theme.ini").stdout)["palette"]["mode"]
+    fixture_assets = (("", "wallhaven-01.jpg"),
+                      ("WAYLAND-1", "wallhaven-02.png"),
+                      ("HDMI-A-2", "wallhaven-03.png"))
+    fixture = {
+        "id": "fixture", "source": "wallpaper", "definition": "",
+        "definitionOverrides": {},
+        "wallpaper": {"schema": 1, "cache_namespace": "ui-shell/wallpapers",
+                      "color_mode": mode, "hyprpaper_ipc": True},
+        "palettes": [],
+        "wallpapers": [],
+    }
+    for output, image in fixture_assets:
+        scope = "default" if not output else "output-" + hashlib.sha256(output.encode()).hexdigest()
+        key = hashlib.sha256((project / "wallpapers" / image).read_bytes()).hexdigest() + "-" + mode + "-v2"
+        fixture["wallpapers"].append({
+            "scope": scope, "output": output,
+            "selection": {"folder": "project", "path": image,
+                          "fit_mode": "cover", "palette_key": key},
+        })
+    fixture_json = scratch / "fixture.json"
+    fixture_json.write_text(json.dumps(fixture))
+    (installed / "profiles/fixture").mkdir()
+    run(helpers / "render-theme-profile", fixture_json, installed / "profiles/fixture/profile.ini")
+    manifest.write_text(manifest.read_text().replace(
+        "profile = profiles/default/profile.ini", "profile = profiles/fixture/profile.ini"))
+    resolved = scratch / "resolved.json"
+    resolved.write_text(run(helpers / "read-shell-config", manifest, helpers / "read-ini").stdout)
+    runtime = json.loads(resolved.read_text())
+    assert runtime["theme"]["id"] == "fixture" and runtime["paths"]["profiles"] == str(installed / "profiles")
+    assert runtime["paths"]["profileCache"] == str(home / "cache/ui-shell/profiles")
+    assert runtime["bootstrap"]["runtime"].endswith("GeneratedRuntime.qml")
+    assert runtime["bootstrap"]["wallpaperCatalog"].endswith("GeneratedWallpapers.qml")
+    assert set(runtime["profileRenderers"]) == {"quickshell", "hyprland", "hyprpaper"}
+    assert "registry" not in runtime["paths"] and "generated" not in runtime
+    assert runtime["wallpaper"]["schema"] == 1 and "default" in runtime["wallpaper"]
+    assert runtime["profileColors"] is None and len(runtime["recipeHash"]) == 64
+    env["UI_SHELL_RUNTIME"] = str(resolved)
+    selections = json.loads(run(helpers / "read-wallpaper-selections", resolved).stdout)
+    authored = scratch / "authored.json"
+    default_theme = installed / "themes/default/config.ini"
+    run(helpers / "normalize-custom-colors", default_theme, authored, helpers / "read-ini")
+    original_colors = json.loads(authored.read_text())
+    # Real cache validation runs; extraction is avoided by seeded valid palettes.
+    for index, item in enumerate(selections["wallpapers"]):
+        key = hashlib.sha256(pathlib.Path(item["path"]).read_bytes()).hexdigest() + "-dark-v2"
+        assert item["paletteKey"] == key
+        colors = dict(original_colors, accent="#%06x" % (0x123456 + index))
+        path = pathlib.Path(item["colorsPath"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(colors))
+    env["UI_SHELL_RUNTIME"] = run(helpers / "prepare-runtime", resolved).stdout.strip()
+    env["UI_SHELL_RUNTIME_LUA"] = runtime["runtimeLua"]
+    run(helpers / "prepare-palettes")
+    roles = "background surface surfaceVariant elevated text textMuted accent positive warning negative outline focus scrim".split()
+    def assert_complete_palette(palette, label):
+        assert palette["schema"] == 2, label
+        assert palette["mode"] in {"dark", "light"}, label
+        assert all(re.fullmatch(r"#[0-9A-Fa-f]{6}", palette[role]) for role in roles), label
+        assert isinstance(palette["colors"], dict) and palette["colors"], label
+        assert all(re.fullmatch(r"#[0-9A-Fa-f]{6}", value) for value in palette["colors"].values()), label
+        assert set(palette["hyprland"]) == {"active_border", "inactive_border"}, label
+        assert all(isinstance(value, str) and value for value in palette["hyprland"].values()), label
+    def state(base=""):
+        # Persistence changes the manifest; refresh publishes its runtime projection.
+        fresh = scratch / "state-runtime.json"
+        fresh.write_text(run(helpers / "read-shell-config", manifest, helpers / "read-ini").stdout)
+        if base:
+            selected_base = json.loads(run(helpers / "read-theme-profile", base, installed,
+                                           installed / "profiles", installed / "themes", helpers / "read-ini").stdout)
+            data = json.loads(fresh.read_text())
+            data.update(theme=selected_base["theme"], wallpaper=selected_base["wallpaper"],
+                        profileColors=selected_base["profileColors"], recipeHash=selected_base["recipeHash"])
+            fresh.write_text(json.dumps(data))
+        result = json.loads(run(helpers / "state-reader", fresh).stdout)
+        for key in ("defaultPalette", "globalPalette"):
+            assert_complete_palette(result[key], key)
+        for output, palette in result["byOutput"].items():
+            assert_complete_palette(palette, "byOutput[" + output + "]")
+        for item in result["wallpapers"]:
+            if item["colors"] is not None:
+                assert_complete_palette(item["colors"], "wallpapers[" + item["id"] + "].colors")
+        return result
+    def active_runtime():
+        return json.loads(pathlib.Path(env["UI_SHELL_RUNTIME"]).read_text())
+    def active_palette_file():
+        return pathlib.Path(active_runtime()["bundle"]["quickshell"]) / "GeneratedPalette.qml"
+    published_snapshots = {}
+    def snapshot_result(stdout):
+        lines = stdout.splitlines()
+        assert len(lines) == 2
+        snapshot_path, revision = lines
+        path = pathlib.Path(snapshot_path)
+        assert path.is_absolute() and path.is_file(), "Snapshot was removed by helper cleanup"
+        assert path.name in {"Editor.qml", "Palette.qml"}
+        family = "theme-editor" if path.name == "Editor.qml" else "theme-palettes"
+        assert path.parent.parent == pathlib.Path(runtime["paths"]["runtime"]) / family
+        content = path.read_bytes()
+        assert path.parent.name == hashlib.sha256(content).hexdigest()
+        assert len(revision) == 64 and all(char in "0123456789abcdef" for char in revision)
+        assert path not in published_snapshots or published_snapshots[path] == content
+        published_snapshots[path] = content
+        return {"path": snapshot_path, "revision": revision}
+    def snapshot(command, *args):
+        return snapshot_result(run(command, *args).stdout)
+    def editor(output=""):
+        current = state()
+        choice = next((item for item in current["wallpapers"] if item["id"] == output), next(item for item in current["wallpapers"] if item["id"] == ""))
+        result = snapshot(helpers / "read-theme-editor", output, "", choice["folderId"], choice["name"], choice["fitMode"], "policy")
+        qml = pathlib.Path(result["path"]).read_text()
+        assert "pragma Singleton" not in qml
+        for property_name in ("profileId", "profilePath", "revision", "baseRevision", "draftWallpaper", "source", "definition", "definitionOverrides", "mode", "defaultPalette", "globalPalette", "byOutput", "wallpapers", "profiles", "palettes", "colorMode", "cacheNamespace"):
+            assert " " + property_name + ": " in qml, property_name
+        current = state()
+        assert result["revision"] == current["revision"]
+        expected_mode = current["byOutput"].get(output, current["defaultPalette"])["mode"]
+        assert 'readonly property string mode: "' + expected_mode + '"' in qml
+        assert 'readonly property string source: "' + current["source"] + '"' in qml
+        for property_name in ("defaultPalette", "globalPalette"):
+            color_data = re.search(r"readonly property var " + property_name + r": \((.+)\)", qml)
+            assert color_data, property_name
+            palette = json.loads(color_data.group(1))
+            assert_complete_palette(palette, "editor " + property_name)
+            assert palette == current[property_name], property_name
+        return result
+    baseline = state()
+    editor()
+    # Picker save followed by refresh publishes newly selected wallpaper colors.
+    previous_revision = baseline["revision"]
+    selected = next(entry for entry in baseline["wallpapers"] if entry["id"] == "WAYLAND-1")
+    run(helpers / "select-wallpaper", "", selected["folderId"], selected["name"])
+    refresh = snapshot(helpers / "refresh-theme")
+    baseline = state()
+    assert refresh["revision"] == baseline["revision"]
+    assert baseline["defaultPalette"] == selected["colors"]
+    assert selected["colors"]["accent"] in active_palette_file().read_text()
+    assert baseline["revision"] != previous_revision
+    assert refresh == editor()
+    # A non-default global output policy must use that actual wallpaper palette.
+    policy_path = installed / "hypr/user/monitors.lua"
+    policy = policy_path.read_text()
+    policy_path.write_text(policy.replace('kind = "default-wallpaper"', 'kind = "output-wallpaper"').replace('output = "",', 'output = "HDMI-A-2",', 1))
+    assert state()["globalPalette"] == baseline["byOutput"]["HDMI-A-2"]
+    policy_path.write_text(policy)
+    imported = installed / "themes/imported-demo/config.ini"
+    imported.parent.mkdir(parents=True)
+    imported.write_bytes(default_theme.read_bytes())
+    imported_before = imported.read_bytes()
+    preview = snapshot(helpers / "read-theme-palette", imported)
+    assert preview["revision"] == hashlib.sha256(imported_before).hexdigest()
+    assert "pragma Singleton" not in pathlib.Path(preview["path"]).read_text()
+    assert snapshot(helpers / "read-theme-palette", imported) == preview
+    catalog = json.loads(run(helpers / "theme-catalog", env["UI_SHELL_RUNTIME"]).stdout)
+    assert any(palette["path"] == str(imported) for palette in catalog["palettes"])
+    colors = ["#abcdef"] * 13
+    def theme_payload(values=None, base=None):
+        payload = json.loads(json.dumps(original_colors if base is None else base))
+        if values is not None:
+            for role, value in zip(roles, values):
+                payload[role] = value
+        return json.dumps(payload, separators=(",", ":"))
+    def save(profile_id, revision, target="", source="file", values=None, ok=True, base="", base_revision=None, choice=None, definition_action="retain", definition="", palette=None):
+        current = state()
+        if choice is None:
+            choice = next((item for item in current["wallpapers"] if item["id"] == target), next(item for item in current["wallpapers"] if item["id"] == ""))
+        selected_values = values if values is not None else ([palette[role] for role in roles] if palette is not None else colors)
+        return run(helpers / "save-theme-profile", profile_id, revision, base_revision or revision, target, source,
+                   (palette or original_colors)["mode"], base,
+                   choice["folderId"], choice["name"], choice["fitMode"], definition_action, definition,
+                   theme_payload(selected_values, palette), ok=ok)
+    saved = snapshot_result(save("named", baseline["revision"]).stdout)
+    named = state()
+    assert named["profileId"] == "named" and named["source"] == "file"
+    assert named["defaultPalette"]["accent"] == "#abcdef"
+    assert named["defaultPalette"]["colors"] == baseline["defaultPalette"]["colors"]
+    assert named["defaultPalette"]["hyprland"] == baseline["defaultPalette"]["hyprland"]
+    assert named["byOutput"] == baseline["byOutput"], "Wallpaper -> file collapsed output colors"
+    assert saved == editor("")
+    editor("WAYLAND-1")
+    current_runtime = json.loads(pathlib.Path(env["UI_SHELL_RUNTIME"]).read_text())
+    named_path = current_runtime["theme"]["profile"]
+    assert named_path == str(installed / "profiles/named/profile.ini")
+    assert pathlib.Path(named_path).is_file()
+    assert not (installed / "profiles/named/objects").exists()
+    assert not (installed / "profiles/named/versions").exists()
+    assert not list((installed / "profiles/named").glob(".profile.*.ini")), "Staged profile recipe leaked"
+    recipe = pathlib.Path(named_path).read_text()
+    for section in ("[profile]", "schema = 2", "[wallpaper.default]",
+                    "[palette.default]", "[colors.default]", "[hyprland.default]"):
+        assert section in recipe, section
+    recipe_sections = json.loads(run(helpers / "read-ini", named_path).stdout)
+    wallpaper_sections = {name: section for name, section in recipe_sections.items()
+                          if name.startswith("wallpaper.")}
+    wallpaper_outputs = {section["output"]: name for name, section in wallpaper_sections.items()}
+    assert set(wallpaper_outputs) == {"", "WAYLAND-1", "HDMI-A-2"}
+    assert wallpaper_outputs[""] == "wallpaper.default"
+    for output in ("WAYLAND-1", "HDMI-A-2"):
+        scope = "output-" + hashlib.sha256(output.encode()).hexdigest()
+        assert wallpaper_outputs[output] == "wallpaper." + scope
+        assert wallpaper_sections["wallpaper." + scope]["output"] == output
+    assert "bright_cyan = " in recipe and "active_border = " in recipe
+    bundle = current_runtime["bundle"]
+    assert bundle["root"].startswith(runtime["paths"]["profileCache"] + "/named/")
+    for key in ("quickshell", "hyprPalette", "hyprOutputPalettes", "hyprpaper", "wallpaperRegistry", "globalPalette", "palettes"):
+        assert pathlib.Path(bundle[key]).exists(), key
+    # Load the actual native consumer, including relocated and quoted paths.
+    border_check = subprocess.run(["lua", "-", current_runtime["runtimeLua"], str(installed / "hypr/borders.lua"),
+                                   str(installed / "hypr/phantomat.lua")],
+        env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=r'''
+local runtime = dofile(arg[1])
+package.preload.runtime = function() return runtime end
+local rules = {}
+hl = { window_rule = function(rule) rules[#rules + 1] = rule end }
+dofile(arg[2])
+local outputs = dofile(runtime.bundle.hyprOutputPalettes)
+local directory = runtime.bundle.hyprOutputPalettes:match("^(.*)/")
+assert(#rules == #outputs * 2)
+local names = {}
+for _, output in ipairs(outputs) do
+    local palette = dofile(directory .. "/" .. output.palette)
+    local count = 0
+    for _, rule in ipairs(rules) do
+        assert(not names[rule.name] or names[rule.name] == rule)
+        names[rule.name] = rule
+        if rule.match.workspace == "m[" .. output.output .. "]" then
+            count = count + 1
+            assert(rule.match.group == false and type(rule.match.focus) == "boolean")
+            if rule.match.focus then
+                if type(palette.active_border) == "table" then
+                    assert(rule.border_color.angle == palette.active_border.angle)
+                    assert(#rule.border_color.colors == #palette.active_border.colors)
+                    for i, color in ipairs(palette.active_border.colors) do assert(rule.border_color.colors[i] == color) end
+                else assert(rule.border_color == palette.active_border) end
+            else
+                assert(rule.border_color == palette.hyprland.inactive_border .. " " .. palette.hyprland.inactive_border)
+            end
+        end
+    end
+    assert(count == 2)
+end
+-- The plugin consumer shares the same generated index, including relocation.
+package.preload.profile = function()
+    return { phantomat = { enabled = true, mode = "canvas" } }
+end
+package.preload["user.canvas"] = function() return { navigator = {} } end
+package.preload["binds.canvas"] = function() return true end
+package.preload["binds.phantomat"] = function() return true end
+local native_config, output_colors
+hl.plugin = {
+    load = function(path) assert(path == runtime.paths.phantomatLibrary) end,
+    spatialoverview = {
+        output_colors = function(colors) output_colors = colors end,
+        overview = function() return function() end end,
+    },
+}
+hl.get_loaded_plugins = function() return { { name = "spatialoverview" } } end
+hl.curve = function() end
+hl.on = function() end
+hl.config = function(config) native_config = config.plugin.spatialoverview end
+dofile(arg[3])
+local default = dofile(runtime.bundle.hyprPalette)
+assert(native_config.navigator.accent == default.accent)
+local mappings = { panel = "surface", card = "elevated", edge = "outline",
+                   text = "text", text_dim = "text_muted", text_faint = "text_muted" }
+local function native(color) return "rgb(" .. color:sub(2) .. ")" end
+for role, source in pairs(mappings) do
+    assert(native_config.navigator.colors[role] == native(default[source]))
+end
+local count = 0
+for _ in pairs(output_colors) do count = count + 1 end
+assert(count == #outputs)
+for _, output in ipairs(outputs) do
+    local palette = dofile(directory .. "/" .. output.palette)
+    assert(output_colors[output.output].accent == native(palette.accent))
+    for role, source in pairs(mappings) do
+        assert(output_colors[output.output][role] == native(palette[source]))
+    end
+end
+-- Reload with no assignments must publish an empty map, not retain old names.
+local original_dofile = dofile
+dofile = function(path)
+    if path == runtime.bundle.hyprOutputPalettes then return {} end
+    return original_dofile(path)
+end
+dofile(arg[3])
+assert(next(output_colors) == nil)
+dofile = original_dofile
+''')
+    assert border_check.returncode == 0, border_check.stderr
+    checksum_file = pathlib.Path(bundle["root"]) / "checksums.sha256"
+    assert checksum_file.is_file()
+    palette_output = pathlib.Path(bundle["quickshell"]) / "GeneratedPalette.qml"
+    stale_runtime = dict(current_runtime, recipeHash="0" * 64)
+    stale_runtime_path = scratch / "stale-recipe-runtime.json"
+    stale_runtime_path.write_text(json.dumps(stale_runtime))
+    stale_build = run(helpers / "compile-theme-profile", stale_runtime_path, ok=False)
+    assert stale_build.returncode == 3 and "Profile changed before compilation" in stale_build.stderr
+    assert palette_output.is_file(), "Stale recipe hash mutated the compiled cache"
+    palette_output.unlink()
+    rebuilt = json.loads(run(helpers / "compile-theme-profile", env["UI_SHELL_RUNTIME"]).stdout)
+    assert rebuilt["root"] == bundle["root"] and palette_output.is_file()
+    assert subprocess.run(["sha256sum", "--check", "--status", str(checksum_file)], cwd=bundle["root"]).returncode == 0
+    assert imported.read_bytes() == imported_before
+    before = manifest.read_bytes()
+    save("named", baseline["revision"], ok=False)
+    save("default", named["revision"], ok=False)
+    save("bad/slug", named["revision"], ok=False)
+    save("named", named["revision"], values=["invalid"] * 13, ok=False)
+    assert manifest.read_bytes() == before
+    # Invalid recipe and preflight renderer failure leave selected config intact.
+    bad = installed / "profiles/bad"
+    bad.mkdir()
+    bad_ini = bad / "profile.ini"
+    cross_store = installed / "profiles/cross-store"
+    cross_store.mkdir()
+    cross_store_profile = cross_store / "profile.ini"
+    cross_store_profile.write_text((installed / "profiles/default/profile.ini").read_text().replace(
+        "definition = themes/default/config.ini", "definition = profiles/default/profile.ini"))
+    run(helpers / "read-theme-profile", cross_store_profile, installed,
+        installed / "profiles", installed / "themes", helpers / "read-ini", ok=False)
+    bad_ini.write_text(pathlib.Path(named_path).read_text().replace("source = file", "source = unknown"))
+    run(helpers / "select-theme-profile", "activate", bad_ini, named["revision"], "", ok=False)
+    bad_ini.write_text(pathlib.Path(named_path).read_text().replace("bright_cyan = ", "bright_cyan = ../", 1))
+    run(helpers / "select-theme-profile", "activate", bad_ini, named["revision"], "", ok=False)
+    assert manifest.read_bytes() == before
+    run(helpers / "select-theme-profile", "activate", default_theme, named["revision"], "", ok=False)
+    assert manifest.read_bytes() == before
+    renderer = helpers / "render-profile-quickshell"
+    renderer_bytes = renderer.read_bytes()
+    renderer.write_text("#!/usr/bin/env bash\nexit 1\n")
+    run(helpers / "select-theme-profile", "activate", installed / "profiles/default/profile.ini", named["revision"], "", ok=False)
+    renderer.write_bytes(renderer_bytes)
+    assert manifest.read_bytes() == before
+    # Saving the active ID atomically replaces its single durable recipe.
+    named_bytes = pathlib.Path(named_path).read_bytes()
+    saved_output = snapshot_result(save("named", named["revision"], "WAYLAND-1", values=["#fedcba"] * 13).stdout)
+    updated = state()
+    assert updated["byOutput"]["WAYLAND-1"]["accent"] == "#fedcba"
+    assert updated["byOutput"]["HDMI-A-2"] == named["byOutput"]["HDMI-A-2"]
+    assert updated["defaultPalette"] == named["defaultPalette"]
+    assert pathlib.Path(named_path).read_bytes() != named_bytes
+    assert len(list((installed / "profiles/named").glob("*.ini"))) == 1
+    assert saved_output == editor("WAYLAND-1")
+    # Selecting a wallpaper changes the active recipe while preserving palettes.
+    item = next(entry for entry in updated["wallpapers"] if entry["id"] == "")
+    run(helpers / "select-wallpaper", "NEW-OUTPUT", item["folderId"], item["name"])
+    after_wallpaper = state()
+    assert any(w["id"] == "NEW-OUTPUT" for w in after_wallpaper["wallpapers"])
+    assert after_wallpaper["byOutput"] == updated["byOutput"]
+    file_refresh = snapshot(helpers / "refresh-theme")
+    assert file_refresh["revision"] == after_wallpaper["revision"]
+    assert state()["defaultPalette"] == updated["defaultPalette"]
+    assert state()["byOutput"] == updated["byOutput"]
+    # Reactivation reads the current contents of the one mutable named recipe.
+    activated = snapshot(helpers / "select-theme-profile", "activate", named_path, after_wallpaper["revision"], "")
+    assert activated == editor("")
+    restored = state()
+    assert restored["defaultPalette"] == updated["defaultPalette"] and restored["byOutput"] == updated["byOutput"]
+    assert restored["wallpapers"] == after_wallpaper["wallpapers"]
+    # Native application is simulated locally, including noisy command stdout.
+    native = scratch / "native"
+    native.mkdir()
+    ctl = native / "hyprctl"
+    ctl.write_text('#!/usr/bin/env bash\nif [[ $1 == -j ]]; then printf \'[{"name":"WAYLAND-1"}]\\n\'; else printf \'fixture reload\\n\'; fi\n')
+    ctl.chmod(0o755)
+    apply = helpers / "apply-wallpaper"
+    apply_bytes = apply.read_bytes()
+    apply.write_text("#!/usr/bin/env bash\nprintf 'fixture apply failure\\n'\nexit 1\n")
+    old_path = env["PATH"]
+    env.update(PATH=str(native) + ":" + old_path, HYPRLAND_INSTANCE_SIGNATURE="fixture-only")
+    # Persistence cannot prepare palettes, reapply wallpaper, reload or regenerate runtime.
+    preparation = helpers / "prepare-palettes"
+    preparation_bytes = preparation.read_bytes()
+    preparation.write_text("#!/usr/bin/env bash\nprintf 'unexpected preparation\\n' >&2\nexit 1\n")
+    ctl_bytes = ctl.read_bytes()
+    ctl.write_text("#!/usr/bin/env bash\nprintf 'unexpected native call\\n' >&2\nexit 1\n")
+    native_runtime_before = pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes()
+    native_palette_before = active_palette_file().read_bytes()
+    item = next(entry for entry in restored["wallpapers"] if entry["id"] == "")
+    persisted = run(helpers / "select-wallpaper", "PERSIST-ONLY", item["folderId"], item["name"])
+    assert persisted.stdout.strip() == item["paletteKey"]
+    assert not persisted.stderr
+    assert pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes() == native_runtime_before
+    assert active_palette_file().read_bytes() == native_palette_before
+    restored = state()
+    assert any(entry["id"] == "PERSIST-ONLY" for entry in restored["wallpapers"])
+    # A second standalone persist must retain the first despite a stale projection.
+    next_item = next(entry for entry in restored["wallpapers"] if entry["id"] == "HDMI-A-2")
+    repeated = run(helpers / "select-wallpaper", "PERSIST-NEXT", next_item["folderId"], next_item["name"])
+    assert repeated.stdout.strip() == next_item["paletteKey"] and not repeated.stderr
+    restored = state()
+    persisted_outputs = {entry["id"]: entry for entry in restored["wallpapers"]}
+    assert persisted_outputs["PERSIST-ONLY"]["paletteKey"] == item["paletteKey"]
+    assert persisted_outputs["PERSIST-NEXT"]["paletteKey"] == next_item["paletteKey"]
+    assert pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes() == native_runtime_before
+    assert active_palette_file().read_bytes() == native_palette_before
+    # A manifest-only profile switch must also become the next selection's source.
+    before_profile_persist_runtime = pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes()
+    before_profile_persist_native = active_palette_file().read_bytes()
+    run(helpers / "select-theme-profile", "persist", installed / "profiles/default/profile.ini", restored["revision"], "")
+    assert pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes() == before_profile_persist_runtime
+    assert active_palette_file().read_bytes() == before_profile_persist_native
+    switched = state()
+    assert switched["profileId"] == "default" and switched["source"] == "file"
+    switched_item = next(entry for entry in switched["wallpapers"] if entry["id"] == "")
+    switched_persist = run(helpers / "select-wallpaper", "PERSIST-SWITCH", switched_item["folderId"], switched_item["name"])
+    assert switched_persist.stdout.strip() == switched_item["paletteKey"] and not switched_persist.stderr, (switched_persist.stdout, switched_persist.stderr, switched_item["paletteKey"])
+    restored = state()
+    assert restored["profileId"] == "default" and restored["source"] == "file"
+    assert any(entry["id"] == "PERSIST-SWITCH" for entry in restored["wallpapers"])
+    assert all(entry["id"] not in {"PERSIST-ONLY", "PERSIST-NEXT"} for entry in restored["wallpapers"])
+    assert pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes() == native_runtime_before
+    assert active_palette_file().read_bytes() == native_palette_before
+    preparation.write_bytes(preparation_bytes)
+    ctl.write_bytes(ctl_bytes)
+    unchanged_manifest = manifest.read_bytes()
+    run(helpers / "select-theme-profile", "unknown", named_path, restored["revision"], "", ok=False)
+    run(helpers / "select-theme-profile", "activate", named_path, "0" * 64, "", ok=False)
+    assert manifest.read_bytes() == unchanged_manifest
+    partial = run(helpers / "select-theme-profile", "activate", installed / "profiles/default/profile.ini", restored["revision"], "", ok=False)
+    assert partial.returncode == 4 and not partial.stdout
+    assert "Profile selected and valid; runtime/native apply incomplete" in partial.stderr
+    assert "fixture apply failure" in partial.stderr
+    # Refresh only reloads native colors; the failing wallpaper helper is untouched.
+    successful_refresh = run(helpers / "refresh-theme")
+    assert len(successful_refresh.stdout.splitlines()) == 2
+    assert "fixture reload" in successful_refresh.stderr and "fixture apply failure" not in successful_refresh.stderr
+    refresh_manifest = manifest.read_bytes()
+    ctl.write_text("#!/usr/bin/env bash\nprintf 'fixture reload failure\\n'\nexit 1\n")
+    failed_refresh = run(helpers / "refresh-theme", ok=False)
+    assert failed_refresh.returncode == 4 and not failed_refresh.stdout
+    assert "Wallpaper applied/saved, but colors refresh failed" in failed_refresh.stderr
+    assert manifest.read_bytes() == refresh_manifest
+    bootstrap_renderer = helpers / "render-runtime-config"
+    bootstrap_renderer_bytes = bootstrap_renderer.read_bytes()
+    bootstrap_renderer.write_text("#!/usr/bin/env bash\nexit 1\n")
+    failed_refresh = run(helpers / "refresh-theme", ok=False)
+    assert failed_refresh.returncode == 4 and not failed_refresh.stdout
+    assert "Wallpaper applied/saved, but colors refresh failed" in failed_refresh.stderr
+    assert manifest.read_bytes() == refresh_manifest
+    bootstrap_renderer.write_bytes(bootstrap_renderer_bytes)
+    env["PATH"] = old_path
+    env.pop("HYPRLAND_INSTANCE_SIGNATURE")
+    apply.write_bytes(apply_bytes)
+    assert state()["profileId"] == "default"
+    run(helpers / "select-theme-profile", "activate", named_path, state()["revision"], "")
+    restored = state()
+    # Palette edits outside the editor are included in the aggregate CAS hash.
+    current_runtime = json.loads(pathlib.Path(env["UI_SHELL_RUNTIME"]).read_text())
+    palette = pathlib.Path(current_runtime["theme"]["profile"])
+    palette.write_text(palette.read_text().replace("accent = #abcdef", "accent = #aabbcc", 1))
+    save("named", restored["revision"], ok=False)
+    assert state()["revision"] != restored["revision"]
+    assert imported.read_bytes() == imported_before
+    # Draft preview owns only a snapshot/cache; dropping it cannot apply anything.
+    def fields(result):
+        data = {}
+        for kind, name, value in re.findall(r"readonly property (string|var) (\w+): (.+)", pathlib.Path(result["path"]).read_text()):
+            if value.startswith("(") and value.endswith(")"):
+                value = value[1:-1]
+            data[name] = json.loads(value)
+        return data
+    def protected_truth():
+        current = active_runtime()
+        paths = {manifest, pathlib.Path(env["UI_SHELL_RUNTIME"]), pathlib.Path(env["UI_SHELL_RUNTIME_LUA"])}
+        paths.update(pathlib.Path(path) for path in current["bootstrap"].values())
+        bundle_root = pathlib.Path(current["bundle"]["root"])
+        paths.update(path for path in bundle_root.rglob("*") if path.is_file())
+        paths.update(path for path in (installed / "profiles").rglob("*") if path.is_file())
+        return {str(path): path.read_bytes() for path in paths if path.is_file()}
+    def draft(output, base, choice, color_request="policy"):
+        return fields(snapshot(helpers / "read-theme-editor", output, base, choice["folderId"], choice["name"], choice["fitMode"], color_request))
+    active = state()
+    base_path = installed / "profiles/default/profile.ini"
+    selected_base = state(base_path)
+    seeded_cache_root = pathlib.Path(selections["wallpapers"][0]["colorsPath"]).parent.parent
+    seeded_names = {item["name"] for item in selected_base["wallpapers"]}
+    def cache_miss(path):
+        key = hashlib.sha256(path.read_bytes()).hexdigest() + "-" + selections["colorMode"] + "-v2"
+        return not (seeded_cache_root / key / "colors.json").exists()
+    candidate_image = next(path for path in sorted((project / "wallpapers").iterdir())
+                           if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+                           and path.name not in seeded_names and cache_miss(path))
+    candidate = dict(folderId="project", name=candidate_image.name, fitMode="contain")
+    dynamic_output = "DRAFT-" + scratch.name
+    native_log = scratch / "native.log"
+    env["THEME_NATIVE_LOG"] = str(native_log)
+    # Any native call during preview/cancel would leave evidence and fail.
+    ctl.write_text('#!/usr/bin/env bash\nprintf "unexpected native call\\n" >>"$THEME_NATIVE_LOG"\nexit 1\n')
+    apply.write_text('#!/usr/bin/env bash\nprintf "unexpected apply\\n" >>"$THEME_NATIVE_LOG"\nexit 1\n')
+    env.update(PATH=str(native) + ":" + old_path, HYPRLAND_INSTANCE_SIGNATURE="fixture-only")
+    extractor = helpers / "extract-colors"
+    extractor_bytes = extractor.read_bytes()
+    draft_colors = dict(original_colors, accent="#2468ac")
+    extractor.write_text("#!/usr/bin/env bash\nmkdir -p -- \"${3%/*}\"\nprintf '%s\\n' '" + json.dumps(draft_colors) + "' >\"$3\"\n")
+    protected = protected_truth()
+    inactive_draft = draft(dynamic_output, base_path, candidate, "wallpaper")
+    assert inactive_draft["revision"] == active["revision"]
+    assert inactive_draft["baseRevision"] == selected_base["revision"] != active["revision"]
+    assert inactive_draft["profileId"] == "default" and inactive_draft["profilePath"] == str(base_path)
+    assert inactive_draft["source"] == selected_base["source"]
+    assert inactive_draft["defaultPalette"] == selected_base["defaultPalette"] and inactive_draft["byOutput"] == selected_base["byOutput"]
+    wallpaper = inactive_draft["draftWallpaper"]
+    assert wallpaper["id"] == dynamic_output and wallpaper["label"] == dynamic_output
+    assert wallpaper["name"] == candidate_image.name and wallpaper["fitMode"] == "contain"
+    assert wallpaper["path"] == str(installed / "wallpapers" / candidate_image.name)
+    assert wallpaper["colors"] == draft_colors
+    assert_complete_palette(wallpaper["colors"], "draft wallpaper")
+    assert protected_truth() == protected and not native_log.exists()
+    assert state() == active, "Loading or cancelling an inactive draft selected it"
+    cancelled = draft("", "", candidate)
+    assert cancelled["baseRevision"] == active["revision"]
+    del cancelled
+    assert protected_truth() == protected and not native_log.exists(), "Cancel changed active/native state"
+    run(helpers / "read-theme-editor", dynamic_output, ok=False)
+    run(helpers / "save-theme-profile", "old-protocol", active["revision"], active["revision"], dynamic_output,
+        "file", "dark", "", "", "", "cover", "retain", "", *(["#abcdef"] * 13), ok=False)
+    # Stale active and base revisions reject before publishing/applying a bundle.
+    stale = "0" * 64
+    rejected = save("default", stale, dynamic_output, base=base_path, base_revision=selected_base["revision"], choice=candidate, ok=False)
+    assert rejected.returncode == 3 and "Stale theme revision" in rejected.stderr
+    rejected = save("default", active["revision"], dynamic_output, base=base_path, base_revision=stale, choice=candidate, ok=False)
+    assert rejected.returncode == 3 and "Stale base theme revision" in rejected.stderr
+    for invalid in [dict(candidate, folderId="unconfigured"), dict(candidate, name="../escape.png"), dict(candidate, fitMode="stretch")]:
+        save("default", active["revision"], "", base=base_path, base_revision=selected_base["revision"], choice=invalid, ok=False)
+    assert protected_truth() == protected and not native_log.exists()
+    # Editing an inactive base is permitted; unrelated profile IDs remain owned.
+    unrelated = installed / "profiles/unrelated"
+    unrelated.mkdir()
+    (unrelated / "profile.ini").write_text(base_path.read_text().replace("id = default", "id = unrelated"))
+    save("unrelated", active["revision"], "", base=base_path, base_revision=selected_base["revision"], choice=candidate, ok=False)
+    # Simulated native application must observe wallpaper AND authored colors
+    # already selected together, with exactly one reload after activation.
+    ctl.write_text('#!/usr/bin/env bash\nif [[ $1 == -j ]]; then printf \'%s\\n\' \'[{"name":"' + dynamic_output + '"}]\'; else printf "reload\\n" >>"$THEME_NATIVE_LOG"; fi\n')
+    apply.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+state_reader=$(jq -er '.commands.readThemeState' "$UI_SHELL_RUNTIME")
+"$state_reader" "$UI_SHELL_RUNTIME" | jq -e --arg target "$1" --arg image "$2" --arg fit "$3" '
+  .source=="file" and (.byOutput[$target] // .defaultPalette).accent=="#13579b"
+  and any(.wallpapers[]; .id==$target and .path==$image and .fitMode==$fit)' >/dev/null
+printf 'apply\\t%s\\t%s\\t%s\\n' "$1" "$2" "$3" >>"$THEME_NATIVE_LOG"
+''')
+    # Default also applies, so its authored snapshot must keep the base accent.
+    apply.write_text(apply.read_text().replace('(.byOutput[$target] // .defaultPalette).accent=="#13579b"', '(if $target=="" then .defaultPalette.accent=="' + selected_base["defaultPalette"]["accent"] + '" else .byOutput[$target].accent=="#13579b" end)'))
+    saved = snapshot_result(save("default", active["revision"], dynamic_output, values=["#13579b"] * 13,
+                                 base=base_path, base_revision=selected_base["revision"], choice=candidate).stdout)
+    committed = state()
+    assert committed["profileId"] == "default" and committed["source"] == "file"
+    assert committed["defaultPalette"] == selected_base["defaultPalette"]
+    assert {key: value for key, value in committed["byOutput"].items() if key != dynamic_output} == selected_base["byOutput"]
+    committed_wallpapers = {item["id"]: item for item in committed["wallpapers"]}
+    assert dict(committed_wallpapers[dynamic_output], colors=wallpaper["colors"]) == wallpaper
+    assert {key: dict(value, colors=None) for key, value in committed_wallpapers.items() if key != dynamic_output} == {item["id"]: dict(item, colors=None) for item in selected_base["wallpapers"]}
+    assert committed["byOutput"][dynamic_output]["accent"] == "#13579b"
+    assert fields(saved)["draftWallpaper"] == dict(wallpaper, colors=None) and fields(saved)["baseRevision"] == committed["revision"]
+    calls = native_log.read_text().splitlines()
+    assert sum(line == "reload" for line in calls) == 1
+    assert any(line.startswith("apply\t" + dynamic_output + "\t") and line.endswith("\tcontain") for line in calls)
+    # A subsequent save may replace active ID from an inactive base, and
+    # wallpaper policy resolves the draft colors without an intermediate apply.
+    env["PATH"] = old_path
+    env.pop("HYPRLAND_INSTANCE_SIGNATURE")
+    apply.write_bytes(apply_bytes)
+    extractor.write_bytes(extractor_bytes)
+    named_base = state(named_path)
+    active_before = state()
+    save("default", active_before["revision"], "", source="wallpaper", base=named_path,
+         base_revision=named_base["revision"], choice=candidate)
+    derived = state()
+    assert derived["source"] == "wallpaper" and derived["defaultPalette"] == wallpaper["colors"]
+    named_image_colors = {
+        item["id"]: json.loads((home / "cache" / named_base["cacheNamespace"] / item["paletteKey"] / "colors.json").read_text())
+        for item in named_base["wallpapers"] if item["id"]
+    }
+    assert derived["byOutput"] == named_image_colors
+    assert {item["id"]: dict(item, colors=None) for item in derived["wallpapers"] if item["id"]} == {item["id"]: dict(item, colors=None) for item in named_base["wallpapers"] if item["id"]}
+    # Actual external edits to an inactive base invalidate only its CAS token.
+    before_base_edit = state()
+    stale_base_state = state(named_path)
+    original_base_ini = pathlib.Path(named_path).read_bytes()
+    pathlib.Path(named_path).write_text(pathlib.Path(named_path).read_text() + "\n# external base edit\n")
+    rejected = save("default", before_base_edit["revision"], "", base=named_path,
+                    base_revision=stale_base_state["revision"], choice=candidate, ok=False)
+    assert rejected.returncode == 3 and "Stale base theme revision" in rejected.stderr
+    assert state() == before_base_edit
+    pathlib.Path(named_path).write_bytes(original_base_ini)
+    # Custom Save writes one reusable definition; preview and invalid saves do not.
+    authored = installed / "themes/authored-theme/config.ini"
+    before_custom = state()
+    assert not authored.exists()
+    save("authored-theme", before_custom["revision"], values=["invalid"] * 13,
+         definition_action="save", ok=False)
+    assert not authored.exists() and state() == before_custom
+    save("authored-theme", before_custom["revision"], definition_action="save")
+    assert state()["definition"] == str(authored)
+    assert authored.is_file() and len(list(authored.parent.iterdir())) == 1
+    assert all(f"{role} = #abcdef" in authored.read_text() for role in roles)
+    definition_before = authored.read_bytes()
+    profile_truth = protected_truth()
+    snapshot(helpers / "read-theme-palette", authored)
+    assert protected_truth() == profile_truth and authored.read_bytes() == definition_before
+    # Retain/use never overwrites the imported definition; committed assets are owned.
+    current = state()
+    save("authored-theme", current["revision"], definition=str(imported))
+    assert state()["definition"] == str(imported)
+    assert all(value == "" for value in state()["definitionOverrides"].values())
+    assert draft("", "", candidate)["definition"] == str(imported)
+    assert imported.read_bytes() == imported_before and authored.read_bytes() == definition_before
+    # A named edit of the active custom definition changes it only on commit.
+    current = state()
+    save("authored-theme", current["revision"], values=["#123abc"] * 13,
+         definition_action="save", definition=str(authored))
+    assert all(f"{role} = #123abc" in authored.read_text() for role in roles)
+    assert state()["defaultPalette"]["accent"] == "#123abc"
+    assert state()["definition"] == str(authored)
+    # A saved file Theme opens even with an empty image-color cache and no extractor.
+    extractor.write_text("#!/usr/bin/env bash\nexit 99\n")
+    shutil.rmtree(home / "cache" / baseline["cacheNamespace"])
+    current = state()
+    run(helpers / "prepare-palettes")
+    reopened = draft("", "", candidate)
+    assert reopened["definition"] == str(authored) and reopened["draftWallpaper"]["colors"] is None
+    assert current["defaultPalette"]["accent"] == "#123abc"
+    assert not (home / "cache" / baseline["cacheNamespace"]).exists()
+    # Concurrent cold requests share one extraction, then explicit Wallpaper reuses it.
+    import concurrent.futures
+    extractions = scratch / "extractions.log"
+    extractor.write_text("#!/usr/bin/env bash\nset -euo pipefail\nprintf 'extract\\n' >>'" + str(extractions) + "'\nmkdir -p -- \"${3%/*}\"\nprintf '%s\\n' '" + json.dumps(original_colors) + "' >\"$3\"\n")
+    image = next(item for item in current["wallpapers"] if item["id"] == "")
+    def cached_palette():
+        return run(helpers / "cache-wallpaper-colors", image["path"], current["colorMode"], current["cacheNamespace"], image["paletteKey"]).stdout.strip()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as requests:
+        assert list(requests.map(lambda _: cached_palette(), range(2))) == [image["paletteKey"]] * 2
+    assert cached_palette() == image["paletteKey"] and extractions.read_text().splitlines() == ["extract"]
+    requested = fields(snapshot(helpers / "read-theme-editor", "", "", image["folderId"], image["name"], image["fitMode"], "wallpaper"))
+    assert requested["draftWallpaper"]["colors"]["accent"] == original_colors["accent"]
+    assert extractions.read_text().splitlines() == ["extract"] and state() == current
+    glacier_json = scratch / "glacier.json"
+    glacier_ini = installed / "themes/glacier/config.ini"
+    glacier_ini.parent.mkdir()
+    glacier_source = reference / "glacier/dark/colors.toml"
+    run(helpers / "normalize-theme-colors", glacier_source, glacier_json, "green", "yellow", "red")
+    glacier = json.loads(glacier_json.read_text())
+    run(helpers / "render-theme-colors", glacier_json, glacier_ini)
+    assert glacier["colors"]["bright_cyan"] and "deg" in glacier["hyprland"]["active_border"]
+    glacier_hypr = scratch / "glacier.lua"
+    run(helpers / "render-hypr-colors", glacier_json, glacier_hypr)
+    subprocess.run(["lua", "-", str(glacier_hypr)], input=(
+        'local palette = dofile(arg[1])\n'
+        'assert(palette.active_border.angle == 45)\n'
+        'assert(palette.active_border.colors[1] == "rgba(50ece0ee)")\n'
+        'assert(palette.active_border.colors[2] == "rgba(98bffeee)")\n'
+        'assert(palette.inactive_border == "rgba(45697aaa)")\n'
+    ), text=True, env=env, check=True)
+    current = state()
+    run(helpers / "save-theme-profile", "glacier", current["revision"], current["revision"], "", "file",
+        glacier["mode"], "", image["folderId"], image["name"], image["fitMode"], "save", glacier_ini,
+        json.dumps(glacier, separators=(",", ":")))
+    persisted_glacier = state()
+    assert persisted_glacier["definition"] == str(glacier_ini)
+    assert persisted_glacier["defaultPalette"]["colors"] == glacier["colors"]
+    assert persisted_glacier["defaultPalette"]["hyprland"] == glacier["hyprland"]
+    round_trip = scratch / "glacier-round-trip.json"
+    run(helpers / "normalize-custom-colors", glacier_ini, round_trip, helpers / "read-ini")
+    assert json.loads(round_trip.read_text()) == glacier
+    active_profile = json.loads(pathlib.Path(env["UI_SHELL_RUNTIME"]).read_text())["theme"]["profile"]
+    run(helpers / "select-theme-profile", "activate", active_profile, persisted_glacier["revision"], "")
+    restarted_glacier = state()
+    assert restarted_glacier["defaultPalette"]["colors"] == glacier["colors"]
+    assert restarted_glacier["defaultPalette"]["hyprland"] == glacier["hyprland"]
+    extractor.write_bytes(extractor_bytes)
+    for path, content in published_snapshots.items():
+        assert path.is_file() and path.read_bytes() == content, "Published native QML snapshot changed or disappeared"
+    print("Theme profiles passed: schema-2 recipe and full-color persistence, glacier gradient/bright-slot restart restore, isolated XDG, immutable QML snapshots, preview/cancel non-mutation, active/base CAS, cache rebuild, combined activation, preserved scopes, refresh and partial native failures.")

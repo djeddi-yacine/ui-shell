@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime=${1:?resolved runtime JSON required}
+output=${2:?output QML path required}
+
+command -v jq >/dev/null || {
+  printf '%s\n' 'jq is required for wallpaper catalog rendering.' >&2
+  exit 1
+}
+
+folders=$(jq -ce '.wallpaperFolders | select(type == "array" and length > 0)' "$runtime")
+items='[]'
+while IFS= read -r folder; do
+  folder_id=$(jq -er '.id' <<<"$folder")
+  wallpaper_dir=$(jq -er '.path' <<<"$folder")
+  [[ -d $wallpaper_dir && -r $wallpaper_dir && -x $wallpaper_dir ]] || {
+    printf 'Configured wallpaper folder is unavailable: %s (%s)\n' "$folder_id" "$wallpaper_dir" >&2; exit 1;
+  }
+  while IFS= read -r -d '' file; do
+    name=${file##*/}
+    search_key="$folder_id ${name%.*}"
+    search_key=${search_key,,}
+    item=$(jq -cn --arg path "$file" --arg name "$name" --arg search_key "$search_key" \
+      --arg folder_id "$folder_id" --arg folder_path "$wallpaper_dir" \
+      '{folderId: $folder_id, folderPath: $folder_path, path: $path, name: $name, searchKey: $search_key}')
+    items=$(jq -c --argjson item "$item" '. + [$item]' <<<"$items")
+  done < <(find -H "$wallpaper_dir" -maxdepth 1 -type f \
+    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0 | sort -z)
+done < <(jq -c '.[]' <<<"$folders")
+
+temporary=$(mktemp "${output}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+
+jq -er '
+  [
+    "pragma Singleton", "", "import QtQuick", "", "QtObject {",
+    "    readonly property var items: ["
+  ]
+  + (map("        { folderId: " + (.folderId | @json) + ", folderPath: " + (.folderPath | @json) + ", path: " + (.path | @json) + ", name: " + (.name | @json) + ", searchKey: " + (.searchKey | @json) + " },"))
+  + ["    ]", "}", ""] | join("\n")
+' <<<"$items" >"$temporary"
+
+mv -f -- "$temporary" "$output"

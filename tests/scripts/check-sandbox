@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /project/tests/nested.conf
+[[ $HOME == "$test_home" && $XDG_RUNTIME_DIR == "$test_runtime" ]]
+[[ ${QT_IM_MODULE-} == "$test_qt_input_method" ]]
+[[ $XDG_CONFIG_HOME == "$test_home/.config" && -d $XDG_CONFIG_HOME ]]
+[[ $XDG_CACHE_HOME == "$test_home/.cache" && -d $XDG_CACHE_HOME ]]
+[[ $XDG_DATA_HOME == "$test_home/.local/share" && -d $XDG_DATA_HOME ]]
+[[ $XDG_STATE_HOME == "$test_home/.local/state" && -d $XDG_STATE_HOME ]]
+[[ ! -e $UI_SHELL_HOST_PROJECT && ! -e /run/dbus/system_bus_socket ]]
+[[ -z ${HYPRLAND_INSTANCE_SIGNATURE+x} && -z ${DISPLAY+x} ]]
+[[ -n $DBUS_SESSION_BUS_ADDRESS ]]
+[[ $(readlink /proc/self/ns/pid) != "$UI_SHELL_HOST_PID_NS" ]]
+[[ ! -w /source/hypr && ! -w /project/wallpapers && -w /project/hypr ]]
+[[ $(stat -c '%a' "$XDG_RUNTIME_DIR") == 700 ]]
+[[ $(awk -F: 'NR > 2 { gsub(/[[:space:]]/, "", $1); print $1 }' /proc/net/dev) == lo ]]
+shell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+hypr_directory=$(jq -er '.paths.hypr' "$UI_SHELL_RUNTIME")
+[[ $shell_directory == "$XDG_CONFIG_HOME/ui-shell/quickshell" && -f $test_config_root/config.ini ]]
+
+[[ -f $hypr_directory/hyprland.lua && -f $hypr_directory/${test_hypr_config#hypr/} ]]
+printf '%s\n' 'Isolation passed: private HOME/XDG, project copy, D-Bus, PID and network; host project and wallpaper files are read-only.'

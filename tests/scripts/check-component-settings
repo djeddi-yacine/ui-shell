@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Scoped writes are exercised only by the private test runtime.
+set -euo pipefail
+tmp=$(mktemp -d /tmp/ui-shell-component-settings.XXXXXX)
+trap 'rm -rf -- "$tmp"' EXIT
+export XDG_CONFIG_HOME="$tmp/config" HOME="$tmp/home"
+mkdir -p "$HOME"
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+rejects() { if "$@" >/dev/null 2>&1; then fail "expected rejection: $*"; fi; }
+
+runtime_source=${UI_SHELL_RUNTIME:?resolved runtime data required}
+runtime="$tmp/runtime.json"
+jq --arg components "$XDG_CONFIG_HOME/ui-shell/components" '.paths.components = $components' "$runtime_source" >"$runtime"
+export UI_SHELL_RUNTIME=$runtime
+command_path() { jq -er --arg role "$1" '.commands[$role]' "$UI_SHELL_RUNTIME"; }
+render_launcher=$(command_path renderLauncherSettings)
+render_picker=$(command_path renderPickerSettings)
+settings_path=$(command_path componentSettingsPath)
+read_settings=$(command_path readComponentSettings)
+save_settings=$(command_path saveComponentSettings)
+
+for args in 'true 1' 'false 24' 'undefined undefined'; do
+  # Intentional word splitting on these fixed test vectors.
+  read -r a b <<<"$args"
+  "$render_launcher" "$a" "$b" | grep -q '^QtObject {' || fail 'launcher renderer shape'
+done
+rejects "$render_launcher" nope 1
+rejects "$render_launcher" true 0
+rejects "$render_launcher" true 25
+rejects "$render_launcher" true 1 extra
+for args in '1 1' '6 4' 'undefined undefined'; do
+  read -r a b <<<"$args"
+  "$render_picker" "$a" "$b" | grep -q '^QtObject {' || fail 'picker renderer shape'
+done
+rejects "$render_picker" 0 1
+rejects "$render_picker" 7 1
+rejects "$render_picker" 1 5
+rejects "$render_picker" nope 1
+rejects "$settings_path" alien default ''
+rejects "$settings_path" launcher output ''
+rejects "$settings_path" launcher default MONITOR
+
+mapfile -t read_result < <("$read_settings" launcher default '')
+default_path=${read_result[0]} default_rev=${read_result[1]}
+[[ $default_rev == absent && ! -e $default_path ]] || fail 'missing read mutated storage'
+[[ $default_path == "$XDG_CONFIG_HOME/ui-shell/components/launcher/Default.qml" ]] || fail 'default path'
+expected_hash=$(printf '%s' HDMI-A-1 | sha256sum); expected_hash=${expected_hash%% *}
+[[ $("$settings_path" wallpaper output HDMI-A-1) == "$XDG_CONFIG_HOME/ui-shell/components/wallpaper/outputs/$expected_hash.qml" ]] || fail 'output hash is not exact UTF-8 SHA-256'
+linebreak_path="$tmp/has"$'\n'"newline"
+for invalid_components in relative '' "$linebreak_path" "$tmp/../escape"; do
+  invalid_runtime="$tmp/invalid-runtime.json"
+  jq --arg components "$invalid_components" '.paths.components = $components' "$runtime" >"$invalid_runtime"
+  rejects env UI_SHELL_RUNTIME="$invalid_runtime" "$settings_path" launcher default ''
+done
+
+rev=$("$save_settings" launcher default '' absent true 12)
+[[ $rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'save did not return digest'
+[[ $(stat -c %a "$default_path") == 600 ]] || fail 'mode is not 600'
+mapfile -t read_result < <("$read_settings" launcher default '')
+reload_path=${read_result[0]} reload_rev=${read_result[1]}
+[[ $reload_path == "$default_path" && $reload_rev == "$rev" ]] || fail 'save/reload mismatch'
+grep -qx 'import QtQuick' "$default_path" || fail 'missing import'
+grep -qx '    property var showIcons: true' "$default_path" || fail 'missing launcher override'
+grep -qx '    property var visibleRows: 12' "$default_path" || fail 'missing launcher rows'
+grep -q '"' "$default_path" && fail 'settings file is not QML'
+
+before=$(sha256sum "$default_path")
+rejects "$save_settings" launcher default '' absent false 13
+[[ $(sha256sum "$default_path") == "$before" ]] || fail 'stale write changed file'
+
+# Both racers share the same initial revision; exactly one must commit.
+set +e
+("$save_settings" launcher default '' "$rev" false 10 >"$tmp/a.out" 2>"$tmp/a.err") & p1=$!
+("$save_settings" launcher default '' "$rev" true 20 >"$tmp/b.out" 2>"$tmp/b.err") & p2=$!
+wait "$p1"; s1=$?
+wait "$p2"; s2=$?
+set -e
+(( (s1 == 0 && s2 != 0) || (s2 == 0 && s1 != 0) )) || fail 'CAS concurrency did not elect exactly one writer'
+
+for output in HDMI-A-1 DP-2; do
+  p=$("$settings_path" wallpaper output "$output")
+  [[ $p == "$XDG_CONFIG_HOME/ui-shell/components/wallpaper/outputs/"*.qml ]] || fail 'output path shape'
+  r=$("$save_settings" wallpaper output "$output" absent 2 3)
+  [[ $r =~ ^[[:xdigit:]]{64}$ ]] || fail 'picker save digest'
+done
+p1=$("$settings_path" wallpaper output HDMI-A-1)
+p2=$("$settings_path" wallpaper output DP-2)
+[[ $p1 != "$p2" && -f $p1 && -f $p2 ]] || fail 'output scopes not independent'
+default_picker=$("$settings_path" wallpaper default '')
+[[ ! -e $default_picker ]] || fail 'default/output file collision'
+
+# Reset is represented by undefined values and remains a loadable QtObject.
+"$save_settings" wallpaper default '' absent undefined undefined >/dev/null
+grep -qx '    property var wideColumns: undefined' "$default_picker" || fail 'undefined reset missing'
+grep -qx '    property var maximumVisibleRows: undefined' "$default_picker" || fail 'undefined rows reset missing'
+grep -qx 'QtObject {' "$default_picker" || fail 'renderer is not a QtObject'
+
+# Reject symlinked component ancestry without touching the target.
+mkdir -p "$tmp/outside"
+ln -s "$tmp/outside" "$XDG_CONFIG_HOME/ui-shell/components/wallpaper/outputs-link" 2>/dev/null || true
+rm -rf -- "$XDG_CONFIG_HOME/ui-shell/components/launcher"
+ln -s "$tmp/outside" "$XDG_CONFIG_HOME/ui-shell/components/launcher"
+rejects "$settings_path" launcher default ''
+rejects "$save_settings" launcher default '' absent true 4
+[[ -z $(find "$tmp/outside" -mindepth 1 -print -quit) ]] || fail 'symlink target was modified'
+
+# Distinct first writes concurrently create a wholly missing configuration tree.
+fresh="$tmp/fresh-config"
+jq --arg components "$fresh/ui-shell/components" '.paths.components = $components' "$runtime" >"$tmp/fresh-runtime.json"
+set +e
+(env UI_SHELL_RUNTIME="$tmp/fresh-runtime.json" "$save_settings" launcher default '' absent true 8 >"$tmp/fresh-default.out" 2>"$tmp/fresh-default.err") & p1=$!
+(env UI_SHELL_RUNTIME="$tmp/fresh-runtime.json" "$save_settings" wallpaper output HDMI-A-2 absent 3 2 >"$tmp/fresh-one.out" 2>"$tmp/fresh-one.err") & p2=$!
+(env UI_SHELL_RUNTIME="$tmp/fresh-runtime.json" "$save_settings" wallpaper output DP-3 absent 4 1 >"$tmp/fresh-two.out" 2>"$tmp/fresh-two.err") & p3=$!
+wait "$p1"; s1=$?
+wait "$p2"; s2=$?
+wait "$p3"; s3=$?
+set -e
+(( s1 == 0 && s2 == 0 && s3 == 0 )) || fail 'fresh-tree concurrent saves failed'
+for path in \
+  "$fresh/ui-shell/components/launcher/Default.qml" \
+  "$fresh/ui-shell/components/wallpaper/outputs/$(printf '%s' HDMI-A-2 | sha256sum | cut -d' ' -f1).qml" \
+  "$fresh/ui-shell/components/wallpaper/outputs/$(printf '%s' DP-3 | sha256sum | cut -d' ' -f1).qml"; do
+  [[ -s $path && $(stat -c %a "$path") == 600 ]] || fail 'fresh-tree settings file missing or not private'
+  grep -q '^QtObject {' "$path" || fail 'fresh-tree settings file incomplete'
+  [[ -e $path.lock && $(stat -c %a "$path.lock") == 600 ]] || fail 'fresh-tree lock missing or not private'
+done
+for dir in "$fresh/ui-shell/components" "$fresh/ui-shell/components/launcher" "$fresh/ui-shell/components/wallpaper" "$fresh/ui-shell/components/wallpaper/outputs"; do
+  [[ $(stat -c %a "$dir") == 700 ]] || fail "settings directory is not private: $dir"
+done
+
+# Control tuning: the renderer owns the model; the committed seed must equal its defaults.
+render_tuning=$(command_path renderControlTuning)
+"$render_tuning" | cmp -s - /project/shell/theme/GeneratedControlTuning.qml \
+  || fail 'shell/theme/GeneratedControlTuning.qml is stale; run scripts/render-control-tuning'
+"$render_tuning" hoverLayer=0.12 containerShift=0.2 | grep -q '"hoverLayer":0.12' || fail 'tuning override not applied'
+rejects "$render_tuning" nope=1
+rejects "$render_tuning" hoverLayer=9
+rejects "$render_tuning" hoverLayer=abc
+rejects "$render_tuning" hoverLayer
+rejects "$settings_path" controls output HDMI-A-1
+[[ $("$settings_path" controls default '') == "$XDG_CONFIG_HOME/ui-shell/components/controls/Default.qml" ]] || fail 'tuning path'
+tuning_rev=$("$save_settings" controls default '' absent hoverLayer=0.12 textContrast=5)
+[[ $tuning_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'tuning save did not return digest'
+tuning_path=$("$settings_path" controls default '')
+grep -q '"hoverLayer":0.12' "$tuning_path" && grep -q '"textContrast":5' "$tuning_path" || fail 'tuning values not persisted'
+[[ $(stat -c %a "$tuning_path") == 600 ]] || fail 'tuning file is not private'
+rejects "$save_settings" controls default '' absent hoverLayer=0.12
+rejects "$save_settings" controls default '' "$tuning_rev" nope=1
+"$save_settings" controls default '' "$tuning_rev" >/dev/null || fail 'reset to defaults failed'
+grep -q '"hoverLayer":0.08' "$tuning_path" || fail 'reset did not restore defaults'
+
+# The model is data: a new mode and a new emphasis need JSON only, and bad data is rejected.
+model_copy="$tmp/model-copy"
+mkdir -p "$model_copy"
+cp -a "$(dirname "$render_tuning")/control-model" "$(dirname "$render_tuning")/render-control-tuning" "$model_copy/"
+jq '. + [{"key":"demo","label":"Demo","description":"Test-only mode.","values":{"hoverLayer":0.2},
+  "behavior":{"flags":{"hover":"none"},"emphasis":{"danger":{"family":"solid","rest":"primary"}}}}]' \
+  "$model_copy/control-model/modes.json" >"$model_copy/modes.new" && mv "$model_copy/modes.new" "$model_copy/control-model/modes.json"
+"$model_copy/render-control-tuning" mode=demo | grep -q '"key": "demo"' || fail 'a new mode needs more than JSON'
+"$model_copy/render-control-tuning" mode=demo | grep -q '"danger"' || fail 'a new emphasis needs more than JSON'
+"$model_copy/render-control-tuning" mode=demo | grep -q '"hoverLayer":0.2' || fail 'new mode preset not applied'
+jq '.[1].behavior = {"families":{"outline":{"states":{"select":{"fill":"nope","fg":"text","border":"rest"}}}}}' \
+  "$model_copy/control-model/modes.json" >"$model_copy/modes.bad"
+cp "$model_copy/modes.bad" "$model_copy/control-model/modes.json"
+rejects "$model_copy/render-control-tuning"
+
+printf '%s\n' 'Component settings checks passed.'

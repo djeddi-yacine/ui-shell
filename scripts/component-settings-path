@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+component=${1-}
+scope=${2-}
+output=${3-}
+[[ $# == 3 ]] || { printf '%s\n' 'Usage: component-settings-path COMPONENT SCOPE OUTPUT' >&2; exit 2; }
+[[ $component == launcher || $component == wallpaper || $component == controls ]] || { printf '%s\n' 'Unknown component.' >&2; exit 2; }
+[[ $scope == default || ($scope == output && $component != controls) ]] || { printf '%s\n' 'Unknown scope.' >&2; exit 2; }
+if [[ $scope == default ]]; then
+  [[ -z $output ]] || { printf '%s\n' 'Default scope requires an empty output.' >&2; exit 2; }
+  filename=Default.qml
+else
+  [[ -n $output ]] || { printf '%s\n' 'Output scope requires a nonempty output.' >&2; exit 2; }
+  filename=$(printf '%s' "$output" | sha256sum)
+  filename=${filename%% *}.qml
+fi
+
+base=$(jq -er '.paths.components | select(type == "string" and startswith("/"))' "${UI_SHELL_RUNTIME:?resolved runtime data required}")
+[[ $base != *$'\n'* && $base != *$'\r'* ]] || { printf '%s\n' 'Configuration paths must not contain line breaks.' >&2; exit 2; }
+[[ "/$base/" != *'/./'* && "/$base/" != *'/../'* ]] || { printf '%s\n' 'Configuration paths must not contain dot or dot-dot components.' >&2; exit 2; }
+
+path=$base/$component
+[[ $scope == default ]] || path+="/outputs"
+path+="/$filename"
+
+# Refuse every existing symlink in the destination ancestry, including the leaf.
+cursor=
+IFS=/ read -r -a parts <<<"${path#/}"
+for part in "${parts[@]}"; do
+  cursor+="/$part"
+  [[ ! -L $cursor ]] || { printf 'Symlink in settings path: %s\n' "$cursor" >&2; exit 1; }
+done
+printf '%s\n' "$path"

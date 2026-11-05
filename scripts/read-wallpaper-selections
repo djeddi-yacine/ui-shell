@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Resolve the recipe's explicit selections through configured folder IDs.
+set -euo pipefail
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: read-wallpaper-selections RESOLVED_RUNTIME' >&2; exit 2; }
+runtime=$1
+policy=$(jq -er '.paths.hypr+"/user/monitors.lua"' "$runtime")
+primary=$(lua - "$policy" <<'LUA'
+local policy = dofile(arg[1]).palette_source
+assert(policy.kind == "default-wallpaper" or policy.kind == "output-wallpaper", "Invalid global palette policy")
+if policy.kind == "output-wallpaper" then
+  assert(type(policy.output) == "string" and policy.output ~= "", "Global output must be explicit")
+  print(policy.output)
+else print("") end
+LUA
+)
+resolved=$(jq -ce --arg primary "$primary" '
+  . as $runtime | .wallpaper as $registry |
+  def exact($fields): if keys==($fields|sort) then . else error("invalid wallpaper fields") end;
+  ($registry | exact(["schema","cache_namespace","color_mode","hyprpaper_ipc","default","monitors"])) |
+  if .schema!=1 or (.color_mode!="dark" and .color_mode!="light") or (.hyprpaper_ipc|type)!="boolean" or
+    (.cache_namespace | test("^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$") | not) then error("invalid wallpaper policy") else . end |
+  ($runtime.wallpaperFolders | map({key:.id,value:.path}) | from_entries) as $folders |
+  ([{key:"",value:.default}]+(.monitors | to_entries | sort_by(.key)) | map(
+    .key as $output | (.value | exact(["folder","path","fit_mode","palette_key"])) as $selection |
+    if ($output | test("[=\u0000-\u001f\u007f]|^\\s|\\s$")) or ($folders | has($selection.folder) | not) or
+      ($selection.path | type)!="string" or ($selection.path | length)==0 or ($selection.path | test("[/\u0000-\u001f\u007f]")) or
+      (["contain","cover","tile","fill"] | index($selection.fit_mode))==null or
+      ($selection.palette_key | test("^[a-f0-9]{64}-"+$registry.color_mode+"-v2$") | not)
+      then error("invalid wallpaper selection") else . end |
+    {id:$output,label:(if $output=="" then "Default" else $output end),
+     path:($folders[$selection.folder]+"/"+$selection.path),folderId:$selection.folder,
+     name:$selection.path,fitMode:$selection.fit_mode,paletteKey:$selection.palette_key,
+     colorsPath:($runtime.xdg.cache+"/"+$registry.cache_namespace+"/"+$selection.palette_key+"/colors.json")}
+  )) as $wallpapers |
+  if ($wallpapers | any(.id==$primary) | not) then error("global palette output has no selection") else . end |
+  {colorMode:$registry.color_mode,cacheNamespace:$registry.cache_namespace,primaryOutput:$primary,wallpapers:$wallpapers}
+' "$runtime")
+while IFS= read -r image; do [[ -f $image ]] || { printf 'Missing selected wallpaper: %s\n' "$image" >&2; exit 1; }; done < <(jq -r '.wallpapers[].path' <<<"$resolved")
+printf '%s\n' "$resolved"

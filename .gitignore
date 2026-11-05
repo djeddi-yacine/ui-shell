@@ -1,0 +1,48 @@
+# Whitelist. Every path is ignored unless re-included below.
+# refs/ holds independent reference checkouts and is never tracked.
+
+*
+!/.gitignore
+!/AGENTS.md
+!/BRAIN.md
+!/CONFIGURATION.md
+!/FEATURES.md
+!/Makefile
+!/README.md
+!/STYLE.md
+
+!/.vscode/
+!/.vscode/settings.json
+!/.vscode/extensions.json
+
+!/brain/
+!/brain/**
+!/default/
+!/default/**
+!/docs/
+!/docs/**
+!/gtk/
+!/gtk/**
+!/hypr/
+!/hypr/**
+!/qt/
+!/qt/**
+!/scripts/
+!/scripts/**
+!/shell/
+!/shell/**
+!/tests/
+!/tests/**
+!/tools/
+!/tools/**
+!/wallpapers/
+!/wallpapers/manifest.txt
+# Images are downloaded by tools/scripts/fetch-wallpapers, never tracked.
+
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VSCode Per-Terminal Bash History
+.vscode/.history/

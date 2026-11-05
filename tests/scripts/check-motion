@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Test-only motion diagnostics on the private display.
+# QML debugging is confined to this test's private network/PID namespaces.
+set -euo pipefail
+[[ ${UI_SHELL_ROOT-} == /project && ${HOME-} == /home/test && ${XDG_RUNTIME_DIR-} == /run/test ]]
+quickshell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+qs --path "$quickshell_directory" kill --any-display
+UI_SHELL_OPEN_PICKER=0 qs --debug 3768 --waitfordebug --path "$quickshell_directory/picker-motion-test.qml" >/artifacts/picker-motion.log 2>&1 &
+motion_pid=$!
+cleanup() {
+  kill -TERM "$motion_pid" 2>/dev/null || true
+  wait "$motion_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+# Attach records startup and natural application exit; no timed profiler kill.
+qmlprofiler --attach 127.0.0.1 --port 3768 --output /artifacts/motion.qtd >/artifacts/profiler.log 2>&1
+wait "$motion_pid"
+rg -F 'PICKER_MOTION_PASS' /artifacts/picker-motion.log
+[[ -s /artifacts/motion.qtd ]]
+trap - EXIT

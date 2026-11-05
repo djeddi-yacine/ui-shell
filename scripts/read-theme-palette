@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Normalize one selected palette and publish an instantiable cached preview.
+set -euo pipefail
+[[ $# == 1 ]] || { printf '%s\n' 'Usage: read-theme-palette INPUT_INI' >&2; exit 2; }
+input=$1 runtime=$UI_SHELL_RUNTIME
+themes=$(jq -er '.paths.themes' "$runtime")
+[[ -f $input && $(realpath -e -- "$input") == "$(realpath -e -- "$themes")/"* ]] || { printf '%s\n' 'Theme definition must exist inside configured theme storage.' >&2; exit 1; }
+directory=$(jq -er '.paths.runtime + "/theme-palettes"' "$runtime")
+normalizer=$(jq -er '.commands.normalizeCustomColors' "$runtime")
+reader=$(jq -er '.commands.readIni' "$runtime")
+renderer=$(jq -er '.commands.renderShellColors' "$runtime")
+mkdir -p -- "$directory"
+work=$(mktemp -d "$directory/.preview.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+# Copy first so the digest and normalizer describe the same bytes.
+cp -- "$input" "$work/colors.ini"
+revision=$(sha256sum <"$work/colors.ini"); revision=${revision%% *}
+"$normalizer" "$work/colors.ini" "$work/colors.json" "$reader"
+"$renderer" "$work/colors.json" "$work/Palette.qml"
+sed '/^pragma Singleton$/d' "$work/Palette.qml" >"$work/Preview.qml"
+hash=$(sha256sum <"$work/Preview.qml"); hash=${hash%% *}
+mkdir -p -- "$directory/$hash"
+output="$directory/$hash/Palette.qml"
+if ! ln -- "$work/Preview.qml" "$output" 2>/dev/null; then
+  [[ -f $output ]] && cmp -s -- "$work/Preview.qml" "$output" || { printf '%s\n' 'Palette preview content address collision.' >&2; exit 1; }
+fi
+printf '%s\n' "$output" "$revision"

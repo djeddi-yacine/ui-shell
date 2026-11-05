@@ -1,0 +1,8 @@
+module UiShell.Apps
+singleton AppCatalog 1.0 AppCatalog.qml
+singleton AppState 1.0 AppState.qml
+AppSearch 1.0 AppSearch.qml
+AppShortcut 1.0 AppShortcut.qml
+AppSurface 1.0 AppSurface.qml
+AppPanel 1.0 AppPanel.qml
+AppRow 1.0 AppRow.qml

@@ -1,0 +1,6 @@
+module UiShell.Adapters
+AppRunner 1.0 AppRunner.qml
+QmlSettingsFile 1.0 QmlSettingsFile.qml
+ComponentSettings 1.0 ComponentSettings.qml
+ThemeProfiles 1.0 ThemeProfiles.qml
+singleton ControlTuningStore 1.0 ControlTuningStore.qml

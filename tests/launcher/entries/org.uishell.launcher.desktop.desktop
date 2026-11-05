@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=UiShell Launcher Example
+GenericName=Runner Contract Test
+Icon=application-x-executable
+Exec=/usr/bin/true "one argument" %c
+Keywords=fixture;runner;
+Terminal=false

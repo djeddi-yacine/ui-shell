@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Scratch recipe input only: never persist or apply the draft.
+set -euo pipefail
+[[ $# == 6 ]] || { printf '%s\n' 'Usage: render-wallpaper-selection RUNTIME TARGET FOLDER_ID FILENAME FIT_MODE OUTPUT_JSON' >&2; exit 2; }
+runtime=$1 target=$2 folder=$3 name=$4 fit=$5 output=$6
+[[ $folder =~ ^[A-Za-z0-9_-]+$ && -n $name && $name != */* && $name != . && $name != .. && $name != *'"'* && $name != *'\'* && $target != *'"'* && $target != *'\'* ]] || { printf '%s\n' 'Invalid wallpaper filename or output.' >&2; exit 2; }
+if ! jq -en --arg target "$target" --arg name "$name" --arg fit "$fit" '
+  ($target | test("[=\u0000-\u001f\u007f]|^\\s|\\s$") | not) and
+  ($name | test("[\u0000-\u001f\u007f]") | not) and (["contain","cover","tile","fill"] | index($fit)!=null)
+' >/dev/null; then
+  printf '%s\n' 'Invalid wallpaper filename, output, or fit mode.' >&2
+  exit 2
+fi
+[[ $(realpath -m -- "$output") != $(realpath -e -- "$runtime") ]] || { printf '%s\n' 'Draft must not overwrite its runtime input.' >&2; exit 2; }
+directory=$(jq -er --arg id "$folder" '([.wallpaperFolders[] | select(.id==$id) | .path] | first) // error("Unknown configured wallpaper folder: " + $id)' "$runtime")
+[[ -f $directory/$name ]] || { printf '%s\n' 'Selected configured wallpaper is missing.' >&2; exit 1; }
+mode=$(jq -er '.wallpaper.color_mode' "$runtime")
+hash=$(sha256sum <"$directory/$name"); hash=${hash%% *}
+key="$hash-$mode-v2"
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+jq --arg target "$target" --arg folder "$folder" --arg name "$name" --arg fit "$fit" --arg key "$key" '
+  {folder:$folder,path:$name,fit_mode:$fit,palette_key:$key} as $choice |
+  .wallpaper |= (if $target=="" then .default=$choice else .monitors[$target]=$choice end)
+' "$runtime" >"$work/runtime.json"
+"$(jq -er '.commands.readWallpaperSelections' "$runtime")" "$work/runtime.json" >/dev/null
+jq -cS '.wallpaper' "$work/runtime.json" >"$output"
+printf '%s\n' "$key"

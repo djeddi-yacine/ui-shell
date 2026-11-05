@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-launcher-settings SHOW_ICONS VISIBLE_ROWS' >&2; exit 2; }
+case $1 in true|false|undefined) ;; *) printf '%s\n' 'showIcons must be true, false, or undefined.' >&2; exit 2;; esac
+case $2 in undefined) ;; *) [[ $2 =~ ^([1-9]|1[0-9]|2[0-4])$ ]] || { printf '%s\n' 'visibleRows must be an integer from 1 to 24 or undefined.' >&2; exit 2; };; esac
+printf 'import QtQuick\n\nQtObject {\n    property var showIcons: %s\n    property var visibleRows: %s\n}\n' "$1" "$2"

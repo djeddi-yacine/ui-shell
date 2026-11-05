@@ -1,0 +1,7 @@
+# sha512  name  url   (images are not tracked; tools/scripts/fetch-wallpapers downloads and verifies them)
+8976dd4cac3fbd154d3d01ecea84f34968b3a4089de51926b38be5e074a137bd22c2abb39e713df89086d07272c93606bf986d988e433886419c9785613e1dfb  wallhaven-01.jpg  https://i.8upload.com/image/e1db4fcd8cd881c5/wallhaven-01.jpg
+e86ffe08e4c648d4b9465cff3b4e3d565fae9a33034fd7433f0273fc467c9309c104b7f6a8cdb4c5d6d513e7e741cc59c3fab9bc0c5fcb184a54a51149b7f90b  wallhaven-02.png  https://i.8upload.com/image/4c38d0560eaf3305/wallhaven-02.png
+d590fded126eab99ae78747e1d9ba656abf4224c6cc185caf2b51de6ddfb5e1b15b2b5921b006eac6de53c2fc49299a4f5435323648881215cba0faed15bfc9e  wallhaven-03.png  https://i.8upload.com/image/088eea963539a569/wallhaven-03.png
+898b8eba931f68a28b32a20f2b98fe202de3cb9717e15f380d87be011705590349c6a222f4eac6995fe4e69649dce89345bdb48737434be81c007713d6d7471b  wallhaven-04.png  https://i.8upload.com/image/cf70852366ae41c7/wallhaven-04.png
+2b0428060d2efbd9e507cafdce4036289e3df2fbf6dbf7a6aaef012eee1e674da3199525fe6d298276b5b775b6b07ff215796d9c3f7095c96658c2339019c1c3  wallhaven-05.png  https://i.8upload.com/image/cb492852c0e14645/wallhaven-05.png
+614dd0325022020a2e896843769c24dd4baa608128c55009f0c4da91ec6f4236a214566c40102c91c54c71030dfb8d738525489b605abef8910e3017f0084f07  wallhaven-06.jpg  https://i.8upload.com/image/12815c1aacb1167e/wallhaven-06.jpg

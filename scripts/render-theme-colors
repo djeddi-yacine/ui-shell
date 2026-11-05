@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if (( $# != 2 )); then
+  printf '%s\n' 'Usage: render-theme-colors INPUT_JSON OUTPUT_INI' >&2
+  exit 2
+fi
+input=$1 output=$2
+rendered=$(jq -ers '
+  def complete_colors:
+    . as $colors | ["accent","selection","muted","background","dark_background","darker_background","lighter_background","foreground","dark_foreground","light_foreground","bright_foreground","red","yellow","orange","green","cyan","blue","magenta","brown","bright_red","bright_yellow","bright_green","bright_cyan","bright_blue","bright_magenta"] | all(.[]; . as $key | $colors | has($key));
+  def valid_colors:
+    type == "object" and length > 0 and
+    (to_entries | all(.[]; (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string" and test("^#[0-9A-Fa-f]{6}$"))));
+  def valid_border:
+    split(" ") as $parts |
+    ($parts[-1] | test("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)deg$")) as $angled |
+    (if $angled then $parts[:-1] else $parts end) as $stops |
+    ($stops | length) > 0 and all($stops[]; test("^(rgb\\([0-9A-Fa-f]{6}\\)|rgba\\([0-9A-Fa-f]{8}\\))$")) and (($angled | not) or ($stops | length) > 1);
+  ["background","surface","surfaceVariant","elevated","text","textMuted",
+   "accent","positive","warning","negative","outline","focus","scrim"] as $roles |
+  if length != 1 then error("expected one palette") else .[0] end |
+  if type != "object" or (keys | sort) != (($roles + ["schema","mode","colors","hyprland"]) | sort) then error("invalid palette fields")
+  elif .schema != 2 then error("schema must be 2")
+  elif (.mode != "dark" and .mode != "light") then error("mode must be dark or light")
+  elif ([$roles[] as $role | .[$role]] | all(type == "string" and test("^#[0-9A-Fa-f]{6}$")) | not) then error("invalid shell role")
+  elif (.colors | complete_colors | not) then error("missing named palette slots")
+  elif (.colors | valid_colors | not) then error("invalid named colors")
+  elif (.hyprland | type != "object" or (keys | sort) != ["active_border","inactive_border"]) then error("invalid Hyprland metadata")
+  elif ([.hyprland.active_border, .hyprland.inactive_border] | all(type == "string" and valid_border) | not) then error("invalid Hyprland border expression")
+  else . as $theme
+    | ["[palette]", "schema = 2", "mode = " + $theme.mode]
+      + [$roles[] as $role | $role + " = " + $theme[$role]]
+      + ["", "[colors]"]
+      + ($theme.colors | to_entries | sort_by(.key) | map(.key + " = " + .value))
+      + ["", "[hyprland]", "active_border = " + $theme.hyprland.active_border,
+         "inactive_border = " + $theme.hyprland.inactive_border]
+      | join("\n")
+  end
+' "$input")
+temporary=$(mktemp "$(dirname -- "$output")/.$(basename -- "$output").XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+printf '%s\n' "$rendered" >"$temporary"
+mv -f -- "$temporary" "$output"

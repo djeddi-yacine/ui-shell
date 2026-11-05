@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source /project/tests/nested.conf
+
+# app2unit still parses the desktop entry. Only its systemd-run transport is
+# replaced, through this test session's private PATH, never the production PATH.
+if [[ ${0##*/} == systemd-run ]]; then
+  unit=${UI_SHELL_TEST_APP_UNIT:?Run-owned scope required}
+  slice=${UI_SHELL_TEST_APP_SLICE:?Run-owned slice required}
+  log=${UI_SHELL_TEST_APP_LOG:?Private launch log required}
+  env -u XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS="$UI_SHELL_TEST_MANAGER_BUS" \
+    /usr/bin/systemd-run \
+    --setenv="XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" \
+    --setenv="DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" \
+    --setenv="PATH=$UI_SHELL_TEST_APP_PATH" \
+    "$@" >"$log" 2>&1 </dev/null &
+  launcher_pid=$!
+  deadline=$((SECONDS + test_app2unit_seconds))
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$launcher_pid" 2>/dev/null; then
+      # A short-lived app can finish and its scope can be collected between
+      # polls. Native systemd-run exit 0 confirms that valid completed launch.
+      status=0
+      wait "$launcher_pid" || status=$?
+      [[ $status == 0 ]] || sed -n '1,80p' "$log" >&2
+      exit "$status"
+    fi
+    state=$(timeout 1 env -u XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS="$UI_SHELL_TEST_MANAGER_BUS" \
+      systemctl --user show "$unit" -p ActiveState -p Slice 2>/dev/null) || state=
+    if [[ $state == *'ActiveState=active'* && $state == *"Slice=$slice"* ]]; then
+      printf 'Launch handed off: %s\n' "$unit"
+      exit 0
+    fi
+    sleep "$test_poll_seconds"
+  done
+  timeout 1 env -u XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS="$UI_SHELL_TEST_MANAGER_BUS" \
+    systemctl --user stop "$unit" 2>/dev/null || true
+  kill -TERM "$launcher_pid" 2>/dev/null || true
+  wait "$launcher_pid" 2>/dev/null || true
+  printf 'Test app2unit handoff timed out after %ss.\n' "$test_app2unit_seconds" >&2
+  sed -n '1,80p' "$log" >&2
+  exit 1
+fi
+
+[[ $# == 2 && $1 == -- && $2 == *.desktop && $2 != */* ]] || {
+  printf '%s\n' 'Test runner expects -- desktop-entry-id.desktop.' >&2; exit 2;
+}
+[[ -n ${UI_SHELL_TEST_MANAGER_BUS-} && -n ${UI_SHELL_TEST_APP_SLICE-} ]] || {
+  printf '%s\n' 'Test runner has no session-owned manager transport.' >&2; exit 1;
+}
+launch_dir=$(mktemp -d /artifacts/app-launch.XXXXXX)
+export UI_SHELL_TEST_APP_UNIT="${UI_SHELL_TEST_PREFIX:?}-${launch_dir##*.}.scope"
+export UI_SHELL_TEST_APP_LOG="$launch_dir/launch.log"
+printf '%s\n' "$UI_SHELL_TEST_APP_UNIT" >>/artifacts/app-units.log
+export UI_SHELL_TEST_APP_PATH=$PATH
+export PATH="$test_runtime/app2unit-bin:$PATH"
+exec /usr/bin/app2unit -t scope -c -x -s "$UI_SHELL_TEST_APP_SLICE" \
+  -p "TimeoutStopSec=${test_cleanup_seconds}s" \
+  -u "$UI_SHELL_TEST_APP_UNIT" -- "$2"

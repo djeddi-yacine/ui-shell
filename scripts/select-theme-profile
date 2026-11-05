@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# CAS-commit one recipe; activation publishes a complete bundle and applies once.
+set -Eeuo pipefail
+shopt -s inherit_errexit
+umask 077
+[[ $# == 4 ]] || { printf '%s\n' 'Usage: select-theme-profile ACTION PROFILE_INI EXPECTED_REVISION OUTPUT_NAME' >&2; exit 2; }
+action=$1 profile_input=$2 expected=$3 target=$4
+[[ $action == persist || $action == activate ]] || { printf '%s\n' 'Action must be persist or activate.' >&2; exit 2; }
+[[ $expected =~ ^[a-f0-9]{64}$ ]] || { printf '%s\n' 'Expected revision must be a SHA-256 digest.' >&2; exit 2; }
+jq -en --arg target "$target" '$target|test("[=\u0000-\u001f\u007f]|^\\s|\\s$")|not' >/dev/null
+selected=0
+trap 'status=$?; if [[ $selected == 1 ]]; then printf "%s\n" "Profile selected and valid; runtime/native apply incomplete." >&2; exit 4; fi; exit "$status"' ERR
+bootstrap=${UI_SHELL_RUNTIME:?resolved runtime data required}
+manifest=$(jq -er '.configFile' "$bootstrap")
+resolver=$(jq -er '.commands.readShellConfig' "$bootstrap")
+reader=$(jq -er '.commands.readIni' "$bootstrap")
+lock="$manifest.theme.lock"
+[[ ! -L $lock ]] || { printf '%s\n' 'Theme lock is a symlink.' >&2; exit 1; }
+if [[ -n ${UI_SHELL_THEME_LOCK_FD-} ]]; then
+  lock_fd=$UI_SHELL_THEME_LOCK_FD
+  [[ $lock_fd =~ ^[0-9]+$ && $(readlink -- "/proc/$$/fd/$lock_fd") == "$lock" ]] || { printf '%s\n' 'Invalid inherited theme lock.' >&2; exit 1; }
+else
+  exec {lock_fd}>"$lock"
+fi
+flock -x "$lock_fd"
+work=$(mktemp -d)
+recipe_temp='' manifest_temp=''
+trap 'rm -rf -- "$work"; if [[ -n $recipe_temp ]]; then rm -f -- "$recipe_temp"; fi; if [[ -n $manifest_temp ]]; then rm -f -- "$manifest_temp"; fi' EXIT
+before=$(sha256sum -- "$manifest")
+runtime="$work/active.json"
+"$resolver" "$manifest" "$reader" >"$runtime"
+root=$(jq -er '.configRoot' "$runtime")
+profiles=$(jq -er '.paths.profiles' "$runtime")
+themes=$(jq -er '.paths.themes' "$runtime")
+profile_reader=$(jq -er '.commands.readThemeProfile' "$runtime")
+state_reader=$(jq -er '.commands.readThemeState' "$runtime")
+"$state_reader" "$runtime" >"$work/state.json"
+[[ $(jq -er '.revision' "$work/state.json") == "$expected" ]] || { printf '%s\n' 'Stale theme revision.' >&2; exit 3; }
+profile=$profile_input
+[[ $profile == /* ]] || profile="$root/$profile"
+[[ -f $profile && $(realpath -e -- "$profile") == "$(realpath -e -- "$profiles")/"* ]] || { printf '%s\n' 'Selected profile must be in configured profiles.' >&2; exit 1; }
+"$profile_reader" "$profile" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
+while IFS= read -r definition; do
+  [[ -f $definition && ! -L $definition ]] || {
+    printf 'Selected Theme definition is missing from configured storage: %s\n' "$definition" >&2; exit 1;
+  }
+done < <(jq -r '[.theme.definition, (.theme.definitionOverrides | .[])] | .[] | select(length > 0)' "$work/profile.json")
+id=$(jq -er '.theme.id' "$work/profile.json")
+base="$profiles/$id"
+current=$base
+while [[ $current != "$root" ]]; do
+  [[ ! -L $current && $current == "$root/"* ]] || { printf '%s\n' 'Unsafe profile storage.' >&2; exit 1; }
+  current=${current%/*}
+done
+mkdir -p -- "$base"
+[[ ! -L $base/profile.ini ]] || { printf '%s\n' 'Selected recipe is a symlink.' >&2; exit 1; }
+recipe_temp=$(mktemp "$base/.selection.XXXXXX.ini")
+cp -- "$profile" "$recipe_temp"
+"$profile_reader" "$recipe_temp" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first) | del(.bundle)' "$runtime" >"$work/candidate.json"
+"$(jq -er '.commands.readWallpaperSelections' "$runtime")" "$work/candidate.json" >"$work/selections.json"
+# Persist validates inputs without extracting unused palettes or rendering natives.
+while IFS= read -r palette; do
+  printf '%s\n' "$palette" >"$work/palette.json"
+  "$(jq -er '.commands.renderThemeColors' "$runtime")" "$work/palette.json" "$work/validated.ini"
+done < <(jq -c '.profileColors | select(.!=null) | .defaultPalette,.byOutput[]' "$work/candidate.json")
+mode=$(jq -er '.colorMode' "$work/selections.json")
+while IFS= read -r entry; do
+  hash=$(sha256sum <"$(jq -er '.path' <<<"$entry")"); hash=${hash%% *}
+  [[ $(jq -er '.paletteKey' <<<"$entry") == "$hash-$mode-v2" ]] || { printf '%s\n' 'Wallpaper content changed; select it again.' >&2; exit 1; }
+done < <(jq -c '.wallpapers[]' "$work/selections.json")
+if [[ $action == activate ]]; then
+  "$(jq -er '.commands.compileThemeProfile' "$runtime")" "$work/candidate.json" >"$work/bundle.json"
+fi
+[[ ! -L $manifest && $(sha256sum -- "$manifest") == "$before" ]] || { printf '%s\n' 'Manifest changed during selection.' >&2; exit 3; }
+"$state_reader" "$runtime" >"$work/current-state.json"
+[[ $(jq -er '.revision' "$work/current-state.json") == "$expected" ]] || { printf '%s\n' 'Stale theme revision.' >&2; exit 3; }
+relative="${base#"$root/"}/profile.ini"
+manifest_temp=$(mktemp "${manifest%/*}/.theme-manifest.XXXXXX")
+UI_SHELL_SELECTED_PROFILE="$relative" awk '
+  /^[[:space:]]*\[/ {section=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", section)}
+  section=="[theme]" && /^[[:space:]]*profile[[:space:]]*=/ {print "profile = " ENVIRON["UI_SHELL_SELECTED_PROFILE"]; count++; next}
+  {print}
+  END {if(count!=1) exit 1}
+' "$manifest" >"$manifest_temp"
+chmod --reference="$manifest" "$manifest_temp"
+mv -f -- "$recipe_temp" "$base/profile.ini"
+recipe_temp=''
+selected=1
+mv -f -- "$manifest_temp" "$manifest"
+manifest_temp=''
+[[ $action == activate ]] || exit 0
+# From here failures report honest partial native application of valid saved policy.
+"$resolver" "$manifest" "$reader" >"$work/committed.json"
+UI_SHELL_RUNTIME=$("$(jq -er '.commands.prepareRuntime' "$runtime")" "$work/committed.json")
+export UI_SHELL_RUNTIME
+UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$UI_SHELL_RUNTIME")
+export UI_SHELL_RUNTIME_LUA
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE-} ]]; then
+  hyprctl -j monitors >"$work/monitors.json"
+  failed=0
+  while IFS= read -r entry; do
+    output=$(jq -r '.id' <<<"$entry")
+    if [[ -z $output ]] || jq -e --arg output "$output" 'any(.name==$output)' "$work/monitors.json" >/dev/null; then
+      image=$(jq -er '.path' <<<"$entry")
+      fit=$(jq -er '.fitMode' <<<"$entry")
+      if ! "$(jq -er '.commands.applyWallpaper' "$runtime")" "$output" "$image" "$fit" >&2; then
+        printf 'Native apply failed for: %s\n' "$(jq -er '.label' <<<"$entry")" >&2
+        failed=1
+      fi
+    fi
+  done < <(jq -c '.wallpapers[]' "$work/selections.json")
+  if ! hyprctl reload >&2; then printf '%s\n' 'Native Hyprland reload failed.' >&2; failed=1; fi
+  [[ $failed == 0 ]]
+fi
+choice=$(jq -ce --arg target "$target" '.wallpapers | (map(select(.id==$target)) + map(select(.id==""))) | first' "$work/selections.json")
+"$(jq -er '.commands.readThemeEditor' "$runtime")" "$target" '' \
+  "$(jq -er '.folderId' <<<"$choice")" "$(jq -er '.name' <<<"$choice")" "$(jq -er '.fitMode' <<<"$choice")" policy

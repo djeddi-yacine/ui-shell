@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+test_home=$(mktemp -d /tmp/ui-shell-hypr-config.XXXXXX)
+cleanup() {
+  local status=$?
+  trap - EXIT
+  [[ $test_home == /tmp/ui-shell-hypr-config.* && $(realpath -m -- "$test_home") == "$test_home" ]] || {
+    printf 'Refusing unsafe test cleanup: %s\n' "$test_home" >&2
+    exit 1
+  }
+  rm -rf -- "$test_home"
+  exit "$status"
+}
+trap cleanup EXIT
+
+config_root=$test_home/.config/ui-shell
+runtime_dir=$test_home/runtime
+mkdir -m 0700 -p -- "$runtime_dir"
+export HOME=$test_home
+export XDG_CONFIG_HOME=$test_home/.config
+export XDG_CACHE_HOME=$test_home/.cache
+export XDG_DATA_HOME=$test_home/.local/share
+export XDG_STATE_HOME=$test_home/.local/state
+export XDG_RUNTIME_DIR=$runtime_dir
+
+bash "$project_root/tools/scripts/stage-config" "$project_root" "$config_root" >/dev/null
+resolved=$test_home/resolved.json
+bash "$config_root/scripts/read-shell-config" "$config_root/config.ini" \
+  "$config_root/scripts/read-ini" >"$resolved"
+export UI_SHELL_RUNTIME
+UI_SHELL_RUNTIME=$(bash "$config_root/scripts/prepare-runtime" "$resolved")
+export UI_SHELL_RUNTIME_LUA
+UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$UI_SHELL_RUNTIME")
+
+for config in "$config_root/hypr/hyprland.lua" "$config_root/hypr/nested.lua"; do
+  (cd -- "$test_home" && Hyprland --verify-config --config "$config")
+done
+printf '%s\n' 'Production and nested Hyprland configs passed in private XDG state.'

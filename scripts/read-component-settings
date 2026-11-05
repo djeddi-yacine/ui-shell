@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 3 ]] || { printf '%s\n' 'Usage: read-component-settings COMPONENT SCOPE OUTPUT' >&2; exit 2; }
+resolver=$(jq -er '.commands.componentSettingsPath' "${UI_SHELL_RUNTIME:?resolved runtime data required}")
+path=$("$resolver" "$1" "$2" "$3")
+if [[ -e $path ]]; then
+  [[ -f $path && ! -L $path ]] || { printf '%s\n' 'Settings path is not a regular file.' >&2; exit 1; }
+  revision=$(sha256sum -- "$path")
+  revision=${revision%% *}
+else
+  revision=absent
+fi
+printf '%s\n%s\n' "$path" "$revision"

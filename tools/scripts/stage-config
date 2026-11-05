@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Development deployment only. Install runtime files, never tools/ or tests/.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: stage-config SOURCE_ROOT DESTINATION' >&2; exit 2; }
+source_root=$(realpath -- "$1")
+destination=$(realpath -m -- "$2")
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+[[ $destination != "$source_root" && $destination != / ]] || { printf '%s\n' 'Use a separate staging directory.' >&2; exit 2; }
+[[ ! -L $destination/hypr && ! -L $destination/hypr/user ]] ||
+  { printf '%s\n' 'Refusing symlinked Hyprland runtime storage.' >&2; exit 2; }
+mkdir -p -- "$destination/scripts" "$destination/quickshell" "$destination/hypr"
+cp -a -- "$source_root/scripts/." "$destination/scripts/"
+cp -a -- "$source_root/shell/." "$destination/quickshell/"
+# The monitor policy is user-owned after the first staging. Preserve it while
+# refreshing every other runtime file, including the shipped empty default.
+policy=$destination/hypr/user/monitors.lua
+saved_policy=''
+restore_policy() {
+  local status=$?
+  trap - EXIT
+  if [[ -n $saved_policy ]]; then
+    cp -f -- "$saved_policy" "$policy" 2>/dev/null || true
+    rm -f -- "$saved_policy"
+  fi
+  exit "$status"
+}
+trap restore_policy EXIT
+if [[ -f $policy && ! -L $policy ]]; then
+  saved_policy=$(mktemp)
+  cp -- "$policy" "$saved_policy"
+fi
+cp -a -- "$source_root/hypr/." "$destination/hypr/"
+if [[ -n $saved_policy ]]; then
+  mv -f -- "$saved_policy" "$policy"
+  saved_policy=''
+fi
+trap - EXIT
+# One clean default seed; user-created themes and profiles are never rewritten.
+bash "$script_directory/stage-defaults" "$source_root" "$destination"
+[[ -e $destination/config.ini ]] || cp -- "$source_root/tools/config.ini" "$destination/config.ini"
+source_manifest=$("$source_root/scripts/read-ini" "$source_root/tools/config.ini")
+# Validate the installed manifest only: the source tree has no runtime stores,
+# so a source-root profile resolution is not a valid installation check.
+# Absolute/XDG folder choices remain user-owned and are never created or
+# rewritten by development staging.
+"$source_root/scripts/read-shell-config" "$destination/config.ini" "$source_root/scripts/read-ini" >/dev/null
+installed_manifest=$("$source_root/scripts/read-ini" "$destination/config.ini")
+while IFS= read -r entry; do
+  folder_id=$(jq -er '.key' <<<"$entry")
+  folder_path=$(jq -er '.value' <<<"$entry")
+  [[ $folder_path != /* && $folder_path != '${'* ]] || continue
+  [[ $(jq -r --arg id "$folder_id" '.wallpaper_folders[$id] // empty' <<<"$installed_manifest") == "$folder_path" ]] || continue
+  [[ -d $source_root/$folder_path ]] || continue
+  asset_link=$destination/$folder_path
+  [[ -e $asset_link || -L $asset_link ]] && continue
+  [[ $(realpath -m -- "$asset_link") == "$destination/"* ]] || { printf '%s\n' 'Asset link must remain inside staging.' >&2; exit 2; }
+  mkdir -p -- "${asset_link%/*}"
+  ln -s -- "$source_root/$folder_path" "$asset_link"
+done < <(jq -c '.wallpaper_folders | to_entries[]' <<<"$source_manifest")
+printf '%s\n' "$destination/config.ini"

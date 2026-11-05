@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# One durable recipe: full saved colors and explicit wallpaper choices.
+set -euo pipefail
+[[ $# == 5 ]] || { printf '%s\n' 'Usage: read-theme-profile PROFILE_INI CONFIG_ROOT PROFILE_STORE THEME_STORE INI_READER' >&2; exit 2; }
+profile_input=$1 root=$(realpath -e -- "$2") profiles=$(realpath -e -- "$3") themes=$(realpath -e -- "$4") reader=$5
+profile=$(realpath -e -- "$profile_input")
+[[ -d $profiles && -d $themes && -f $profile_input && ! -L $profile_input && $profile == "$profiles/"* ]] || {
+  printf '%s\n' 'Profile must be a regular file inside configured profile storage.' >&2; exit 1;
+}
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+cp -- "$profile" "$work/profile.ini"
+hash=$(sha256sum <"$work/profile.ini"); hash=${hash%% *}
+profile_json=$("$reader" "$work/profile.ini" | jq -ce --arg root "$root" --arg profile "$profile" --arg hash "$hash" '
+  def exact($fields): if keys == ($fields | sort) then . else error("missing/unknown recipe fields") end;
+  def output: if type != "string" or test("[=\u0000-\u001f\u007f]|^\\s|\\s$") then error("invalid exact output") else . end;
+  def definition:
+    if .=="" then . elif type!="string" or startswith("/") or contains("${") or test("[\u0000-\u001f\u007f]") or
+      (split("/") | any(.=="" or .=="." or .=="..")) then error("Theme identity must be config-root-relative") else $root+"/"+. end;
+  . as $recipe |
+  (.profile | exact(["schema","id"])) as $header |
+  (.theme | exact(["source","definition"])) as $theme |
+  (.wallpaper | exact(["schema","cache_namespace","color_mode","hyprpaper_ipc"])) as $wallpaper |
+  if $header.schema!="2" or ($header.id | test("^[a-z0-9]+(-[a-z0-9]+)*$") | not) then error("profile needs schema 2 and a safe ID") else . end |
+  if $theme.source!="wallpaper" and $theme.source!="file" then error("invalid palette source") else . end |
+  if $wallpaper.schema!="1" or ($wallpaper.color_mode!="dark" and $wallpaper.color_mode!="light") or
+    ($wallpaper.hyprpaper_ipc!="true" and $wallpaper.hyprpaper_ipc!="false") or
+    ($wallpaper.cache_namespace | test("^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$") | not) then error("invalid wallpaper policy") else . end |
+  if (.palette_outputs | type)!="object" or (.definition_overrides | type)!="object" then error("palette scopes and identities are required") else . end |
+  (.palette_outputs | to_entries | map(.key as $scope | (.value | output) as $output |
+    if ($scope | test("^[a-z][a-z0-9-]*$") | not) then error("invalid palette scope") else . end |
+    ($recipe["palette."+$scope] | exact(["schema","mode","background","surface","surfaceVariant","elevated","text","textMuted","accent","positive","warning","negative","outline","focus","scrim"])) as $palette |
+    if $palette.schema!="2" then error("invalid snapshot schema") else . end |
+    {scope:$scope,output:$output,palette:($palette + {schema:2,colors:$recipe["colors."+$scope],
+      hyprland:($recipe["hyprland."+$scope] | exact(["active_border","inactive_border"]))})})) as $palettes |
+  if ($palettes | map(.output) | unique | length)!=($palettes | length) or
+    ($palettes | any((.scope=="default")!=(.output==""))) then error("invalid/duplicate palette output") else . end |
+  if $theme.source=="file" and ([$palettes[] | select(.scope=="default" and .output=="")] | length)!=1 then error("file profile needs a default palette") else . end |
+  if $theme.source=="wallpaper" and (($palettes | length)!=0 or $theme.definition!="" or (.definition_overrides | length)!=0)
+    then error("wallpaper source cannot carry file snapshots or identities") else . end |
+  ([to_entries[] | select(.key | startswith("wallpaper.")) | .key as $section |
+    (.value | exact(["output","folder","path","fit_mode","palette_key"])) as $selection |
+    ($selection.output | output) as $output |
+    if (($section=="wallpaper.default")!=($output=="")) then error("invalid default wallpaper scope") else . end |
+    {section:$section,output:$output,selection:($selection | del(.output))}]) as $selections |
+  if ([$selections[] | select(.output=="")] | length)!=1 or ($selections | map(.output) | unique | length)!=($selections | length)
+    then error("one default and unique wallpaper outputs required") else . end |
+  if (keys | sort)!=((["profile","theme","wallpaper","palette_outputs","definition_overrides"]+
+    ($selections | map(.section))+($palettes | map(.scope as $s | ["palette."+$s,"colors."+$s,"hyprland."+$s]) | add // [])) | sort)
+    then error("unknown/missing profile sections") else . end |
+  ($palettes | map({key:.output,value:.palette}) | from_entries) as $by_output |
+  if (.definition_overrides | keys | any(. as $o | $by_output | has($o) | not)) then error("identity override needs a palette snapshot") else . end |
+  {theme:{profile:$profile,id:$header.id,source:$theme.source,definition:($theme.definition | definition),
+    definitionOverrides:(.definition_overrides | with_entries(.key |= output | .value |= definition))},
+   recipeHash:$hash,
+   wallpaper:($wallpaper | .schema=1 | .hyprpaper_ipc=(.hyprpaper_ipc=="true") |
+     .default=($selections[] | select(.output=="") | .selection) |
+     .monitors=($selections | map(select(.output!="") | {key:.output,value:.selection}) | from_entries)),
+   profileColors:(if $theme.source=="file" then {defaultPalette:$by_output[""],byOutput:($by_output | del(.[""]))} else null end)}
+')
+check_theme_definition() {
+  local path=$1 canonical
+  [[ ${path##*/} == config.ini && $path == "$root/"* ]] || {
+    printf 'Theme definition must be config-root-relative and inside configured Theme storage: %s\n' "$path" >&2; exit 1;
+  }
+  if [[ -e $path || -L $path ]]; then
+    [[ -f $path && ! -L $path ]] || {
+      printf 'Theme definition must be a regular config.ini: %s\n' "$path" >&2; exit 1;
+    }
+  fi
+  canonical=$(realpath -m -- "$path")
+  [[ $canonical == "$themes/"* ]] || {
+    printf 'Theme definition is outside configured Theme storage: %s\n' "$path" >&2; exit 1;
+  }
+  local current=${path%/*}
+  while [[ $current != "$themes" ]]; do
+    [[ $current == "$themes/"* && ! -L $current ]] || {
+      printf 'Theme definition crosses an unsafe Theme storage path: %s\n' "$path" >&2; exit 1;
+    }
+    current=${current%/*}
+  done
+}
+while IFS= read -r definition; do
+  [[ -z $definition ]] || check_theme_definition "$definition"
+done < <(jq -r '[.theme.definition, (.theme.definitionOverrides | .[])] | .[] | select(length > 0)' <<<"$profile_json")
+printf '%s\n' "$profile_json"

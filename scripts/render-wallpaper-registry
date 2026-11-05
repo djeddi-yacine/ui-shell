@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Native Lua projection; recipe choices remain durable configuration.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-wallpaper-registry WALLPAPER_JSON OUTPUT_LUA' >&2; exit 2; }
+temporary=$(mktemp "${2}.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+jq -er '
+  def lua:
+    if type=="object" then "{\n"+([to_entries | sort_by(.key)[] |
+      "  ["+(.key | tojson)+"] = "+(.value | lua)+","] | join("\n"))+"\n}"
+    elif type=="string" or type=="number" or type=="boolean" then tojson
+    else error("unsupported wallpaper value") end;
+  "-- Compiled wallpaper choices. Edit the profile recipe.\nreturn "+lua+"\n"
+' "$1" >"$temporary"
+mv -f -- "$temporary" "$2"

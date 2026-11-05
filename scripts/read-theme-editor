@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Publish an active-CAS-qualified draft without selecting or applying its base.
+set -euo pipefail
+[[ $# == 6 ]] || { printf '%s\n' 'Usage: read-theme-editor OUTPUT BASE_PROFILE_PATH FOLDER_ID FILENAME FIT_MODE COLOR_REQUEST' >&2; exit 2; }
+output_name=$1 base_profile=$2 folder_id=$3 wallpaper_name=$4 fit_mode=$5 color_request=$6 runtime=$UI_SHELL_RUNTIME
+[[ $color_request == policy || $color_request == wallpaper ]] || { printf '%s\n' 'Color request must be policy or wallpaper.' >&2; exit 2; }
+resolver=$(jq -er '.commands.readShellConfig' "$runtime")
+reader=$(jq -er '.commands.readIni' "$runtime")
+manifest=$(jq -er '.configFile' "$runtime")
+work=$(mktemp -d)
+temporary=''
+trap 'rm -rf -- "$work"; if [[ -n $temporary ]]; then rm -f -- "$temporary"; fi' EXIT
+"$resolver" "$manifest" "$reader" >"$work/runtime.json"
+state_reader=$(jq -er '.commands.readThemeState' "$work/runtime.json")
+catalog=$(jq -er '.commands.themeCatalog' "$work/runtime.json")
+renderer=$(jq -er '.commands.renderThemeEditor' "$work/runtime.json")
+directory=$(jq -er '.paths.runtime + "/theme-editor"' "$work/runtime.json")
+mkdir -p -- "$directory"
+"$state_reader" "$work/runtime.json" >"$work/state.json"
+"$catalog" "$work/runtime.json" >"$work/catalog.json"
+root=$(jq -er '.configRoot' "$work/runtime.json")
+profiles=$(jq -er '.paths.profiles' "$work/runtime.json")
+themes=$(jq -er '.paths.themes' "$work/runtime.json")
+profile_reader=$(jq -er '.commands.readThemeProfile' "$work/runtime.json")
+[[ -n $base_profile ]] || base_profile=$(jq -er '.theme.profile' "$work/runtime.json")
+[[ $base_profile == /* ]] || base_profile="$root/$base_profile"
+[[ $(realpath -e -- "$base_profile") == "$(realpath -e -- "$profiles")/"* ]] || { printf '%s\n' 'Draft base must be in the profiles directory.' >&2; exit 1; }
+"$profile_reader" "$base_profile" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
+jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$work/runtime.json" >"$work/base.json"
+if cmp -s -- "$work/runtime.json" "$work/base.json"; then
+  cp -- "$work/state.json" "$work/base-state.json"
+else
+  "$state_reader" "$work/base.json" >"$work/base-state.json"
+fi
+definition=$(jq -r --arg output "$output_name" '.definitionOverrides[$output] // .definition' "$work/base-state.json")
+if [[ -n $definition ]]; then
+  jq -e --arg path "$definition" '.palettes|any(.path==$path)' "$work/catalog.json" >/dev/null || {
+    printf 'Selected Theme definition is missing from configured storage: %s\n' "$definition" >&2; exit 1;
+  }
+fi
+transformer=$(jq -er '.commands.renderWallpaperSelection' "$work/base.json")
+selection_reader=$(jq -er '.commands.readWallpaperSelections' "$work/base.json")
+cache_colors=$(jq -er '.commands.cacheWallpaperColors' "$work/base.json")
+"$transformer" "$work/base.json" "$output_name" "$folder_id" "$wallpaper_name" "$fit_mode" "$work/wallpapers.json" >/dev/null
+jq --slurpfile wallpaper "$work/wallpapers.json" '.wallpaper=($wallpaper|first)' "$work/base.json" >"$work/draft.json"
+"$selection_reader" "$work/draft.json" >"$work/selections.json"
+jq -e --arg output "$output_name" '.wallpapers[]|select(.id==$output)' "$work/selections.json" >"$work/wallpaper.json"
+image=$(jq -er '.path' "$work/wallpaper.json")
+key=$(jq -er '.paletteKey' "$work/wallpaper.json")
+colors="$work/draft-colors.json"
+if [[ $color_request == wallpaper || $(jq -er '.source' "$work/base-state.json") == wallpaper ]]; then
+  colors=$(jq -er '.colorsPath' "$work/wallpaper.json")
+  color_mode=$(jq -er '.colorMode' "$work/selections.json")
+  namespace=$(jq -er '.cacheNamespace' "$work/selections.json")
+  UI_SHELL_RUNTIME="$work/base.json" "$cache_colors" "$image" "$color_mode" "$namespace" "$key" >/dev/null
+else
+  # The saved Theme can open immediately; image colors are requested on selection.
+  jq -n 'null' >"$colors"
+fi
+jq -cS --slurpfile active "$work/state.json" --slurpfile catalog "$work/catalog.json" \
+  --slurpfile wallpaper "$work/wallpaper.json" --slurpfile colors "$colors" --arg output "$output_name" '
+  .baseRevision=.revision | .revision=($active|first|.revision)
+  | . + ($catalog|first) | .mode=(.byOutput[$output] // .defaultPalette).mode
+  | .draftWallpaper=($wallpaper|first|del(.colorsPath)|.colors=($colors|first))
+' "$work/base-state.json" >"$work/snapshot.json"
+revision=$(jq -er '.revision' "$work/snapshot.json")
+temporary=$(mktemp "$directory/.Editor.XXXXXX")
+"$renderer" "$work/snapshot.json" "$temporary"
+hash=$(sha256sum <"$temporary"); hash=${hash%% *}
+mkdir -p -- "$directory/$hash"
+output="$directory/$hash/Editor.qml"
+# Publish complete bytes without replacing a previously addressed snapshot.
+if ! ln -- "$temporary" "$output" 2>/dev/null; then
+  [[ -f $output ]] && cmp -s -- "$temporary" "$output" || { printf '%s\n' 'Editor snapshot content address collision.' >&2; exit 1; }
+fi
+printf '%s\n' "$output" "$revision"

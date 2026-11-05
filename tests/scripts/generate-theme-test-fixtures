@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /project/tests/nested.conf
+normalize_theme_colors=$(jq -er '.commands.normalizeThemeColors' "${UI_SHELL_RUNTIME:?resolved runtime data required}")
+fixture=/project/tests/theme-fixtures/ImportedPalettes.qml
+scratch=$(mktemp -d "$XDG_CACHE_HOME/qml-theme-fixtures.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+mkdir -p -- "$(dirname -- "$fixture")"
+
+tags=(synthwave-dark synthwave-day hacker-dark hacker-day lemonade-dark lemonade-day bubblegum-day bubblegum-dark amber-crt-dark amber-crt-day mint-day lofi-dark lofi-day solar-flare-day cotton-candy-day noir-rain-oled terminal-green-high-contrast synthwave-oled mint-high-contrast lemonade-high-contrast)
+themes=(synthwave synthwave hacker hacker lemonade lemonade bubblegum bubblegum amber-crt amber-crt mint lofi lofi solar-flare cotton-candy noir-rain terminal-green synthwave mint lemonade)
+variants=(dark day dark day dark day day dark dark day day dark day day day oled high-contrast oled high-contrast high-contrast)
+printf '%s\n' 'import QtQuick' '' 'QtObject {' '    readonly property var items: [' >"$fixture"
+for index in "${!tags[@]}"; do
+  input="/source/refs/100-themes/${themes[$index]}/${variants[$index]}/colors.toml"
+  [[ -f $input ]] || { printf 'Missing QML palette fixture source: %s\n' "$input" >&2; exit 1; }
+  palette="$scratch/${tags[$index]}.json"
+  "$normalize_theme_colors" "$input" "$palette" green yellow red
+  comma=,
+  (( index < ${#tags[@]} - 1 )) || comma=
+  jq -c --arg tag "${tags[$index]}" '. + {tag: $tag}' "$palette" |
+    sed "s/^/        /; s/$/$comma/" >>"$fixture"
+done
+printf '%s\n' '    ]' '}' >>"$fixture"
+printf 'Generated isolated QML fixtures: %s\n' "$fixture"

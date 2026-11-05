@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode=${1:?session mode required}
+compositor_pid=${2:?compositor PID required}
+source /project/tests/nested.conf
+started=$SECONDS
+deadline=$((SECONDS + test_ready_seconds))
+ready=false
+while (( SECONDS < deadline )); do
+  kill -0 "$compositor_pid" || { printf '%s\n' 'Runtime failed: compositor exited before readiness.' >&2; exit 1; }
+  instances=$(hyprctl -j instances)
+  signature=
+  if jq -e 'type == "array" and length == 1' <<<"$instances" >/dev/null 2>>/artifacts/diagnostic.log; then
+    signature=$(jq -er '.[] | .instance // empty' <<<"$instances")
+  fi
+  if [[ -n $signature ]]; then
+    export HYPRLAND_INSTANCE_SIGNATURE=$signature
+    export WAYLAND_DISPLAY
+    WAYLAND_DISPLAY=$(jq -er '.[] | .wl_socket' <<<"$instances")
+    if hyprctl -j monitors >/artifacts/monitors.log 2>/artifacts/diagnostic.log &&
+       jq -e 'length > 0 and all(.width > 0 and .height > 0)' /artifacts/monitors.log >/dev/null; then
+      plugin_ready=true
+      if [[ $mode == phantomat ]]; then
+        hyprctl -j plugin list >/artifacts/plugins.log
+        jq -e 'any(.name == "spatialoverview")' /artifacts/plugins.log >/dev/null || plugin_ready=false
+      fi
+      if hyprctl -j layers >/artifacts/layers.log 2>>/artifacts/diagnostic.log; then
+        if jq -e '[.. | objects | .namespace? // empty] | index("hyprpaper") != null and index("ui-shell-bar") != null' /artifacts/layers.log >/dev/null; then
+          if [[ $mode == apps || $mode == launcher ]]; then
+            jq -e '[.. | objects | .namespace? // empty] | index("ui-shell-app-launcher") != null' /artifacts/layers.log >/dev/null && [[ $plugin_ready == true ]] && ready=true
+          elif [[ $test_open_picker == 0 ]] || jq -e '[.. | objects | .namespace? // empty] | index("ui-shell-wallpaper-picker") != null' /artifacts/layers.log >/dev/null; then
+            [[ $plugin_ready != true ]] || ready=true
+          fi
+        fi
+      fi
+    fi
+  fi
+  [[ $ready != true ]] || break
+  sleep "$test_poll_seconds"
+done
+[[ $ready == true ]] || { printf 'Runtime failed: required compositor/wallpaper/shell surfaces not ready in %ss. Inspect layers.log and process logs.\n' "$test_ready_seconds" >&2; exit 1; }
+errors=$(hyprctl configerrors)
+[[ -z $errors ]] || { printf 'Runtime configuration errors:\n%s\n' "$errors" >&2; exit 1; }
+hyprctl -j getoption debug:disable_logs | jq -e '.bool == false and .set == true' >/dev/null
+hyprctl -j getoption debug:enable_stdout_logs | jq -e '.bool == true and .set == true' >/dev/null
+printf 'Runtime surfaces ready after %ss.\n' "$((SECONDS - started))"
+if [[ $mode == phantomat ]]; then
+  # Canvas is loaded but dormant: ordinary Hyprland tiling remains in control.
+  hyprctl spatialoverview >/artifacts/canvas-startup.log
+  jq -e '.screens | length == 0' \
+    /artifacts/canvas-startup.log >/dev/null
+  hyprctl -j getoption general:layout | jq -e '.str == "dwindle" and .set == true' >/dev/null
+  for setting in canvas:enabled canvas:desktop_mode canvas:persistent canvas:auto_float canvas:auto_place navigator:enabled; do
+    hyprctl -j getoption "plugin:spatialoverview:$setting" | jq -e '.bool == true and .set == true' >/dev/null
+  done
+  hyprctl -j getoption plugin:spatialoverview:navigator:auto_open |
+    jq -e '.bool == false and .set == true' >/dev/null
+  hyprctl -j getoption plugin:spatialoverview:canvas:minimap_rounding | jq -e '.int == 0 and .set == true' >/dev/null
+  hyprctl -j getoption plugin:spatialoverview:navigator:rounding | jq -e '.float == 0 and .set == true' >/dev/null
+  palette=$(jq -er '.bundle.globalPalette' "$UI_SHELL_RUNTIME")
+  for mapping in panel:surface card:elevated edge:outline text:text text_dim:textMuted text_faint:textMuted; do
+    role=${mapping%%:*} source_role=${mapping#*:}
+    color=$(jq -er --arg role "$source_role" '.[$role]' "$palette")
+    expected=$((16#ff${color#\#}))
+    hyprctl -j getoption "plugin:spatialoverview:navigator:colors:$role" |
+      jq -e --argjson expected "$expected" '.int == $expected and .set == true' >/dev/null
+  done
+  hyprctl -j getoption plugin:spatialoverview:navigator:accent |
+    jq -e --arg expected "$(jq -er '.accent' "$palette")" '.str == $expected and .set == true' >/dev/null
+  hyprctl -j binds >/artifacts/canvas-binds.log
+  jq -e '([.[] | select(.description | startswith("Set current workspace layout to"))] | length == 4) and
+    any(.[]; .description == "Toggle Phantomat Canvas for this workspace" and .key == "F5" and .modmask == 5 and .allow_input_capture) and
+    any(.[]; .description == "Toggle Phantomat Canvas navigation HUD" and .key == "O" and .modmask == 5 and .allow_input_capture) and
+    ([.[] | select(.description | startswith("Focus workspace "))] | length == 10) and
+    any(.[]; .description == "Enter group controls")' \
+    /artifacts/canvas-binds.log >/dev/null
+  printf '%s\n' 'Dwindle and closed Canvas verified at startup; Canvas/overview bindings, palette and shape settings verified without opening a window.'
+fi
+  hyprctl hyprpaper listactive >/artifacts/wallpaper-startup.log
+  cp "$(jq -er '.bundle.wallpaperRegistry' "$UI_SHELL_RUNTIME")" /artifacts/profile-registry.log
+  cp "$(jq -er '.bundle.quickshell + "/GeneratedPalettes.qml"' "$UI_SHELL_RUNTIME")" /artifacts/shell-palettes.log
+  cp "$(jq -er '.bundle.quickshell + "/GeneratedPalette.qml"' "$UI_SHELL_RUNTIME")" /artifacts/global-palette.log
+  jq -e '.bundle | keys == ["globalPalette", "hyprOutputPalettes", "hyprPalette", "hyprpaper", "key", "palettes", "quickshell", "root", "wallpaperRegistry"]' "$UI_SHELL_RUNTIME" >/dev/null
+  jq -e '.wallpaper | type == "object" and .schema == 1 and (.default | type == "object") and (.monitors | type == "object")' "$UI_SHELL_RUNTIME" >/dev/null
+  if [[ $mode == theme ]]; then
+    theme_json=$(jq -er '.profileColors.defaultPalette' "$UI_SHELL_RUNTIME")
+    jq -n --argjson palette "$theme_json" '$palette' >/artifacts/theme-colors.log
+    accent=$(jq -er '.accent' /artifacts/theme-colors.log)
+    jq -e '.schema == 2 and (.colors | type == "object") and (.hyprland | type == "object")' /artifacts/theme-colors.log >/dev/null
+    rg -Fq 'readonly property var colorData:' /artifacts/global-palette.log
+    rg -Fq "readonly property color accent: \"$accent\"" /artifacts/global-palette.log
+    jq -e '.theme.source == "file"' "$UI_SHELL_RUNTIME" >/dev/null
+    cp "$UI_SHELL_RUNTIME" /artifacts/theme-runtime.log
+    printf 'File theme active (accent %s).\n' "$accent"
+  fi
+  sleep "$test_frame_settle_seconds"
+  jq -e 'type == "array" and length == 1 and all(.[]; .name | type == "string" and length > 0)' /artifacts/monitors.log >/dev/null || {
+    printf '%s\n' 'Runtime check requires exactly one named nested output.' >&2; exit 1;
+  }
+  output=$(jq -er '.[] | .name' /artifacts/monitors.log)
+  grim -o "$output" /artifacts/frame.png
+  colors=$(magick /artifacts/frame.png -format '%k' info:)
+  (( colors >= test_min_frame_colors )) || { printf 'Runtime failed: captured frame has only %s colors (blank/solid frame).\n' "$colors" >&2; exit 1; }
+  if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' "$XDG_RUNTIME_DIR/quickshell" -g '*.log'; then
+    printf '%s\n' 'Runtime failed: Quickshell reported a warning/error; inspect retained logs.' >&2
+    exit 1
+  fi
+  printf 'Rendered frame captured: /artifacts/frame.png (%s colors). Inspect it after this run.\n' "$colors"
+  if [[ $mode == profiles ]]; then
+    bash "$test_project/tests/scripts/check-theme-editor" "$output"
+  fi
+  if [[ $mode == borders ]]; then
+    bash "$test_project/tests/scripts/check-borders" "$output"
+  fi
+  if [[ $mode == smoke ]]; then
+    bash "$test_project/tests/scripts/check-live-wallpaper" "$output"
+    # One explicit failed-start fixture must log its native warning. Everything
+    # else stays fatal; do not hide real process, binding or teardown symptoms.
+    expected_start_warning=' WARN: Process failed to start, likely because the binary could not be found. Command: QList("/missing-test-palette-generator", '
+    expected_start_count=0
+    while IFS= read -r warning; do
+      if [[ $warning == *"$expected_start_warning"* ]]; then
+        (( expected_start_count += 1 ))
+      else
+        printf 'Runtime failed: unexpected Quickshell diagnostic:\n%s\n' "$warning" >&2
+        exit 1
+      fi
+    done < <(rg --no-filename ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' "$XDG_RUNTIME_DIR/quickshell" -g '*.log')
+    [[ $expected_start_count == 1 ]] || { printf '%s\n' 'Missing or repeated failed-start fixture warning.' >&2; exit 1; }
+  fi
+  if [[ $mode == motion ]]; then
+    bash "$test_project/tests/scripts/check-motion"
+    if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' /artifacts/picker-motion.log; then
+      printf '%s\n' 'Runtime failed: motion cycle reported a QML warning/error.' >&2
+      exit 1
+    fi
+    # Exercise the same native exit dispatcher as the nested keyboard binding.
+    hyprctl -j binds >/artifacts/binds.log
+    jq -e '([.[] | select(.description == "Exit nested test session")]) as $matches |
+      ($matches | length == 1 and all(.[]; .submap_universal == "true"))' /artifacts/binds.log >/dev/null
+    hyprctl dispatch 'hl.dsp.exit()'
+    printf '%s\n' 'Nested native session exit requested.'
+  fi
+  if [[ $mode == launcher ]]; then
+    bash "$test_project/tests/scripts/check-launcher"
+  fi
+  if [[ $mode == app-launch || $mode == app-close ]]; then
+    bash "$test_project/tests/scripts/check-app-launch" "$output"
+    [[ $mode != app-close ]] || printf '%s\n' ready >/artifacts/app-close-ready.log
+  fi

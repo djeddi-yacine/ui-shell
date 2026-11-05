@@ -1,0 +1,21 @@
+module UiShell.Components
+InputState 1.0 InputState.qml
+PanelMotion 1.0 PanelMotion.qml
+PointerTracker 1.0 PointerTracker.qml
+ShellButton 1.0 ShellButton.qml
+ShellEditingMenu 1.0 ShellEditingMenu.qml
+ShellTextField 1.0 ShellTextField.qml
+ShellComboBox 1.0 ShellComboBox.qml
+ShellComboOption 1.0 ShellComboOption.qml
+ShellControlBackground 1.0 ShellControlBackground.qml
+ShellControlState 1.0 ShellControlState.qml
+ShellSlider 1.0 ShellSlider.qml
+ContextPopup 1.0 ContextPopup.qml
+ControlTuningEditor 1.0 ControlTuningEditor.qml
+ErrorPopup 1.0 ErrorPopup.qml
+ContextDetails 1.0 ContextDetails.qml
+ContextHelp 1.0 ContextHelp.qml
+ComponentSettingsEditor 1.0 ComponentSettingsEditor.qml
+PanelContext 1.0 PanelContext.qml
+PaletteColorField 1.0 PaletteColorField.qml
+PaletteColorPicker 1.0 PaletteColorPicker.qml
