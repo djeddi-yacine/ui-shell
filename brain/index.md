@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-06T11:08:33.029Z._
+_Auto-generated. Last updated 2026-11-06T12:48:00.789Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
@@ -12,6 +12,7 @@ _Auto-generated. Last updated 2026-11-06T11:08:33.029Z._
 - [phantomat-overview-boundary](pages/phantomat-overview-boundary.md) — category: decision | tags: [hyprland, phantomat, plugin, monitors] | # Decision
 - [phantomat-patch-provenance](pages/phantomat-patch-provenance.md) — category: decision | tags: [phantomat, git, fork, workflow] | # Decision
 - [phantomat-toggle-and-focus](pages/phantomat-toggle-and-focus.md) — category: decision | ## Compiled truth
+- [polkit-auth-dialog](pages/polkit-auth-dialog.md) — category: decision | tags: [polkit, security, dialog] | <current best understanding — replace this with the real content>
 - [reference-survey](pages/reference-survey.md) — category: reference | tags: [quickshell, hyprland, composition, ipc] | # Reference survey findings
 - [screen-capture-module](pages/screen-capture-module.md) — category: decision | tags: [screen-recording, gsr, features] | <current best understanding — replace this with the real content>
 - [shared-style-and-toolkit-integration](pages/shared-style-and-toolkit-integration.md) — category: decision | tags: [style, theme, qt, gtk, qml, composition] | # Decision
