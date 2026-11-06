@@ -21,6 +21,8 @@
 !/default/**
 !/docs/
 !/docs/**
+!/features/
+!/features/**
 !/gtk/
 !/gtk/**
 !/hypr/

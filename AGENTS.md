@@ -13,3 +13,18 @@ Maintain the brain as part of normal coding work — not as a separate task. Whi
 
 The brain skills (`brain-setup`, `brain-page`, `brain-ingest`, `brain-bootstrap`) are installed in your global skills directory. Prefer `brain init` to scaffold a new project.
 <!-- END brain.md -->
+## Feature workflow (EGM)
+
+New features follow the Elephant-and-Goldfish (EGM) flow. The `features/` tree keeps one file per stage, named after the feature (for example `screen-recording.md`), so a feature's whole history is traceable:
+
+| Directory | Stage | Content | Skill |
+|---|---|---|---|
+| `features/studies/` | Learn | What reference projects (cloned into `refs/`) do: a factual feature catalogue with a short id and a source file for every entry. No decisions. | a cheap sub-agent reads `refs/` |
+| `features/reqs/` | Need | What we chose from the studies, why, what is out of scope, the alternatives weighed and the open decisions. Written with the owner. | `/egm-brainstorm` |
+| `features/designs/` | Plan | The implementation design: overview, goals, user journeys, technical plan, alternatives, and the full file-by-file plan. It is the document the code is written from. | `/egm-draft`, then `/egm-review` |
+
+Rules:
+- Work flows one way: studies, then reqs, then designs, then code. A later stage cites the earlier file; it does not copy it.
+- The owner decides architecture. When a design choice has several defensible answers, present options with trade-offs and let the owner choose.
+- Code carries `EGM.md` contracts (interface, invariants, side effects) beside it, created with `/egm-bootstrap`. Update the contract when a change alters the interface.
+- A decision that settles in any stage also goes to the brain through the `brain` CLI, as usual.
