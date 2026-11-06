@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-shot-settings COPY_TO_CLIPBOARD SAVE_TO_FILE' >&2; exit 2; }
+case $1 in true|false|undefined) ;; *) printf '%s\n' 'copyToClipboard must be true, false, or undefined.' >&2; exit 2;; esac
+case $2 in true|false|undefined) ;; *) printf '%s\n' 'saveToFile must be true, false, or undefined.' >&2; exit 2;; esac
+[[ $1 != false || $2 != false ]] || { printf '%s\n' 'A screenshot needs a destination: copy or save.' >&2; exit 2; }
+printf 'import QtQuick\n\nQtObject {\n    property var copyToClipboard: %s\n    property var saveToFile: %s\n}\n' "$1" "$2"

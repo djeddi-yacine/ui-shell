@@ -1,0 +1,5 @@
+module UiShell.Record
+singleton RecordPanelState 1.0 RecordPanelState.qml
+RecordShortcut 1.0 RecordShortcut.qml
+RecordSurface 1.0 RecordSurface.qml
+RecordPanel 1.0 RecordPanel.qml

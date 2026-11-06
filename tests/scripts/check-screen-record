@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+# State-machine tests for scripts/screen-record with a fake recorder (no screen, no GPU).
+# Runs in a private runtime directory; nothing of the desktop is touched.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+script=$root/scripts/screen-record
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/screen-record-test.XXXXXX")
+trap 'pkill -f -- "$scratch" 2>/dev/null || true; rm -rf -- "${scratch:?}"' EXIT
+export UI_SHELL_RECORD_DIR=$scratch/state
+export UI_SHELL_RECORD_OUTPUT_DIR=$scratch/videos
+export UI_SHELL_RECORDER=$root/tests/record/fake-recorder
+export UI_SHELL_RECORD_MIN_MB=1
+export UI_SHELL_RECORD_SETTLE_TICKS=5
+export FAKE_RECORDER_ARGS_FILE=$scratch/args
+export XDG_RUNTIME_DIR=$scratch
+checks=0
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+ok() { checks=$((checks + 1)); }
+field() { "$script" status | jq -r "$1"; }
+wait_state() { # wanted seconds
+  local waited=0
+  until [[ $(field .state) == "$1" ]]; do
+    sleep 0.1; waited=$((waited + 1))
+    (( waited < $2 * 10 )) || fail "state never became $1 (is $(field .state))"
+  done
+}
+reset() { "$script" stop >/dev/null 2>&1 || true; sleep 0.2; rm -rf -- "$UI_SHELL_RECORD_DIR" "$UI_SHELL_RECORD_OUTPUT_DIR" "$FAKE_RECORDER_ARGS_FILE"; }
+
+echo '== capabilities'
+"$script" capabilities | jq -e '(.targets | index("monitor")) and (.audio | index("desktop")) and (.audio | index("mic")) and .webcam == false and .audioNote == null' >/dev/null || fail capabilities; ok
+"$script" monitors | jq -e 'length == 2 and .[0] == {name: "FAKE-1", width: 1920, height: 1080}' >/dev/null || fail 'monitors come from the recorder'; ok
+FAKE_RECORDER_NO_AUDIO=1 "$script" capabilities | jq -e '.audio == [] and (.audioNote | test("No audio output"))' >/dev/null || fail 'capabilities without audio'; ok
+[[ $(field .state) == idle ]] || fail 'initial state is not idle'; ok
+
+echo '== start, record, stop'
+"$script" start monitor:FAKE-1 --desktop-audio yes
+wait_state recording 5; ok
+pid=$(field .recorderPid)
+kill -0 "$pid" || fail 'recorder not running'; ok
+[[ $(field .target) == monitor:FAKE-1 && $(field '.audio == ["desktop"]') == true ]] || fail 'state lost target or audio'; ok
+output=$(field .output)
+[[ -s $output ]] || fail 'no output file'; ok
+"$script" start monitor:FAKE-1 2>/dev/null && fail 'a second start was accepted'; ok
+begin=$SECONDS
+"$script" stop
+(( SECONDS - begin < 5 )) || fail 'stop was slow'; ok
+wait_state finished 5
+! kill -0 "$pid" 2>/dev/null || fail 'recorder survived stop'; ok
+(( $(stat -c %s "$output") > 1024 )) || fail 'finished file was not completed'; ok
+[[ $(field .message) == Saved. ]] || fail 'saved message'; ok
+grep -q -- '-a default_output' "$FAKE_RECORDER_ARGS_FILE" || fail 'desktop audio source not passed'; ok
+"$script" stop 2>/dev/null && fail 'stop with nothing running succeeded'; ok
+
+echo '== audio is resolved before the recorder starts'
+reset
+FAKE_RECORDER_NO_AUDIO=1 "$script" start monitor:FAKE-1 --desktop-audio yes --microphone yes
+wait_state recording 5
+field '.warnings | length' | grep -qx 2 || fail 'missing sources were not reported as warnings'; ok
+field '.warnings[0]' | grep -qi 'desktop audio' || fail 'desktop warning text'; ok
+field '.audio | length' | grep -qx 0 || fail 'state claims audio that is not recorded'; ok
+! grep -q -- ' -a ' "$FAKE_RECORDER_ARGS_FILE" || fail 'a missing source was still passed to the recorder'; ok
+"$script" stop; wait_state finished 5
+[[ $(field .message) == Saved. ]] || fail 'a video-only recording was not saved'; ok
+reset
+"$script" start monitor:FAKE-1 --desktop-audio yes --microphone yes
+wait_state recording 5
+grep -q -- '-a default_output' "$FAKE_RECORDER_ARGS_FILE" && grep -q -- '-a default_input' "$FAKE_RECORDER_ARGS_FILE" || fail 'desktop audio and microphone are not separate sources'; ok
+field '.audio == ["desktop","mic"]' | grep -qx true || fail 'audio list in state'; ok
+"$script" stop; wait_state finished 5
+
+echo '== a recorder that exits early is never reported as recording'
+reset
+FAKE_RECORDER_FAIL=1 "$script" start monitor:FAKE-1
+seen=
+for _ in $(seq 1 40); do seen+=$(field .state)" "; [[ $(field .state) == failed ]] && break; sleep 0.1; done
+[[ $seen != *recording* ]] || fail "an early failure was shown as recording: $seen"; ok
+[[ $(field .state) == failed ]] || fail 'early failure not reported'; ok
+
+echo '== stopping while the recorder settles cancels cleanly'
+reset
+"$script" start monitor:FAKE-1
+sleep 0.2
+[[ $(field .state) == starting ]] || fail 'not starting yet'
+begin=$SECONDS
+"$script" stop
+(( SECONDS - begin < 8 )) || fail 'stop during settle took too long'; ok
+[[ $(field .state) == finished ]] && field .message | grep -q Cancelled || fail 'settling start was not cancelled'; ok
+[[ -z $(ls "$UI_SHELL_RECORD_OUTPUT_DIR" 2>/dev/null) ]] || fail 'a cancelled start left a file'; ok
+! pgrep -f "$scratch/videos" >/dev/null || fail 'recorder left behind'; ok
+
+echo '== no screen visible to the recorder'
+reset
+FAKE_RECORDER_NO_MONITORS=1 "$script" monitors | jq -e 'length == 0' >/dev/null || fail 'monitors without screens'; ok
+FAKE_RECORDER_NO_MONITORS=1 "$script" capabilities | jq -e '.screens == 0 and .available' >/dev/null || fail 'capabilities report no screens'; ok
+"$script" capabilities | jq -e '.screens == 2' >/dev/null || fail 'capabilities count screens'; ok
+
+echo '== window and region targets'
+mkdir -p "$scratch/bin" "$scratch/fake"
+cat >"$scratch/bin/hyprctl" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *clients*) cat "$FAKE_HYPR_DIR/clients.json" ;;
+  *monitors*) cat "$FAKE_HYPR_DIR/monitors.json" ;;
+  *) exit 1 ;;
+esac
+SHIM
+cat >"$scratch/bin/slurp" <<'SHIM'
+#!/usr/bin/env bash
+# The real slurp reads stdin to EOF before it shows anything when stdin is not a terminal.
+cat >/dev/null
+[[ -z ${FAKE_SLURP_CANCEL-} ]] || exit 1
+[[ -z ${FAKE_SLURP_FAIL-} ]] || { echo 'compositor does not support layer-shell' >&2; exit 2; }
+[[ -z ${FAKE_SLURP_EMPTY-} ]] || exit 0
+printf '%s' "${FAKE_SLURP_RESULT:-640x480+30+40}"
+SHIM
+chmod +x "$scratch/bin/hyprctl" "$scratch/bin/slurp"
+export FAKE_HYPR_DIR=$scratch/fake
+cat >"$FAKE_HYPR_DIR/monitors.json" <<'J'
+[{"name":"FAKE-1","x":0,"y":0,"width":1920,"height":1080,"scale":1},{"name":"FAKE-2","x":1920,"y":0,"width":2560,"height":1440,"scale":2}]
+J
+cat >"$FAKE_HYPR_DIR/clients.json" <<'J'
+[{"address":"0xaaa1","title":"editor","class":"code","at":[100,200],"size":[800,600],"mapped":true,"hidden":false},
+ {"address":"0xaaa2","title":"not shown","class":"x","at":[0,0],"size":[500,500],"mapped":false,"hidden":false},
+ {"address":"0xaaa3","title":"hidden","class":"x","at":[0,0],"size":[500,500],"mapped":true,"hidden":true},
+ {"address":"0xaaa4","title":"half off screen","class":"x","at":[-100,-50],"size":[600,400],"mapped":true,"hidden":false},
+ {"address":"0xaaa5","title":"off every screen","class":"x","at":[9000,9000],"size":[100,100],"mapped":true,"hidden":false}]
+J
+shim=(env "PATH=$scratch/bin:$PATH")
+"${shim[@]}" "$script" windows | jq -e 'map(.address) == ["0xaaa1","0xaaa4","0xaaa5"] and .[0] == {address:"0xaaa1",title:"editor",class:"code",x:100,y:200,width:800,height:600}' >/dev/null || fail 'window list shows only mapped, visible windows'; ok
+"${shim[@]}" "$script" capabilities | jq -e '.targets == ["monitor","window","region"]' >/dev/null || fail 'targets with hyprctl'; ok
+reset
+"${shim[@]}" "$script" start window:0xaaa1
+wait_state recording 5
+grep -q -- '-w 800x600+100+200 ' "$FAKE_RECORDER_ARGS_FILE" || fail "window not recorded as its rectangle: $(cat "$FAKE_RECORDER_ARGS_FILE")"; ok
+[[ $(field .target) == window:0xaaa1 && $(field .region) == 800x600+100+200 ]] || fail 'state lost the window target or region'; ok
+"$script" stop; wait_state finished 5
+reset
+"${shim[@]}" "$script" start window:0xaaa4
+wait_state recording 5
+grep -q -- '-w 500x350+0+0 ' "$FAKE_RECORDER_ARGS_FILE" || fail "a half off-screen window was not cropped: $(cat "$FAKE_RECORDER_ARGS_FILE")"; ok
+"$script" stop; wait_state finished 5
+reset
+message=$("${shim[@]}" "$script" start window:0xdead 2>&1 || true)
+grep -qi 'gone' <<<"$message" || fail "a vanished window was not refused clearly: $message"; ok
+message=$("${shim[@]}" "$script" start window:0xaaa5 2>&1 || true)
+grep -qi 'outside every screen' <<<"$message" || fail "an off-screen window was not refused: $message"; ok
+"${shim[@]}" "$script" start 'window:../etc' 2>/dev/null && fail 'unsafe window address accepted'; ok
+[[ $(field .state) == idle ]] || fail 'a refused start changed the state'; ok
+"$script" start region:300x200+10+20
+wait_state recording 5
+grep -q -- '-w 300x200+10+20 ' "$FAKE_RECORDER_ARGS_FILE" || fail 'region not passed to the recorder'; ok
+[[ $(field .region) == 300x200+10+20 ]] || fail 'region not in state'; ok
+"$script" stop; wait_state finished 5
+for bad in region:0x200+10+20 region:300x200+-5+20 region:300x200 'region:300x200+1+2;x' region:abc region:100000x200+1+1; do
+  "$script" start "$bad" 2>/dev/null && fail "bad region accepted: $bad"
+done; ok
+echo '== selecting a region'
+[[ -z $("$script" last-region) ]] || fail 'a last region before any selection'; ok
+[[ $(sleep 6 | timeout 4 "${shim[@]}" "$script" pick-region) == 640x480+30+40 ]] || fail 'pick-region hangs when the caller keeps stdin open (as the shell does): slurp must get an empty stdin'; ok
+[[ $("$script" last-region) == 640x480+30+40 ]] || fail 'the selection was not remembered'; ok
+FAKE_SLURP_CANCEL=1 "${shim[@]}" "$script" pick-region 2>/dev/null && fail 'a cancelled selection succeeded'; ok
+[[ $("$script" last-region) == 640x480+30+40 ]] || fail 'a cancelled selection changed the remembered region'; ok
+message=$(FAKE_SLURP_FAIL=1 "${shim[@]}" "$script" pick-region 2>&1 || true)
+grep -q 'layer-shell' <<<"$message" || fail "a real slurp failure was not reported: $message"; ok
+FAKE_SLURP_EMPTY=1 "${shim[@]}" "$script" pick-region 2>/dev/null && fail 'an empty selection (a click without a drag) succeeded'; ok
+FAKE_SLURP_RESULT='garbage' "${shim[@]}" "$script" pick-region 2>/dev/null && fail 'unusable slurp output accepted'; ok
+
+echo '== video settings reach the recorder'
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no
+wait_state recording 5
+for want in '-f 60 ' '-q high' '-c mkv' '-cursor yes' '-ac opus'; do grep -q -- "$want" "$FAKE_RECORDER_ARGS_FILE" || fail "defaults lack '$want': $(cat "$FAKE_RECORDER_ARGS_FILE")"; done; ok
+! grep -q -- '-bm' "$FAKE_RECORDER_ARGS_FILE" || fail 'a bitrate mode was forced by default'; ok
+! grep -q -- ' -k ' "$FAKE_RECORDER_ARGS_FILE" || fail 'an automatic codec was forced'; ok
+[[ $(field .output) == *.mkv ]] || fail 'default container is not mkv'; ok
+"$script" stop; wait_state finished 5
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no --fps 30 --quality very_high --codec hevc --container mkv --cursor no
+wait_state recording 5
+for want in '-f 30 ' '-q very_high' '-c mkv' '-cursor no' '-k hevc' '-ac opus'; do grep -q -- "$want" "$FAKE_RECORDER_ARGS_FILE" || fail "chosen settings lack '$want': $(cat "$FAKE_RECORDER_ARGS_FILE")"; done; ok
+[[ $(field .output) == *.mkv ]] || fail 'output extension does not follow the container'; ok
+"$script" stop; wait_state finished 5
+reset
+for bad in '--fps 61' '--fps abc' '--quality best' '--codec vp8' '--container avi' '--cursor maybe' '--codec vp9 --container mp4'; do
+  "$script" start monitor:FAKE-1 $bad 2>/dev/null && fail "bad setting accepted: $bad"
+done; ok
+[[ $(field .state) == idle ]] || fail 'a refused setting changed the state'; ok
+"$script" start monitor:FAKE-1 --codec vp9 --container mkv >/dev/null
+wait_state recording 5; "$script" stop; wait_state finished 5
+
+echo '== a fixed bitrate replaces the quality preset'
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no --bitrate 8000 --quality ultra
+wait_state recording 5
+grep -q -- '-bm cbr -q 8000' "$FAKE_RECORDER_ARGS_FILE" || fail "bitrate is not passed as constant bitrate: $(cat "$FAKE_RECORDER_ARGS_FILE")"; ok
+! grep -q -- '-q ultra' "$FAKE_RECORDER_ARGS_FILE" || fail 'the quality preset was passed together with a bitrate'; ok
+"$script" stop; wait_state finished 5
+reset
+"$script" start monitor:FAKE-1 --bitrate 1234 2>/dev/null && fail 'a bitrate outside the list was accepted'; ok
+echo '== the audio codec'
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no --audio-codec aac
+wait_state recording 5
+grep -q -- '-ac aac' "$FAKE_RECORDER_ARGS_FILE" && ! grep -q -- '-ac opus' "$FAKE_RECORDER_ARGS_FILE" || fail "audio codec: $(cat "$FAKE_RECORDER_ARGS_FILE")"; ok
+"$script" stop; wait_state finished 5
+reset
+for bad in '--audio-codec flac' '--audio-codec mp3' '--audio-codec ogg' '--audio-codec'; do
+  "$script" start monitor:FAKE-1 $bad 2>/dev/null && fail "bad audio codec accepted: $bad"
+done; ok
+echo '== a codec the GPU lacks is reported, not hidden'
+reset
+FAKE_RECORDER_NO_CODEC=av1 "$script" start monitor:FAKE-1 --desktop-audio no --codec av1
+wait_state recording 5
+field '.warnings | map(select(test("av1 is not supported"))) | length' | grep -qx 1 || fail "the codec fallback was not reported: $(field .warnings)"; ok
+"$script" stop; wait_state finished 5
+
+echo '== the webcam overlay'
+mkdir -p "$scratch/v4l"
+: >"$scratch/v4l/usb-Fake_Cam_0001-video-index0"; : >"$scratch/v4l/usb-Fake_Cam_0001-video-index1"
+export UI_SHELL_V4L_DIR=$scratch/v4l UI_SHELL_OVERLAY_PLAYER=$root/tests/record/fake-overlay FAKE_OVERLAY_ARGS_FILE=$scratch/overlay-args
+camera=$scratch/v4l/usb-Fake_Cam_0001-video-index0
+"$script" cameras | jq -e 'length == 1 and .[0].path == "'"$camera"'" and .[0].name == "Fake Cam 0001"' >/dev/null || fail "camera list (only the picture node, with a readable name): $("$script" cameras)"; ok
+"$script" capabilities | jq -e '.webcam == true' >/dev/null || fail 'webcam capability with a camera'; ok
+UI_SHELL_V4L_DIR=$scratch/none "$script" capabilities | jq -e '.webcam == false' >/dev/null || fail 'webcam capability without a camera'; ok
+overlay_alive() { local pid; pid=$(field '.overlayPid // empty'); [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; }
+reset; rm -f "$FAKE_OVERLAY_ARGS_FILE"
+"$script" start monitor:FAKE-1 --desktop-audio no --webcam "$camera"
+wait_state recording 5
+overlay_alive || fail 'the overlay is not running while recording'; ok
+grep -q -- "av://v4l2:$camera" "$FAKE_OVERLAY_ARGS_FILE" && grep -q -- '--wayland-app-id=ui-shell-webcam' "$FAKE_OVERLAY_ARGS_FILE" || fail "overlay arguments: $(cat "$FAKE_OVERLAY_ARGS_FILE")"; ok
+[[ $(field .webcam) == "$camera" ]] || fail 'the camera is not in the state'; ok
+overlay=$(field .overlayPid)
+"$script" stop; wait_state finished 5
+sleep 0.3; ! kill -0 "$overlay" 2>/dev/null || fail 'the overlay survived the end of the recording'; ok
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no --webcam "$camera" --countdown 5
+sleep 0.6
+overlay_alive || fail 'the overlay should be up during the countdown so the user can frame themselves'; ok
+overlay=$(field .overlayPid)
+"$script" stop; sleep 0.3
+! kill -0 "$overlay" 2>/dev/null || fail 'cancelling the countdown left the overlay'; ok
+reset
+FAKE_RECORDER_FAIL=1 "$script" start monitor:FAKE-1 --desktop-audio no --webcam "$camera"
+wait_state failed 5; overlay=$(field .overlayPid); sleep 0.3
+! kill -0 "$overlay" 2>/dev/null || fail 'a failed recording left the overlay'; ok
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no --webcam "$camera"
+wait_state recording 5
+overlay=$(field .overlayPid); kill -9 "$(field .wrapperPid)" "$(field .recorderPid)"
+sleep 0.3
+"$script" status >/dev/null; sleep 0.3
+! kill -0 "$overlay" 2>/dev/null || fail 'an overlay whose wrapper died stayed on screen'; ok
+reset
+for bad in "$scratch/v4l/missing-video-index0" '/dev/video0' "$scratch/v4l/../x" 'relative'; do
+  "$script" start monitor:FAKE-1 --webcam "$bad" 2>/dev/null && fail "bad camera accepted: $bad"
+done; ok
+UI_SHELL_OVERLAY_PLAYER=/nonexistent "$script" start monitor:FAKE-1 --webcam "$camera" 2>/dev/null && fail 'a missing overlay player was accepted'; ok
+unset UI_SHELL_V4L_DIR UI_SHELL_OVERLAY_PLAYER FAKE_OVERLAY_ARGS_FILE
+
+echo '== explicit audio sources'
+"$script" audio-sources | jq -e '
+  (.desktop | map(.id)) == ["default", "device:alsa_output.fake.monitor", "app:Zen", "app:Music Player Daemon"]
+  and (.mic | map(.id)) == ["default", "device:alsa_input.fake", "device:rnnoise_source"]
+  and (.desktop[1].label == "Monitor of Fake Out") and (.desktop[2].label == "App: Zen")' >/dev/null || fail "audio source catalog: $("$script" audio-sources)"; ok
+FAKE_RECORDER_NO_AUDIO=1 "$script" audio-sources | jq -e '.desktop == [] and .mic == []' >/dev/null || fail 'catalog without audio'; ok
+reset
+"$script" start monitor:FAKE-1 --desktop-audio device:alsa_output.fake.monitor --microphone device:alsa_input.fake
+wait_state recording 5
+grep -q -- '-a device:alsa_output.fake.monitor' "$FAKE_RECORDER_ARGS_FILE" && grep -q -- '-a device:alsa_input.fake' "$FAKE_RECORDER_ARGS_FILE" || fail "chosen devices: $(cat "$FAKE_RECORDER_ARGS_FILE")"; ok
+[[ $(field .desktopSource) == "Monitor of Fake Out" && $(field .micSource) == "Fake Mic" ]] || fail "the state does not name the chosen sources: $(field '[.desktopSource, .micSource]')"; ok
+"$script" stop; wait_state finished 5
+reset
+"$script" start monitor:FAKE-1 --desktop-audio 'app:Music Player Daemon' --microphone no
+wait_state recording 5
+grep -q -- '-a app:Music Player Daemon' "$FAKE_RECORDER_ARGS_FILE" || fail "an application as the audio source: $(cat "$FAKE_RECORDER_ARGS_FILE")"; ok
+! grep -q -- 'default_input' "$FAKE_RECORDER_ARGS_FILE" || fail 'a microphone was added that was not chosen'; ok
+"$script" stop; wait_state finished 5
+reset
+"$script" start monitor:FAKE-1 --desktop-audio device:alsa_output.gone.monitor --microphone device:alsa_input.gone
+wait_state recording 5
+field '.warnings | length' | grep -qx 2 || fail "vanished sources were not reported: $(field .warnings)"; ok
+! grep -q -- ' -a ' "$FAKE_RECORDER_ARGS_FILE" || fail 'a vanished source was still passed to the recorder'; ok
+"$script" stop; wait_state finished 5
+reset
+for bad in '--desktop-audio device:a;b' '--desktop-audio app:' '--desktop-audio maybe' '--microphone app:Zen' '--microphone device:'; do
+  "$script" start monitor:FAKE-1 $bad 2>/dev/null && fail "bad audio choice accepted: $bad"
+done; ok
+reset
+"$script" start monitor:FAKE-1 --desktop-audio yes --microphone yes >/dev/null
+wait_state recording 5
+grep -q -- '-a default_output' "$FAKE_RECORDER_ARGS_FILE" && grep -q -- '-a default_input' "$FAKE_RECORDER_ARGS_FILE" || fail 'yes no longer means the default device'; ok
+"$script" stop; wait_state finished 5
+
+echo '== where recordings go by default'
+reset
+env -u UI_SHELL_RECORD_OUTPUT_DIR XDG_VIDEOS_DIR=$scratch/xdg-videos "$script" start monitor:FAKE-1 --desktop-audio no
+wait_state recording 5
+[[ $(field .output) == "$scratch/xdg-videos/records/recording-"*.mkv ]] || fail "default folder and format: $(field .output)"; ok
+"$script" stop; wait_state finished 5
+[[ -s $(field .output) ]] || fail 'the file is not in the records folder'; ok
+
+echo '== a deleted recording is not announced'
+reset
+"$script" start monitor:FAKE-1 --desktop-audio no
+wait_state recording 5
+"$script" stop; wait_state finished 5
+output=$(field .output)
+[[ $(field .size) -gt 1024 ]] || fail 'a saved recording has no size to announce'; ok
+rm -f -- "$output"
+[[ $(field .state) == idle ]] || fail "a finished recording whose file was deleted is still reported as saved: $(field .state)"; ok
+echo '== a recorder that crashes'
+reset
+FAKE_RECORDER_FAIL=3 "$script" start monitor:FAKE-1
+wait_state failed 5
+[[ $(field .exitCode) == 3 ]] || fail 'exit code lost'; ok
+field .message | grep -q 'simulated failure' || fail 'log tail not in the failure message'; ok
+
+echo '== a killed recorder and wrapper leave no false "recording"'
+reset
+"$script" start monitor:FAKE-1
+wait_state recording 5
+pid=$(field .recorderPid); wrapper=$(field .wrapperPid)
+kill -9 "$wrapper" "$pid"
+sleep 0.3
+[[ $(field .state) == failed ]] || fail 'stale recording not detected'; ok
+field .message | grep -q 'without reporting' || fail 'stale message'; ok
+"$script" start monitor:FAKE-1 >/dev/null && ok || fail 'could not start after a stale state'
+wait_state recording 5
+
+echo '== a killed wrapper with a live recorder can still be stopped'
+reset
+"$script" start monitor:FAKE-1
+wait_state recording 5
+pid=$(field .recorderPid); kill -9 "$(field .wrapperPid)"
+sleep 0.2
+[[ $(field .state) == recording ]] || fail 'live recorder reported as dead'; ok
+"$script" stop
+! kill -0 "$pid" 2>/dev/null || fail 'recorder survived stop without wrapper'; ok
+
+echo '== countdown can be cancelled'
+reset
+"$script" start monitor:FAKE-1 --countdown 5
+sleep 0.5
+[[ $(field .state) == starting ]] || fail 'countdown not shown as starting'; ok
+[[ $(field .countdown) == 5 ]] || fail 'the countdown length is not in the state, so the shell cannot show it'; ok
+"$script" stop
+wait_state finished 3
+field .message | grep -q Cancelled || fail 'cancel message'; ok
+[[ -z $(ls "$UI_SHELL_RECORD_OUTPUT_DIR" 2>/dev/null) ]] || fail 'a cancelled countdown wrote a file'; ok
+
+echo '== refusals'
+reset
+UI_SHELL_RECORD_MIN_MB=999999999 "$script" start monitor:FAKE-1 2>/dev/null && fail 'low free space accepted'; ok
+"$script" start screen 2>/dev/null && fail 'bad target accepted'; ok
+"$script" start 'monitor:a;b' 2>/dev/null && fail 'unsafe target accepted'; ok
+"$script" start monitor:FAKE-1 --output relative.mp4 2>/dev/null && fail 'relative output accepted'; ok
+"$script" start monitor:FAKE-1 --desktop-audio maybe 2>/dev/null && fail 'bad audio flag accepted'; ok
+"$script" start monitor:FAKE-1 --countdown abc 2>/dev/null && fail 'bad countdown accepted'; ok
+UI_SHELL_RECORDER=/nonexistent "$script" start monitor:FAKE-1 2>/dev/null && fail 'missing recorder accepted'; ok
+
+echo '== the real recorder with no Wayland session fails with a readable message'
+if command -v gpu-screen-recorder >/dev/null; then
+  reset
+  env -u WAYLAND_DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE UI_SHELL_RECORDER=gpu-screen-recorder "$script" start monitor:NONE --desktop-audio no
+  wait_state failed 8
+  field .message | grep -qi 'wayland' || fail "the real recorder's error did not reach the state: $(field .message)"; ok
+fi
+
+reset
+printf 'screen-record: %d checks passed\n' "$checks"

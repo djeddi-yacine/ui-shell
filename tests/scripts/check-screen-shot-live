@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# LIVE check on this desktop: real grim and wl-copy. Captures a region and a window to a temporary
+# folder, checks the picture sizes with ffprobe and that the clipboard really holds a PNG.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+shot=$root/scripts/screen-shot record=$root/scripts/screen-record
+for tool in grim wl-copy wl-paste ffprobe hyprctl jq; do command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }; done
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/screen-shot-live.XXXXXX")
+trap 'rm -rf -- "${scratch:?}"' EXIT
+export UI_SHELL_SHOT_DIR=$scratch
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+size_of() { ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 "$1"; }
+origin=$(hyprctl -j monitors | jq -r '.[0] | "\(.x + 20)+\(.y + 20)"')
+echo "== a region, copied and saved"
+result=$("$shot" capture "region:640x360+$origin" --copy yes --save yes)
+file=$(jq -r .file <<<"$result")
+[[ $(size_of "$file") == 640,360 ]] || fail "region size: $(size_of "$file")"
+[[ $(wl-paste --type image/png | wc -c) -gt 1000 ]] || fail 'the clipboard does not hold the image'
+echo "   ok: $(size_of "$file"), $(jq -r .size <<<"$result") bytes, clipboard holds a PNG"
+window=$("$record" windows | jq -c '.[0] // empty')
+if [[ -n $window ]]; then
+  echo "== a window"
+  result=$("$shot" capture "window:$(jq -r .address <<<"$window")" --copy no --save yes)
+  want="$(jq .width <<<"$window"),$(jq .height <<<"$window")"
+  [[ $(size_of "$(jq -r .file <<<"$result")") == "$want" ]] || fail "window size: expected $want got $(size_of "$(jq -r .file <<<"$result")")"
+  echo "   ok: $want"
+fi
+echo 'live screenshot ok'

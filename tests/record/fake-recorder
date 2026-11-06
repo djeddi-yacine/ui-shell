@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# A stand-in for the recorder in tests. It mimics what the real one does, as measured:
+#   * answers --list-monitors / --list-audio-devices (FAKE_RECORDER_NO_AUDIO empties the audio list)
+#   * with an audio source and no audio server (FAKE_RECORDER_NO_AUDIO) it exits 1 at once
+#   * creates the output file at once with only a header, then grows it
+#   * on SIGINT it finishes the file and exits 0
+#   * FAKE_RECORDER_FAIL=N makes it exit N shortly after starting
+#   * FAKE_RECORDER_ARGS_FILE receives its arguments, one start per line
+case ${1-} in
+  --list-monitors)
+    if [[ -n ${FAKE_RECORDER_MONITORS-} ]]; then printf '%s\n' "$FAKE_RECORDER_MONITORS"
+    elif [[ -z ${FAKE_RECORDER_NO_MONITORS-} ]]; then printf '%s\n' 'FAKE-1|1920x1080' 'FAKE-2|1280x720'; fi
+    exit 0 ;;
+  --list-audio-devices)
+    [[ -n ${FAKE_RECORDER_NO_AUDIO-} ]] || printf '%s\n' 'default_output|Default output' 'default_input|Default input' \
+      'alsa_output.fake.monitor|Monitor of Fake Out' 'alsa_input.fake|Fake Mic' 'rnnoise_source|Noise Canceling source'
+    exit 0 ;;
+  --list-application-audio)
+    [[ -n ${FAKE_RECORDER_NO_AUDIO-} ]] || printf '%s\n' 'Zen' 'Music Player Daemon'
+    exit 0 ;;
+esac
+[[ -z ${FAKE_RECORDER_ARGS_FILE-} ]] || printf '%s\n' "$*" >>"$FAKE_RECORDER_ARGS_FILE"
+output= sources=() codec=
+while (( $# )); do
+  case $1 in
+    -o) output=$2; shift 2 ;;
+    -a) sources+=("$2"); shift 2 ;;
+    -k) codec=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -n ${FAKE_RECORDER_NO_AUDIO-} && ${#sources[@]} -gt 0 ]]; then
+  printf '%s\n' 'gsr error: -a default_output was specified but no default audio output is specified in the audio server' >&2
+  exit 1
+fi
+printf '%s\n' 'gsr info: fake recorder started' >&2
+[[ -z ${FAKE_RECORDER_NO_CODEC-} || $codec != "$FAKE_RECORDER_NO_CODEC" ]] || printf '%s\n' "gsr warning: selected video codec $codec is not supported by your hardware, trying h264 instead" >&2
+printf 'fake-header' >"$output"
+if [[ -n ${FAKE_RECORDER_FAIL-} ]]; then
+  printf '%s\n' 'fake recorder: simulated failure' >&2
+  sleep 0.2
+  exit "$FAKE_RECORDER_FAIL"
+fi
+trap 'head -c 4000 /dev/zero >>"$output"; exit 0' INT TERM
+while :; do sleep 0.1; done

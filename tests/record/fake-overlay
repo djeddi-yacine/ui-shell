@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stand-in for the webcam overlay player (mpv): logs its arguments, then shows "video" until killed.
+[[ -z ${FAKE_OVERLAY_ARGS_FILE-} ]] || printf '%s\n' "$*" >>"$FAKE_OVERLAY_ARGS_FILE"
+trap 'exit 0' INT TERM
+while :; do sleep 0.1; done

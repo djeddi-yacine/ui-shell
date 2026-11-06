@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Screenshot backend for the shell: grim for the picture, wl-copy for the clipboard. It has no
+# state and starts nothing that outlives it.
+#
+#   screen-shot capabilities
+#   screen-shot capture monitor:NAME | window:ADDRESS | region:WxH+X+Y
+#                       [--copy yes|no] [--save yes|no] [--delay MILLISECONDS] [--output FILE]
+#       prints one JSON object: {file, size, copied}; at least one of copy and save must be yes.
+#
+# A window is its rectangle at the moment of capture (the same rule as recording, shared through
+# `screen-record window-region`); a region is the rectangle `slurp` selected.
+set -euo pipefail
+
+temporary=
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+fail() { printf 'screen-shot: %s\n' "$*" >&2; exit 1; }
+# The user's XDG directory: the environment variable if set, else `xdg-user-dir`, else the XDG
+# default under $HOME.
+user_dir() { # XDG_NAME and the plain directory name under $HOME, e.g. user_dir VIDEOS Videos
+  local variable="XDG_${1}_DIR" value
+  value=${!variable-}
+  [[ -n $value ]] || value=$(xdg-user-dir "$1" 2>/dev/null || true)
+  [[ -n $value && $value != "$HOME" ]] || value=$HOME/$2
+  printf '%s' "$value"
+}
+
+valid_region() { [[ ${1-} =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}\+[0-9]{1,6}\+[0-9]{1,6}$ ]]; }
+
+capabilities() {
+  local have=false copy=false
+  command -v grim >/dev/null && have=true
+  command -v wl-copy >/dev/null && copy=true
+  jq -cn --argjson have "$have" --argjson copy "$copy" '{available: $have, clipboard: $copy, targets: ["monitor", "window", "region"]}'
+}
+
+capture() {
+  local target=${1-} copy=yes save=yes delay=0 output=
+  [[ -n $target ]] || fail 'a target is required'
+  shift
+  while (( $# )); do
+    case $1 in
+      --copy) copy=${2-}; shift 2 ;;
+      --save) save=${2-}; shift 2 ;;
+      --delay) delay=${2-}; shift 2 ;;
+      --output) output=${2-}; shift 2 ;;
+      *) fail "unknown option: $1" ;;
+    esac
+  done
+  [[ $copy == yes || $copy == no ]] || fail '--copy takes yes or no'
+  [[ $save == yes || $save == no ]] || fail '--save takes yes or no'
+  [[ $copy == yes || $save == yes ]] || fail 'a screenshot needs a destination: copy or save'
+  [[ $delay =~ ^[0-9]{1,4}$ ]] || fail '--delay takes 0 to 9999 milliseconds'
+  command -v grim >/dev/null || fail 'grim is required'
+  [[ $copy == no ]] || command -v wl-copy >/dev/null || fail 'wl-copy is required to copy'
+
+  local args=()
+  case $target in
+    monitor:*)
+      [[ $target =~ ^monitor:[A-Za-z0-9._:+-]{1,64}$ ]] || fail 'unsafe monitor name'
+      args=(-o "${target#monitor:}") ;;
+    window:*)
+      local rectangle
+      rectangle=$("$here/screen-record" window-region "${target#window:}") || exit 1
+      args=(-g "$(region_for_grim "$rectangle")") ;;
+    region:*)
+      valid_region "${target#region:}" || fail 'region must look like WxH+X+Y'
+      args=(-g "$(region_for_grim "${target#region:}")") ;;
+    *) fail 'target must be monitor:NAME, window:ADDRESS or region:WxH+X+Y' ;;
+  esac
+
+  local file
+  if [[ $save == yes ]]; then
+    if [[ -z $output ]]; then
+      output=${UI_SHELL_SHOT_DIR:-$(user_dir PICTURES Pictures)/screenshots}/screenshot-$(date +%Y%m%d-%H%M%S).png
+    fi
+    [[ $output == /* && $output =~ ^[A-Za-z0-9._/@+:\ -]+$ && $output != *..* ]] || fail 'unsafe output path'
+    mkdir -p -- "${output%/*}"
+    file=$output
+  else
+    temporary=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/ui-shell-shot.XXXXXX")
+    trap 'rm -f -- "${temporary-}"' EXIT
+    file=$temporary
+  fi
+  (( delay == 0 )) || sleep "$(awk -v ms="$delay" 'BEGIN { printf "%.3f", ms / 1000 }')"
+  grim "${args[@]}" "$file" || fail 'grim could not capture the screen'
+  [[ -s $file ]] || fail 'the screenshot is empty'
+  local copied=false
+  if [[ $copy == yes ]]; then
+    # wl-copy stays alive to serve the clipboard. Left holding the caller's pipes it would keep
+    # them open forever, and the caller (the shell reads our output until it closes) would hang.
+    wl-copy --type image/png <"$file" >/dev/null 2>&1 || fail 'wl-copy could not copy the image'
+    copied=true
+  fi
+  jq -cn --arg file "$([[ $save == yes ]] && printf '%s' "$file" || true)" --argjson size "$(stat -c %s -- "$file")" --argjson copied "$copied" \
+    '{file: (if $file == "" then null else $file end), size: $size, copied: $copied}'
+}
+
+# WxH+X+Y (what slurp -f '%wx%h+%x+%y' and the window list give) as grim's "X,Y WxH".
+region_for_grim() {
+  local value=$1 size offset
+  size=${value%%+*}; offset=${value#*+}
+  printf '%s,%s %s' "${offset%%+*}" "${offset#*+}" "$size"
+}
+
+case ${1-} in
+  capabilities) capabilities ;;
+  capture) shift; capture "$@" ;;
+  *) printf '%s\n' 'Usage: screen-shot capabilities|capture TARGET [--copy yes|no] [--save yes|no] [--delay MS] [--output FILE]' >&2; exit 2 ;;
+esac

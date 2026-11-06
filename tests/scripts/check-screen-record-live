@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# LIVE check on this desktop: records the first monitor with GPU Screen Recorder through
+# scripts/screen-record, stops it, and validates every file with ffprobe. Three runs:
+# desktop audio, desktop audio plus microphone (two audio tracks), and a stop right after the
+# recorder reports recording (the file must still be complete).
+# It records your real screen into a temporary folder and deletes the files.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+script=$root/scripts/screen-record
+for tool in gpu-screen-recorder ffprobe jq; do command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }; done
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/screen-record-live.XXXXXX")
+trap 'rm -rf -- "${scratch:?}"' EXIT
+export UI_SHELL_RECORD_DIR=$scratch/state UI_SHELL_RECORD_OUTPUT_DIR=$scratch/videos
+fail() { printf 'FAIL: %s\n' "$*" >&2; [[ ! -f $UI_SHELL_RECORD_DIR/record.log ]] || tail -n 5 "$UI_SHELL_RECORD_DIR/record.log" >&2; exit 1; }
+state() { "$script" status | jq -r .state; }
+wait_for() { for _ in $(seq 1 100); do [[ $(state) == "$1" ]] && return 0; sleep 0.2; done; fail "state never became $1 (is $(state))"; }
+monitor=$("$script" monitors | jq -er '.[0].name') || fail 'the recorder lists no screens'
+"$script" capabilities | jq -e '.available' >/dev/null || fail 'recorder not available'
+streams() { ffprobe -v error -select_streams "$1" -show_entries stream=codec_type -of csv=p=0 "$2" | wc -l; }
+
+run() { # label hold-seconds audio-count extra-start-args...
+  local label=$1 hold=$2 audios=$3; shift 3
+  echo "== $label ($monitor, ${hold}s)"
+  "$script" start "monitor:$monitor" "$@"
+  wait_for recording
+  sleep "$hold"
+  "$script" stop
+  wait_for finished
+  local output duration
+  output=$("$script" status | jq -r .output)
+  duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$output") || fail "$label: file is not readable"
+  awk -v d="$duration" -v h="$hold" 'BEGIN { exit !(d >= h * 0.5) }' || fail "$label: duration $duration"
+  [[ $(streams v "$output") == 1 ]] || fail "$label: expected one video stream"
+  [[ $(streams a "$output") == "$audios" ]] || fail "$label: expected $audios audio stream(s), got $(streams a "$output")"
+  echo "   ok: ${duration}s, $(stat -c %s "$output") bytes"
+}
+run 'desktop audio' 3 1 --desktop-audio yes
+run 'desktop audio and microphone' 3 2 --desktop-audio yes --microphone yes
+run 'stop right after it reports recording' 0 1 --desktop-audio yes
+# A window and a region are recorded as rectangles; the video must have exactly that size
+# (the recorder rounds odd sizes up to even).
+even() { echo $(( ($1 + 1) / 2 * 2 )); }
+size_of() { ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 "$1"; }
+record_target() { # label target expected-size
+  echo "== $1"
+  "$script" start "$2" --desktop-audio no
+  wait_for recording; sleep 2; "$script" stop; wait_for finished
+  local got; got=$(size_of "$("$script" status | jq -r .output)")
+  [[ $got == "$3" ]] || fail "$1: expected a $3 video, got $got"
+  echo "   ok: $got"
+}
+window=$("$script" windows | jq -c '.[0] // empty')
+if [[ -n $window ]]; then
+  w=$(jq .width <<<"$window"); h=$(jq .height <<<"$window")
+  record_target 'a window' "window:$(jq -r .address <<<"$window")" "$(even "$w"),$(even "$h")"
+fi
+origin=$(hyprctl -j monitors | jq -r '.[0] | "\(.x + 20)+\(.y + 20)"')
+record_target 'a typed region' "region:640x360+$origin" '640,360'
+# The video settings: every one of them must show up in the file.
+echo "== video settings"
+"$script" start "monitor:$monitor" --desktop-audio no --fps 30 --quality medium --codec hevc --container mkv --cursor no
+wait_for recording; sleep 2; "$script" stop; wait_for finished
+file=$("$script" status | jq -r .output)
+[[ $file == *.mkv ]] || fail "the container did not follow the setting: $file"
+codec=$(ffprobe -v error -select_streams v -show_entries stream=codec_name -of csv=p=0 "$file")
+[[ $codec == hevc ]] || fail "expected hevc, got $codec"
+rate=$(ffprobe -v error -select_streams v -show_entries stream=avg_frame_rate -of csv=p=0 "$file")
+awk -v r="$rate" 'BEGIN { split(r, a, "/"); exit !(a[2] > 0 && a[1] / a[2] > 20 && a[1] / a[2] < 40) }' || fail "expected about 30 fps, got $rate"
+echo "   ok: $codec, $rate, $(ffprobe -v error -show_entries format=format_name -of csv=p=0 "$file")"
+# Audio is always opus; a fixed bitrate is a cap (a still screen needs far less), so only the
+# ceiling is asserted.
+echo "== opus audio and a fixed bitrate"
+"$script" start "monitor:$monitor" --desktop-audio yes --bitrate 8000 --container mkv
+wait_for recording; sleep 4; "$script" stop; wait_for finished
+file=$("$script" status | jq -r .output)
+acodec=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$file")
+[[ $acodec == opus ]] || fail "expected opus audio, got '$acodec'"
+bits=$(ffprobe -v error -show_entries format=bit_rate -of csv=p=0 "$file")
+awk -v b="$bits" 'BEGIN { exit !(b > 0 && b < 12000000) }' || fail "expected at most about 8 Mbps, got $bits bit/s"
+echo "   ok: audio $acodec, $((bits / 1000)) kbit/s overall"
+# A countdown delays the start and is not part of the file.
+echo "== countdown"
+begin=$SECONDS
+"$script" start "monitor:$monitor" --desktop-audio no --countdown 3
+[[ $("$script" status | jq -r .state) == starting ]] || fail 'not starting during the countdown'
+[[ $("$script" status | jq -r .countdown) == 3 ]] || fail 'the countdown is not in the state'
+wait_for recording
+(( SECONDS - begin >= 3 )) || fail "recording began after $((SECONDS - begin)) s, before the countdown ended"
+sleep 2; "$script" stop; wait_for finished
+file=$("$script" status | jq -r .output)
+duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file")
+awk -v d="$duration" 'BEGIN { exit !(d > 1 && d < 4.5) }' || fail "the file includes the countdown: $duration s"
+echo "   ok: $duration s of video after a 3 s countdown"
+# Explicit sources: a specific output's monitor, a specific input, and one application.
+echo "== explicit audio sources"
+sources=$("$script" audio-sources)
+output_id=$(jq -r '[.desktop[] | select(.id | startswith("device:"))][0].id // empty' <<<"$sources")
+input_id=$(jq -r '[.mic[] | select(.id | startswith("device:"))][0].id // empty' <<<"$sources")
+app_id=$(jq -r '[.desktop[] | select(.id | startswith("app:"))][0].id // empty' <<<"$sources")
+if [[ -n $output_id && -n $input_id ]]; then
+  run "specific output ($output_id) and input ($input_id)" 3 2 --desktop-audio "$output_id" --microphone "$input_id"
+fi
+if [[ -n $app_id ]]; then
+  run "one application ($app_id)" 3 1 --desktop-audio "$app_id"
+fi
+# The audio codec option reaches the file.
+echo "== audio codec aac"
+"$script" start "monitor:$monitor" --desktop-audio default --audio-codec aac
+wait_for recording; sleep 2; "$script" stop; wait_for finished
+acodec=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$("$script" status | jq -r .output)")
+[[ $acodec == aac ]] || fail "expected aac audio, got '$acodec'"
+echo "   ok: $acodec"
+echo 'live recording ok'

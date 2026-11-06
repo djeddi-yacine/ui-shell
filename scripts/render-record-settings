@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 11 ]] || { printf '%s\n' 'Usage: render-record-settings COUNTDOWN DESKTOP_AUDIO MICROPHONE FPS QUALITY CODEC AUDIO_CODEC BITRATE CONTAINER CURSOR WEBCAM' >&2; exit 2; }
+# Every value is a literal from a fixed list, or `undefined` (use the default); strings are quoted.
+case $1 in 0|3|5|10|undefined) ;; *) printf '%s\n' 'countdown must be 0, 3, 5, 10, or undefined.' >&2; exit 2;; esac
+case $2 in true|false|undefined) ;; *) printf '%s\n' 'desktopAudio must be true, false, or undefined.' >&2; exit 2;; esac
+case $3 in true|false|undefined) ;; *) printf '%s\n' 'microphone must be true, false, or undefined.' >&2; exit 2;; esac
+case $4 in 24|30|60|90|120|144|undefined) ;; *) printf '%s\n' 'fps must be 24, 30, 60, 90, 120, 144, or undefined.' >&2; exit 2;; esac
+case $5 in medium|high|very_high|ultra|undefined) ;; *) printf '%s\n' 'quality must be medium, high, very_high, ultra, or undefined.' >&2; exit 2;; esac
+case $6 in auto|h264|hevc|av1|vp9|undefined) ;; *) printf '%s\n' 'codec must be auto, h264, hevc, av1, vp9, or undefined.' >&2; exit 2;; esac
+case $7 in opus|aac|undefined) ;; *) printf '%s\n' 'audioCodec must be opus, aac, or undefined.' >&2; exit 2;; esac
+case $8 in auto|2500|5000|8000|12000|20000|40000|80000|undefined) ;; *) printf '%s\n' 'bitrate must be auto, 2500, 5000, 8000, 12000, 20000, 40000, 80000, or undefined.' >&2; exit 2;; esac
+case $9 in mp4|mkv|undefined) ;; *) printf '%s\n' 'container must be mp4, mkv, or undefined.' >&2; exit 2;; esac
+case ${10} in true|false|undefined) ;; *) printf '%s\n' 'cursor must be true, false, or undefined.' >&2; exit 2;; esac
+case ${11} in true|false|undefined) ;; *) printf '%s\n' 'webcam must be true, false, or undefined.' >&2; exit 2;; esac
+quote() { if [[ $1 == undefined ]]; then printf undefined; else printf '"%s"' "$1"; fi; }
+printf 'import QtQuick\n\nQtObject {\n    property var countdown: %s\n    property var desktopAudio: %s\n    property var microphone: %s\n    property var fps: %s\n    property var quality: %s\n    property var codec: %s\n    property var audioCodec: %s\n    property var bitrate: %s\n    property var container: %s\n    property var cursor: %s\n    property var webcam: %s\n}\n' \
+  "$1" "$2" "$3" "$4" "$(quote "$5")" "$(quote "$6")" "$(quote "$7")" "$(quote "$8")" "$(quote "$9")" "${10}" "${11}"

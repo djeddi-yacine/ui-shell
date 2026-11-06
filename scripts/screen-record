@@ -1,0 +1,523 @@
+#!/usr/bin/env bash
+# Screen recording backend for the shell. This is the ONLY place that knows the recorder
+# (GPU Screen Recorder today); the shell reads the state file and calls these commands.
+# Replacing the recorder means replacing this script.
+#
+#   screen-record capabilities     JSON: what this machine can do right now (screens, audio sources)
+#   screen-record monitors         JSON: [{name, width, height}] as the recorder names them
+#   screen-record audio-sources    JSON: {desktop: [{id, label}], mic: [{id, label}]}; ids are what --desktop-audio
+#                                    and --microphone take (yes means default)
+#   screen-record cameras          JSON: [{path, name}] (V4L2 cameras that can be shown on screen)
+#   screen-record windows          JSON: [{address, title, class, x, y, width, height}] (Hyprland)
+#   screen-record pick-region      slurp selection as WxH+X+Y on stdout; exit 1 if cancelled
+#   screen-record last-region      the last selected region (this session), or nothing
+#   screen-record start monitor:NAME | window:ADDRESS | region:WxH+X+Y
+#                                    [--desktop-audio no|default|device:ID|app:NAME]
+#                                    [--microphone no|default|device:ID]
+#                                    [--countdown SECONDS] [--output FILE] [--fps N]
+#                                    [--quality medium|high|very_high|ultra] [--codec auto|h264|hevc|av1|vp9]
+#                                    [--webcam CAMERA_PATH] [--bitrate auto|KBPS] [--audio-codec opus|aac] [--container mp4|mkv] [--cursor yes|no]
+#   screen-record stop             finish the file (SIGINT) or cancel a start
+#   screen-record status           JSON state, checked against the live process
+#
+# State lives in $UI_SHELL_RECORD_DIR (default $XDG_RUNTIME_DIR/ui-shell/record):
+#   state.json  written atomically; state is starting|recording|finished|failed
+#   record.log  the recorder's stderr, shown by the shell's error popup
+#
+# What the recorder taught us (gpu-screen-recorder 6.1, measured, see features/designs):
+#   * An audio source it cannot open (no audio server, no default output) makes it exit with an
+#     error within half a second. So audio is resolved BEFORE starting: a missing source is
+#     dropped, the recording goes ahead, and the state carries a warning for the user.
+#   * It creates the output file at once (header only) and writes data in bursts, so a file
+#     existing proves nothing. It has started when it is still alive after a short settle time.
+#   * SIGINT stops and saves; before it has settled, SIGINT can kill it without saving. So a
+#     stop is held back until the recorder has settled.
+#   * Screens are named by `--list-monitors`, not by the compositor.
+#   * A region is `-w WxH+X+Y` in global layout coordinates (`-region` is deprecated); odd sizes
+#     are rounded up to even. A window is recorded as its rectangle at the moment of Start: on
+#     Wayland the recorder cannot follow one window, so it is cropped from the screen.
+#
+# A recording is the one long-lived process in the shell: `start` detaches a wrapper that is
+# the recorder's parent, waits for it and writes how it ended. The wrapper's own death cannot
+# leave a false "recording": every read checks the recorder's pid and start time in /proc.
+set -euo pipefail
+
+state_dir=${UI_SHELL_RECORD_DIR:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/ui-shell/record}
+state_file=$state_dir/state.json
+log_file=$state_dir/record.log
+recorder=${UI_SHELL_RECORDER:-gpu-screen-recorder}
+# The webcam overlay is a small floating video window (mpv) the compositor places by its app id; it
+# is part of the screen, so any target that contains it records it.
+overlay_player=${UI_SHELL_OVERLAY_PLAYER:-mpv}
+v4l_dir=${UI_SHELL_V4L_DIR:-/dev/v4l/by-id}
+overlay_app_id=ui-shell-webcam
+minimum_mb=${UI_SHELL_RECORD_MIN_MB:-2000}
+stop_wait_tenths=${UI_SHELL_RECORD_STOP_WAIT_TENTHS:-150}
+# Ticks of 0.1 s the recorder must stay alive before it counts as recording, and how long we
+# wait for that before giving up.
+settle_ticks=${UI_SHELL_RECORD_SETTLE_TICKS:-12}
+settle_limit_ticks=${UI_SHELL_RECORD_SETTLE_LIMIT_TICKS:-100}
+
+fail() { printf 'screen-record: %s\n' "$*" >&2; exit 1; }
+# The user's XDG directory: the environment variable if set, else `xdg-user-dir`, else the XDG
+# default under $HOME.
+user_dir() { # XDG_NAME and the plain directory name under $HOME, e.g. user_dir VIDEOS Videos
+  local variable="XDG_${1}_DIR" value
+  value=${!variable-}
+  [[ -n $value ]] || value=$(xdg-user-dir "$1" 2>/dev/null || true)
+  [[ -n $value && $value != "$HOME" ]] || value=$HOME/$2
+  printf '%s' "$value"
+}
+
+usage() { printf '%s\n' 'Usage: screen-record capabilities|monitors|windows|cameras|audio-sources|pick-region|last-region|start TARGET [options]|stop|status' >&2; exit 2; }
+
+# Process start time (clock ticks since boot), field 22 of /proc/PID/stat. The command name
+# can contain spaces and parentheses, so cut at the LAST ')'. A zombie (exited, not yet
+# collected by its parent) counts as gone: `kill -0` would still succeed on it.
+start_time() {
+  local line
+  line=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  line=${line##*) }
+  set -- $line
+  [[ $1 != Z && $1 != X ]] || return 1
+  printf '%s' "${20}"
+}
+alive() { [[ -n ${1-} && $1 =~ ^[0-9]+$ ]] && [[ $(start_time "$1" 2>/dev/null) == "${2-}" ]]; }
+running() { start_time "$1" >/dev/null 2>&1; }
+
+write_state() { # JSON object on stdin; replaces the file atomically
+  mkdir -p -- "$state_dir"
+  local temporary
+  temporary=$(mktemp "$state_dir/.state.XXXXXX")
+  cat >"$temporary"
+  mv -f -- "$temporary" "$state_file"
+}
+merge_state() { # a jq program (and its --arg options) applied to the current state
+  jq -c "$@" "$state_file" | write_state
+}
+read_state() { [[ -f $state_file ]] && cat "$state_file" || printf '{"state":"idle"}'; }
+
+# The state, corrected for a recorder that vanished without writing its end.
+checked_state() {
+  local current state pid began
+  # The file must exist so the shell can watch it for changes.
+  [[ -f $state_file ]] || printf '{"state":"idle"}' | write_state
+  current=$(read_state)
+  state=$(jq -r '.state' <<<"$current")
+  if [[ $state == recording ]]; then
+    pid=$(jq -r '.recorderPid // empty' <<<"$current")
+    began=$(jq -r '.recorderStart // empty' <<<"$current")
+    if ! alive "$pid" "$began"; then
+      current=$(jq -c '.state = "failed" | .message = "The recorder stopped without reporting."' <<<"$current")
+      printf '%s' "$current" | write_state
+    fi
+  fi
+  # A finished recording whose file has been deleted is not a saved recording any more: the shell
+  # must not keep announcing it.
+  current=$(read_state)
+  if [[ $(jq -r '.state' <<<"$current") == finished ]]; then
+    # Only a saved recording (it has a size); a cancelled one never had a file.
+    pid=$(jq -r 'select(.size != null) | .output // empty' <<<"$current")
+    if [[ -n $pid && ! -e $pid ]]; then printf '{"state":"idle"}' | write_state; fi
+  fi
+  # An overlay whose wrapper is gone must not stay on screen.
+  current=$(read_state)
+  if [[ $(jq -r '.state' <<<"$current") != recording && $(jq -r '.state' <<<"$current") != starting ]]; then
+    pid=$(jq -r '.overlayPid // empty' <<<"$current")
+    began=$(jq -r '.overlayStart // empty' <<<"$current")
+    if [[ -n $pid ]] && alive "$pid" "$began"; then kill "$pid" 2>/dev/null || true; fi
+  fi
+  read_state
+}
+busy() { local s; s=$(checked_state | jq -r '.state'); [[ $s == starting || $s == recording ]]; }
+
+# --- what the recorder can do here -------------------------------------------------------
+
+# One `--list-*` query; empty output (and a zero status) when the recorder cannot answer, for
+# example without a Wayland session or an audio server.
+ask() { timeout 8 "$recorder" "$@" 2>/dev/null || true; }
+have_recorder() { command -v "$recorder" >/dev/null; }
+
+monitors() {
+  have_recorder || { printf '[]'; return; }
+  ask --list-monitors | jq -Rsc '[split("\n")[] | select(length > 0) | split("|")
+    | {name: .[0], width: ((.[1] // "0x0" | split("x")[0]) | tonumber), height: ((.[1] // "0x0" | split("x")[1]) | tonumber)}]'
+}
+
+# Cameras that can be shown: the stable by-id names of video capture nodes (index0 is the picture;
+# the other nodes of the same device carry metadata).
+cameras() {
+  local path name list=()
+  shopt -s nullglob
+  for path in "$v4l_dir"/*-video-index0; do
+    name=${path##*/}; name=${name%-video-index0}; name=${name#usb-}
+    list+=("$(jq -cn --arg path "$path" --arg name "${name//_/ }" '{path: $path, name: $name}')")
+  done
+  shopt -u nullglob
+  if (( ${#list[@]} == 0 )); then printf '[]'; else printf '%s\n' "${list[@]}" | jq -sc .; fi
+}
+have_overlay_player() { command -v "$overlay_player" >/dev/null; }
+
+# "desktop" and "mic" availability from the recorder's own device list.
+audio_sources() {
+  have_recorder || return 0
+  local devices
+  devices=$(ask --list-audio-devices)
+  grep -q '^default_output|' <<<"$devices" && echo desktop
+  grep -q '^default_input|' <<<"$devices" && echo mic
+  return 0
+}
+
+# The explicit choices for the pickers. Desktop audio can be the default output, a specific output's
+# monitor, or one application; the microphone can be the default input or a specific input. Names are
+# the recorder's own (`--list-audio-devices`, `--list-application-audio`).
+audio_catalog() {
+  have_recorder || { printf '{"desktop":[],"mic":[]}'; return; }
+  local devices apps
+  devices=$(ask --list-audio-devices)
+  apps=$(ask --list-application-audio)
+  jq -cn --arg devices "$devices" --arg apps "$apps" '
+    ($devices | split("\n") | map(select(length > 0) | split("|") | {id: .[0], label: (.[1] // .[0])})) as $d
+    | ($apps | split("\n") | map(select(length > 0))) as $a
+    | { desktop: ((if any($d[]; .id == "default_output") then [{id: "default", label: "Default output"}] else [] end)
+                  + [$d[] | select(.id | endswith(".monitor")) | {id: ("device:" + .id), label: .label}]
+                  + [$a[] | {id: ("app:" + .), label: ("App: " + .)}]),
+        mic: ((if any($d[]; .id == "default_input") then [{id: "default", label: "Default input"}] else [] end)
+              + [$d[] | select((.id | endswith(".monitor") | not) and .id != "default_output" and .id != "default_input")
+                      | {id: ("device:" + .id), label: .label}]) }'
+}
+
+capabilities() {
+  local have=false audio='[]' note=null screens=0
+  if have_recorder; then
+    have=true
+    screens=$(monitors | jq 'length')
+    audio=$(audio_sources | jq -Rsc '[split("\n")[] | select(length > 0)]')
+    if [[ $(jq 'index("desktop")' <<<"$audio") == null ]]; then
+      note='"No audio output was found, so desktop audio is unavailable."'
+    fi
+  fi
+  local targets='["monitor"]' webcam=false
+  have_overlay_player && [[ $(cameras | jq 'length') -gt 0 ]] && webcam=true
+  # A region needs slurp to select it (or a typed value); a window needs the compositor's list.
+  command -v hyprctl >/dev/null && targets='["monitor","window","region"]' || targets='["monitor","region"]'
+  jq -cn --arg backend "$(basename -- "$recorder")" --argjson have "$have" --argjson screens "$screens" --argjson audio "$audio" --argjson note "$note" --argjson targets "$targets" --argjson webcam "$webcam" \
+    '{backend: $backend, available: $have, screens: $screens, targets: $targets, audio: $audio, audioNote: $note, webcam: $webcam}'
+}
+
+# Windows come from the compositor (Hyprland), not from the recorder. Only mapped, visible
+# windows with an area; the rectangle is in the global layout coordinates the recorder uses.
+windows() {
+  command -v hyprctl >/dev/null || { printf '[]'; return; }
+  timeout 5 hyprctl -j clients 2>/dev/null | jq -c '[.[] | select(.mapped and (.hidden | not) and .size[0] > 0 and .size[1] > 0)
+    | {address, title, class, x: .at[0], y: .at[1], width: .size[0], height: .size[1]}]' 2>/dev/null || printf '[]'
+}
+
+# The pixel bounds of all screens, so a window half off-screen is cropped to what exists.
+screen_bounds() {
+  command -v hyprctl >/dev/null || return 0
+  timeout 5 hyprctl -j monitors 2>/dev/null | jq -c '{x0: (map(.x) | min), y0: (map(.y) | min),
+    x1: (map(.x + (.width / (.scale // 1) | floor)) | max), y1: (map(.y + (.height / (.scale // 1) | floor)) | max)}' 2>/dev/null || true
+}
+
+# A window's rectangle now, cropped to the screens, as WxH+X+Y; fails if the window is gone.
+window_region() {
+  local address=$1 bounds found
+  [[ $address =~ ^0x[0-9a-f]{1,16}$ ]] || fail 'window address must look like 0x55d0c0a1b2c0'
+  found=$(windows | jq -c --arg address "$address" '.[] | select(.address == $address)')
+  [[ -n $found ]] || fail 'that window is gone; choose another target'
+  bounds=$(screen_bounds)
+  [[ -n $bounds ]] || bounds='{"x0":-100000,"y0":-100000,"x1":100000,"y1":100000}'
+  jq -nr --argjson w "$found" --argjson b "$bounds" '
+    ([$w.x, $b.x0] | max) as $x0 | ([$w.y, $b.y0] | max) as $y0
+    | ([$w.x + $w.width, $b.x1] | min) as $x1 | ([$w.y + $w.height, $b.y1] | min) as $y1
+    | if $x1 - $x0 < 1 or $y1 - $y0 < 1 then empty
+      else "\($x1 - $x0)x\($y1 - $y0)+\($x0)+\($y0)" end' \
+    | grep . || fail 'that window is outside every screen'
+}
+
+# Shared with scripts/screen-shot: the rectangle a window has right now, as WxH+X+Y.
+window_region_command() { window_region "${1-}"; }
+
+valid_region() { [[ ${1-} =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}\+[0-9]{1,6}\+[0-9]{1,6}$ ]]; }
+
+# Select a region with slurp; the last one is kept for the session so a keyboard-only user
+# can reuse it. A cancelled selection (Esc) leaves everything as it was.
+pick_region() {
+  command -v slurp >/dev/null || fail 'slurp is required to select a region'
+  local region status=0 errors
+  mkdir -p -- "$state_dir"
+  errors=$state_dir/.slurp.err
+  # slurp draws nothing until you drag, and it covers every screen: without a dimmed backdrop and
+  # a border the user sees no change, cannot click anything and thinks it is stuck. So dim the
+  # screens, show the size while dragging, and draw a clear border.
+  # slurp reads predefined boxes from stdin when it is not a terminal and waits for EOF before it
+  # opens anything: started by the shell (a pipe on stdin) it hung with no overlay at all. Give it
+  # an empty stdin.
+  region=$(slurp -d -b '#00000099' -c '#ffffffff' -s '#ffffff26' -w 2 -f '%wx%h+%x+%y' 2>"$errors" </dev/null) || status=$?
+  if (( status != 0 )); then
+    # slurp exits 1 with no message when the user cancels (Esc or right click). Anything else
+    # (no layer-shell, no compositor) is a real failure the shell must show.
+    [[ -s $errors ]] || exit 1
+    fail "slurp exited with status $status: $(head -c 300 "$errors" | tr '\n' ' ')"
+  fi
+  [[ -n $region ]] || exit 1   # a click without a drag selects nothing
+  valid_region "$region" || fail "slurp returned an unusable region: $region"
+  mkdir -p -- "$state_dir"
+  printf '%s' "$region" >"$state_dir/last-region"
+  printf '%s' "$region"
+}
+last_region() {
+  local region=
+  [[ ! -f $state_dir/last-region ]] || region=$(<"$state_dir/last-region")
+  ! valid_region "$region" || printf '%s' "$region"
+}
+
+free_mb() { df --output=avail -BM -- "$1" | tail -n 1 | tr -dc '0-9'; }
+
+# --- start -------------------------------------------------------------------------------
+
+json_list() { printf '%s\n' "$@" | jq -Rsc '[split("\n")[] | select(length > 0)]'; }
+
+start() {
+  local target=${1-} desktop=yes mic=no countdown=0 output= fps=60 quality=high codec=auto audio_codec=opus bitrate=auto container=mkv cursor=yes webcam=
+  [[ -n $target ]] || usage
+  shift
+  while (( $# )); do
+    case $1 in
+      --desktop-audio) desktop=${2-}; shift 2 ;;
+      --microphone) mic=${2-}; shift 2 ;;
+      --countdown) countdown=${2-}; shift 2 ;;
+      --output) output=${2-}; shift 2 ;;
+      --fps) fps=${2-}; shift 2 ;;
+      --quality) quality=${2-}; shift 2 ;;
+      --codec) codec=${2-}; shift 2 ;;
+      --bitrate) bitrate=${2-}; shift 2 ;;
+      --audio-codec) audio_codec=${2-}; shift 2 ;;
+      --webcam) webcam=${2-}; shift 2 ;;
+      --container) container=${2-}; shift 2 ;;
+      --cursor) cursor=${2-}; shift 2 ;;
+      *) fail "unknown option: $1" ;;
+    esac
+  done
+  case $target in
+    monitor:*) [[ $target =~ ^monitor:[A-Za-z0-9._:+-]{1,64}$ ]] || fail 'unsafe monitor name' ;;
+    window:*) window_region "${target#window:}" >/dev/null ;;   # refuse a window that is already gone
+    region:*) valid_region "${target#region:}" || fail 'region must look like WxH+X+Y, for example 800x600+100+50' ;;
+    *) fail 'target must be monitor:NAME, window:ADDRESS or region:WxH+X+Y' ;;
+  esac
+  # yes is the default device; anything else names a device or an application.
+  [[ $desktop != yes ]] || desktop=default
+  [[ $mic != yes ]] || mic=default
+  [[ $desktop == no || $desktop == default || $desktop =~ ^(device|app):[A-Za-z0-9._+:@\ -]{1,120}$ ]] || fail '--desktop-audio takes no, default, device:ID or app:NAME'
+  [[ $mic == no || $mic == default || $mic =~ ^device:[A-Za-z0-9._+:@\ -]{1,120}$ ]] || fail '--microphone takes no, default or device:ID'
+  [[ $countdown =~ ^[0-9]{1,2}$ ]] || fail '--countdown takes 0 to 99 seconds'
+  case $fps in 24|30|60|90|120|144) ;; *) fail '--fps takes 24, 30, 60, 90, 120 or 144' ;; esac
+  case $quality in medium|high|very_high|ultra) ;; *) fail '--quality takes medium, high, very_high or ultra' ;; esac
+  case $codec in auto|h264|hevc|av1|vp9) ;; *) fail '--codec takes auto, h264, hevc, av1 or vp9' ;; esac
+  case $bitrate in auto|2500|5000|8000|12000|20000|40000|80000) ;; *) fail '--bitrate takes auto, 2500, 5000, 8000, 12000, 20000, 40000 or 80000 (kbps)' ;; esac
+  case $audio_codec in opus|aac) ;; *) fail '--audio-codec takes opus or aac' ;; esac
+  case $container in mp4|mkv) ;; *) fail '--container takes mp4 or mkv' ;; esac
+  [[ $cursor == yes || $cursor == no ]] || fail '--cursor takes yes or no'
+  [[ $codec != vp9 || $container == mkv ]] || fail 'vp9 needs the mkv container'
+  if [[ -n $webcam ]]; then
+    [[ $webcam == "$v4l_dir"/* && $webcam =~ ^[A-Za-z0-9._/:+-]+$ && $webcam != *..* ]] || fail 'the camera must be one of the by-id nodes'
+    [[ -e $webcam ]] || fail 'that camera is not connected'
+    have_overlay_player || fail "$overlay_player is required for the webcam overlay"
+  fi
+  have_recorder || fail "$recorder is not installed"
+  busy && fail 'a recording is already running'
+  if [[ -z $output ]]; then
+    output=${UI_SHELL_RECORD_OUTPUT_DIR:-$(user_dir VIDEOS Videos)/records}/recording-$(date +%Y%m%d-%H%M%S).$container
+  fi
+  [[ $output == /* && $output =~ ^[A-Za-z0-9._/@+:\ -]+$ && $output != *..* ]] || fail 'unsafe output path'
+  mkdir -p -- "${output%/*}"
+  local free
+  free=$(free_mb "${output%/*}")
+  (( free >= minimum_mb )) || fail "not enough free space: ${free} MB left, ${minimum_mb} MB needed"
+
+  # Resolve audio now: a source the recorder cannot open would make it exit at once. `sources` are
+  # what the recorder is given; `labels` say what they are, for the state. A chosen device or
+  # application that has disappeared is dropped with a warning, like a missing default.
+  local catalog sources=() labels=() warnings=() desktop_name=null mic_name=null found
+  catalog=$(audio_catalog)
+  if [[ $desktop != no ]]; then
+    found=$(jq -r --arg id "$desktop" '.desktop[] | select(.id == $id) | .label' <<<"$catalog" | head -n 1)
+    if [[ -n $found ]]; then
+      labels+=(desktop); desktop_name=$(jq -Rn --arg v "$found" '$v')
+      case $desktop in default) sources+=(default_output) ;; *) sources+=("$desktop") ;; esac
+    elif [[ $desktop == default ]]; then
+      warnings+=("Desktop audio is unavailable (no audio output found); recording without it.")
+    else
+      warnings+=("The chosen desktop audio source is not available any more; recording without desktop audio.")
+    fi
+  fi
+  if [[ $mic != no ]]; then
+    found=$(jq -r --arg id "$mic" '.mic[] | select(.id == $id) | .label' <<<"$catalog" | head -n 1)
+    if [[ -n $found ]]; then
+      labels+=(mic); mic_name=$(jq -Rn --arg v "$found" '$v')
+      case $mic in default) sources+=(default_input) ;; *) sources+=("$mic") ;; esac
+    elif [[ $mic == default ]]; then
+      warnings+=("The microphone is unavailable (no audio input found); recording without it.")
+    else
+      warnings+=("The chosen microphone is not available any more; recording without a microphone.")
+    fi
+  fi
+  mkdir -p -- "$state_dir"
+  : >"$log_file"
+  jq -cn --arg target "$target" --arg output "$output" --arg log "$log_file" --argjson countdown "$countdown" --arg webcam "$webcam" --argjson desktopName "$desktop_name" --argjson micName "$mic_name" \
+    --argjson labels "$(json_list "${labels[@]}")" --argjson warnings "$(json_list "${warnings[@]}")" \
+    '{state: "starting", target: $target, countdown: $countdown, webcam: (if $webcam == "" then null else $webcam end), audio: $labels, desktopSource: $desktopName, micSource: $micName,
+      warnings: $warnings, output: $output, log: $log, started: (now | floor)}' | write_state
+  # Detached: a shell reload must not kill the recording.
+  setsid "$0" _run "$target" "$countdown" "$output" "$fps" "$quality" "$codec" "$audio_codec" "$bitrate" "$container" "$cursor" "$webcam" "${sources[@]}" </dev/null >/dev/null 2>&1 &
+  disown
+}
+
+# The wrapper: parent of the recorder, writes how it ended.
+run() {
+  local target=$1 countdown=$2 output=$3 fps=$4 quality=$5 codec=$6 audio_codec=$7 bitrate=$8 container=$9 cursor=${10} webcam=${11}
+  shift 11
+  local sources=("$@") pid= cancelling=false overlay=
+  merge_state --argjson pid "$$" '.wrapperPid = $pid'
+  # Before the recorder exists a cancel is immediate; afterwards it waits for the recorder to
+  # settle, because an early SIGINT can kill it without saving.
+  cancel() {
+    if [[ -z $pid ]]; then merge_state '.state = "finished" | .message = "Cancelled."'; exit 0; fi
+    cancelling=true
+  }
+  trap cancel TERM INT
+  # The webcam overlay lives exactly as long as this wrapper: it is up before the countdown (so
+  # the user can frame themselves) and is removed on every way out.
+  stop_overlay() { [[ -z $overlay ]] || kill "$overlay" 2>/dev/null || true; }
+  trap stop_overlay EXIT
+  if [[ -n $webcam ]]; then
+    env --default-signal=INT -- "$overlay_player" --no-config --no-terminal --title="$overlay_app_id" \
+      --wayland-app-id="$overlay_app_id" --profile=low-latency --untimed --no-audio --no-osc \
+      --no-input-default-bindings "av://v4l2:$webcam" >/dev/null 2>>"$log_file" &
+    overlay=$!
+    merge_state --argjson pid "$overlay" --arg began "$(start_time "$overlay" || true)" '.overlayPid = $pid | .overlayStart = $began'
+  fi
+  if (( countdown > 0 )); then
+    sleep "$countdown" & wait $!
+  fi
+  [[ $cancelling == false ]] || exit 0
+
+  # What to capture, resolved now: a window may have moved or closed during the countdown.
+  local capture
+  case $target in
+    monitor:*) capture=${target#monitor:} ;;
+    region:*) capture=${target#region:} ;;
+    window:*)
+      if ! capture=$(window_region "${target#window:}" 2>&1); then
+        merge_state --arg message "${capture#screen-record: }" '.state = "failed" | .message = $message'
+        exit 1
+      fi ;;
+  esac
+  [[ $target == monitor:* ]] || merge_state --arg region "$capture" '.region = $region'
+  # The audio codec is always passed explicitly (opus by default). A fixed bitrate
+  # means constant-size encoding, where -q is that bitrate in kbps; otherwise -q is the preset.
+  local args=(-w "$capture" -f "$fps" -c "$container" -cursor "$cursor" -ac "$audio_codec" -o "$output") source
+  if [[ $bitrate == auto ]]; then args+=(-q "$quality"); else args+=(-bm cbr -q "$bitrate"); fi
+  [[ $codec == auto ]] || args+=(-k "$codec")
+  for source in "${sources[@]}"; do args+=(-a "$source"); done
+  # The detached chain may have inherited an ignored SIGINT; the recorder must not.
+  env --default-signal=INT -- "$recorder" "${args[@]}" 2>>"$log_file" &
+  pid=$!
+  local began
+  began=$(start_time "$pid") || { merge_state '.state = "failed" | .message = "The recorder did not start."'; exit 1; }
+  merge_state --argjson pid "$pid" --arg began "$began" '.recorderPid = $pid | .recorderStart = $began'
+
+  # Settle: the recorder counts as recording once it has stayed alive for a short time with
+  # its output file in place. A bad source or a missing session makes it exit well before that.
+  local ticks=0
+  while running "$pid"; do
+    if (( ticks >= settle_ticks )) && [[ -e $output ]]; then break; fi
+    if (( ticks >= settle_limit_ticks )); then break; fi
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  if running "$pid"; then
+    if [[ ! -e $output ]]; then
+      kill -INT "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      merge_state --arg message "The recorder started but did not create the file." '.state = "failed" | .message = $message'
+      exit 1
+    fi
+    if [[ $cancelling == true ]]; then
+      kill -INT "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -f -- "$output"
+      merge_state '.state = "finished" | .message = "Cancelled."'
+      exit 0
+    fi
+    merge_state '.state = "recording" | .started = (now | floor)'
+    # The recorder falls back to another codec when the GPU lacks the chosen one ("selected video
+    # codec av1 is not supported by your hardware, trying h264 instead"): the file is fine but
+    # not what was asked for, so say so.
+    local fallback
+    fallback=$(grep -m1 'is not supported by your hardware, trying' "$log_file" 2>/dev/null || true)
+    if [[ -n $fallback ]]; then
+      merge_state --arg warning "${fallback#gsr warning: }" '.warnings += [$warning]'
+    fi
+  fi
+
+  local code=0
+  wait "$pid" || code=$?
+  local stopping size=0
+  stopping=$(jq -r '.stopping // false' "$state_file")
+  [[ -f $output ]] && size=$(stat -c %s -- "$output")
+  # A clean exit with a real file is a saved recording. The recorder exits 0 after SIGINT.
+  if (( code == 0 )) && (( size > 1024 )); then
+    merge_state --argjson code "$code" --argjson size "$size" '.state = "finished" | .exitCode = $code | .size = $size | .message = "Saved."'
+  else
+    local tail message
+    tail=$(tail -n 20 "$log_file" 2>/dev/null || true)
+    if (( code == 0 )); then message=${tail:-The recorder exited but saved nothing.}
+    else message=${tail:-The recorder exited with code $code.}; fi
+    [[ $stopping == true ]] && message="Stopped, but the file was not saved. $message"
+    merge_state --argjson code "$code" --arg message "$message" '.state = "failed" | .exitCode = $code | .message = $message'
+  fi
+}
+
+stop() {
+  local current state
+  current=$(checked_state)
+  state=$(jq -r '.state' <<<"$current")
+  case $state in
+    starting)
+      local wrapper
+      wrapper=$(jq -r '.wrapperPid // empty' <<<"$current")
+      [[ -n $wrapper ]] && kill -TERM "$wrapper" 2>/dev/null || true
+      # A start that is still settling finishes cancelling shortly; wait for it.
+      local waited=0
+      while [[ $(jq -r '.state' <<<"$(read_state)") == starting ]] && (( waited < 150 )); do sleep 0.1; waited=$((waited + 1)); done ;;
+    recording)
+      local pid began
+      pid=$(jq -r '.recorderPid' <<<"$current")
+      began=$(jq -r '.recorderStart' <<<"$current")
+      merge_state '.stopping = true'
+      # SIGINT, never SIGKILL: the recorder must finish the file. Wait only in this command.
+      kill -INT "$pid" 2>/dev/null || true
+      local waited=0
+      while alive "$pid" "$began" && (( waited < stop_wait_tenths )); do sleep 0.1; waited=$((waited + 1)); done
+      if alive "$pid" "$began"; then fail 'the recorder did not stop in time'; fi ;;
+    *) fail 'nothing is recording' ;;
+  esac
+}
+
+case ${1-} in
+  capabilities) capabilities ;;
+  monitors) monitors ;;
+  windows) windows ;;
+  cameras) cameras ;;
+  audio-sources) audio_catalog ;;
+  window-region) window_region_command "${2-}" ;;
+  pick-region) pick_region ;;
+  last-region) last_region ;;
+  start) shift; start "$@" ;;
+  stop) stop ;;
+  status) checked_state ;;
+  _run) shift; run "$@" ;;
+  *) usage ;;
+esac

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Tests for scripts/screen-shot with stand-ins for grim, wl-copy and hyprctl (no screen needed).
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+script=$root/scripts/screen-shot
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/screen-shot-test.XXXXXX")
+trap 'rm -rf -- "${scratch:?}"' EXIT
+mkdir -p "$scratch/bin" "$scratch/shots"
+export XDG_RUNTIME_DIR=$scratch UI_SHELL_SHOT_DIR=$scratch/shots PATH=$scratch/bin:$PATH FAKE_LOG=$scratch/calls
+export UI_SHELL_RECORD_DIR=$scratch/state
+cat >"$scratch/bin/grim" <<'SHIM'
+#!/usr/bin/env bash
+printf 'grim %s\n' "$*" >>"$FAKE_LOG"
+file=${*: -1}
+[[ -z ${FAKE_GRIM_FAIL-} ]] || { echo 'compositor refused' >&2; exit 1; }
+[[ -n ${FAKE_GRIM_EMPTY-} ]] && : >"$file" || head -c 5000 /dev/zero >"$file"
+SHIM
+cat >"$scratch/bin/wl-copy" <<'SHIM'
+#!/usr/bin/env bash
+printf 'wl-copy %s bytes=%s\n' "$*" "$(wc -c)" >>"$FAKE_LOG"
+# The real one forks into the background and keeps its inherited pipes open while it serves the
+# clipboard; a caller that waits for those pipes to close would hang.
+( sleep 20 ) &
+SHIM
+cat >"$scratch/bin/hyprctl" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *clients*) echo '[{"address":"0xabc1","title":"editor","class":"code","at":[100,200],"size":[800,600],"mapped":true,"hidden":false}]' ;;
+  *monitors*) echo '[{"name":"M","x":0,"y":0,"width":1920,"height":1080,"scale":1}]' ;;
+esac
+SHIM
+chmod +x "$scratch/bin/"*
+checks=0
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+ok() { checks=$((checks + 1)); }
+last() { tail -n 1 "$FAKE_LOG"; }
+
+echo '== capabilities'
+"$script" capabilities | jq -e '.available and .clipboard and (.targets | length == 3)' >/dev/null || fail capabilities; ok
+
+echo '== targets become grim arguments'
+: >"$FAKE_LOG"
+"$script" capture monitor:M --copy no >/dev/null
+grep -q 'grim -o M ' "$FAKE_LOG" || fail "monitor: $(cat "$FAKE_LOG")"; ok
+"$script" capture region:300x200+10+20 --copy no >/dev/null
+grep -q 'grim -g 10,20 300x200 ' "$FAKE_LOG" || fail "region: $(cat "$FAKE_LOG")"; ok
+"$script" capture window:0xabc1 --copy no >/dev/null
+grep -q 'grim -g 100,200 800x600 ' "$FAKE_LOG" || fail "window: $(cat "$FAKE_LOG")"; ok
+
+echo '== destinations'
+: >"$FAKE_LOG"
+result=$(timeout 8 "$script" capture monitor:M --copy yes --save yes) || fail 'capture hung or failed (wl-copy keeps the output pipe open)'
+jq -e '.copied == true and (.file | test("/screenshot-[0-9]{8}-[0-9]{6}\\.png$")) and .size == 5000' <<<"$result" >/dev/null || fail "copy and save: $result"; ok
+[[ -s $(jq -r .file <<<"$result") ]] || fail 'the file was not kept'; ok
+grep -q 'wl-copy --type image/png bytes=5000' "$FAKE_LOG" || fail "the image was not copied: $(cat "$FAKE_LOG")"; ok
+rm -f "$scratch/shots/"*
+result=$("$script" capture monitor:M --copy yes --save no)
+jq -e '.file == null and .copied == true' <<<"$result" >/dev/null || fail "copy only: $result"; ok
+[[ -z $(ls "$scratch/shots") ]] || fail 'a copy-only screenshot left a file'; ok
+[[ -z $(ls "$scratch" | grep '^ui-shell-shot\.') ]] || fail 'the temporary file was not removed'; ok
+: >"$FAKE_LOG"
+result=$("$script" capture monitor:M --copy no --save yes)
+jq -e '.copied == false and (.file != null)' <<<"$result" >/dev/null || fail "save only: $result"; ok
+! grep -q wl-copy "$FAKE_LOG" || fail 'save-only still copied'; ok
+"$script" capture monitor:M --copy no --save no 2>/dev/null && fail 'no destination accepted'; ok
+
+echo '== where screenshots go by default'
+result=$(env -u UI_SHELL_SHOT_DIR XDG_PICTURES_DIR=$scratch/xdg-pictures "$script" capture monitor:M --copy no)
+[[ $(jq -r .file <<<"$result") == "$scratch/xdg-pictures/screenshots/screenshot-"*.png ]] || fail "default folder: $result"; ok
+[[ -s $(jq -r .file <<<"$result") ]] || fail 'the file is not in the screenshots folder'; ok
+
+echo '== refusals'
+for bad in 'screen' 'monitor:a;b' 'region:0x5+1+1' 'region:5x5+-1+1' 'window:../x'; do
+  "$script" capture "$bad" 2>/dev/null && fail "bad target accepted: $bad"
+done; ok
+"$script" capture monitor:M --delay abc 2>/dev/null && fail 'bad delay accepted'; ok
+"$script" capture monitor:M --output relative.png 2>/dev/null && fail 'relative output accepted'; ok
+message=$("$script" capture window:0xdead 2>&1 || true)
+grep -qi 'gone' <<<"$message" || fail "a vanished window: $message"; ok
+message=$(FAKE_GRIM_FAIL=1 "$script" capture monitor:M 2>&1 || true)
+grep -q 'grim could not capture' <<<"$message" || fail "a grim failure was not reported: $message"; ok
+message=$(FAKE_GRIM_EMPTY=1 "$script" capture monitor:M --save no 2>&1 || true)
+grep -q 'empty' <<<"$message" || fail "an empty capture was accepted: $message"; ok
+
+echo '== the delay happens before the capture'
+begin=$(date +%s%N)
+"$script" capture monitor:M --copy no --delay 400 >/dev/null
+(( ($(date +%s%N) - begin) / 1000000 >= 380 )) || fail 'the delay was skipped'; ok
+printf 'screen-shot: %d checks passed\n' "$checks"

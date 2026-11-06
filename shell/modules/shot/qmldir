@@ -1,0 +1,5 @@
+module UiShell.Shot
+singleton ShotPanelState 1.0 ShotPanelState.qml
+ShotShortcut 1.0 ShotShortcut.qml
+ShotSurface 1.0 ShotSurface.qml
+ShotPanel 1.0 ShotPanel.qml
