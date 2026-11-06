@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [style, theme, qt, gtk, qml, composition]
 created: "2026-09-30T20:10:22"
-updated: "2026-11-05T06:33:13"
+updated: "2026-11-05T16:35:17"
 ---
 
 <!-- compiled_truth -->
@@ -375,4 +375,10 @@ The manifest selects a named profile; its file provider chooses a required defau
   kind: decision
   summary: "Tuning is its own module like launcher and picker: modules/tuning (TuningState, TuningShortcut, TuningSurface with click-through mask, TuningPanel docked bottom), Config.Tuning, Config.controlTuningEnabled, Hyprland bind SUPER+T, layer namespace ui-shell-control-tuning, mutual exclusion with launcher/picker. Removed from PickerPanel and ControlTuningPopup."
   source: "user: build like lego, own picker"
+  affects: [shared-style-and-toolkit-integration]
+
+- time: 2026-11-05T16:35:17
+  kind: decision
+  summary: "Surface rules: every picker (wallpaper, apps, audio, tuning) uses Style.pickerSurface/pickerBorder/pickerRadius; every popup (ContextPopup family, combo menus) uses popupSurface/popupBorder/popupRadius (elevated, one step above the picker). Cards inside a picker use background. Documented in STYLE.md."
+  source: user request 2026-11-05
   affects: [shared-style-and-toolkit-integration]

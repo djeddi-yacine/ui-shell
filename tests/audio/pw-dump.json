@@ -1,0 +1,338 @@
+[
+ {
+  "id": 0,
+  "type": "PipeWire:Interface:Metadata",
+  "props": {
+   "metadata.name": "default"
+  },
+  "metadata": [
+   {
+    "subject": 0,
+    "key": "default.audio.sink",
+    "value": {
+     "name": "speakers"
+    }
+   },
+   {
+    "subject": 0,
+    "key": "default.audio.source",
+    "value": {
+     "name": "mic"
+    }
+   },
+   {
+    "subject": 30,
+    "key": "target.object",
+    "value": "headset"
+   },
+   {
+    "subject": 31,
+    "key": "target.node",
+    "value": 20
+   }
+  ]
+ },
+ {
+  "id": 10,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Audio/Sink",
+    "node.name": "speakers",
+    "node.description": "Desk speakers",
+    "device.id": 5
+   },
+   "params": {
+    "Props": [
+     {
+      "volume": 1.0,
+      "mute": false,
+      "channelVolumes": [
+       0.125,
+       0.125
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 20,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Audio/Sink",
+    "node.name": "headset",
+    "node.nick": "Headset"
+   },
+   "params": {
+    "Props": [
+     {
+      "volume": 1.0,
+      "mute": true,
+      "channelVolumes": [
+       1.0,
+       1.0
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 11,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Audio/Source",
+    "node.name": "mic",
+    "node.description": "Desk mic"
+   },
+   "params": {
+    "Props": [
+     {
+      "volume": 1.0,
+      "mute": false,
+      "channelVolumes": [
+       0.0,
+       0.0
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 30,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Stream/Output/Audio",
+    "node.name": "firefox",
+    "application.name": "Firefox",
+    "application.process.binary": "firefox-bin",
+    "application.id": "org.mozilla.firefox",
+    "media.name": "Video"
+   },
+   "params": {
+    "Props": [
+     {
+      "volume": 1.0,
+      "mute": false,
+      "channelVolumes": [
+       0.5,
+       0.5
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 31,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Stream/Output/Audio",
+    "node.name": "mpd",
+    "application.name": "Music Player Daemon",
+    "application.process.binary": "mpd",
+    "media.name": "Song"
+   },
+   "params": {}
+  }
+ },
+ {
+  "id": 32,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Stream/Input/Audio",
+    "node.name": "rec",
+    "application.name": "Recorder"
+   },
+   "params": {}
+  }
+ },
+ {
+  "id": 40,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Midi/Bridge",
+    "node.name": "midi"
+   },
+   "params": {}
+  }
+ },
+ {
+  "id": 5,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "media.class": "Audio/Device",
+    "device.name": "alsa_card.test",
+    "device.description": "Test card"
+   },
+   "params": {
+    "Profile": [
+     {
+      "index": 1,
+      "name": "stereo"
+     }
+    ],
+    "EnumProfile": [
+     {
+      "index": 0,
+      "name": "off",
+      "description": "Off",
+      "available": "yes"
+     },
+     {
+      "index": 1,
+      "name": "stereo",
+      "description": "Stereo",
+      "available": "yes"
+     },
+     {
+      "index": 2,
+      "name": "hdmi",
+      "description": "HDMI",
+      "available": "no"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 50,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "node.id": 30,
+    "port.name": "output_FL",
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 51,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "node.id": 10,
+    "port.name": "playback_FL",
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 52,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "node.id": 40,
+    "port.name": "midi out"
+   }
+  }
+ },
+ {
+  "id": 60,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 30,
+   "output-port-id": 50,
+   "input-node-id": 10,
+   "input-port-id": 51
+  }
+ },
+ {
+  "id": 53,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "node.id": 30,
+    "port.name": "output_FR",
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 54,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "node.id": 10,
+    "port.name": "playback_FR",
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 55,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "node.id": 11,
+    "port.name": "capture_MONO",
+    "audio.channel": "MONO",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 56,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "node.id": 20,
+    "port.name": "playback_FL",
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 57,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "node.id": 20,
+    "port.name": "playback_FR",
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio"
+   }
+  }
+ },
+ {
+  "id": 33,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "media.class": "Stream/Output/Audio",
+    "node.name": "newborn",
+    "application.name": "Newborn",
+    "media.name": "just created"
+   },
+   "params": {
+    "Props": [
+     {
+      "channelVolumes": []
+     }
+    ]
+   }
+  }
+ }
+]

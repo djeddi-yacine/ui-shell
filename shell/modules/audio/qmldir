@@ -1,0 +1,8 @@
+module UiShell.Audio
+singleton AudioState 1.0 AudioState.qml
+AudioShortcut 1.0 AudioShortcut.qml
+AudioSurface 1.0 AudioSurface.qml
+AudioPanel 1.0 AudioPanel.qml
+AudioRow 1.0 AudioRow.qml
+PatchNode 1.0 PatchNode.qml
+PatchView 1.0 PatchView.qml

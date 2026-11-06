@@ -3,7 +3,7 @@
 -- QML owns these surfaces' motion. Never stack compositor fades over it.
 hl.layer_rule({
   name = "shell-owns-motion",
-  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning)$" },
+  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control)$" },
   no_anim = true,
 })
 

@@ -10,6 +10,10 @@ Developed on Arch Linux with Hyprland and Quickshell. Needed on `PATH`: `quicksh
 
 The project wallpapers in `wallpapers/` are not tracked in git (about 25 MB). `wallpapers/manifest.txt` lists each file with its SHA-512 and download URL, and `tools/scripts/fetch-wallpapers` downloads what is missing or does not match, keeping a file only after its hash agrees (`--check` verifies without downloading). The test runner calls it first, so `make test*` and `make test-env` fetch the images on demand. The images live on a free third-party image host, so if a link ever dies the script says which file failed; replace the file, update its manifest line, and the hash pins whatever you upload.
 
+## Audio panel
+
+**Super+M** opens the audio control (tabs: Output, Input, Playback, Recording, Cards, Patchbay) and **Super+T** the control tuning; Ctrl+Space inside either lists its keys, Ctrl+I explains it and Ctrl+E opens its options. The nested test session has no audio by default. `make test-env-audio` opens it with the panel on the HOST PipeWire socket, so everything you change there (volume, mute, defaults, routing, links) is real; `make test-audio` stresses the same code on a private PipeWire that cannot reach your devices.
+
 ## Quick start
 
 Run `make test-env` to open the persistent private nested session with popups closed. Nested shortcuts use Ctrl+Alt: Ctrl+Alt+W opens the wallpaper picker, Ctrl+Alt+Space opens the launcher, Ctrl+Alt+Q opens foot, and Ctrl+Alt+Escape exits gracefully from any submap. Production bindings continue to use Super. The nested session's preferences and cache stay under `.test-state/nested/`; run `make test-env-clean` only when deliberately resetting private choices and cache. Cleaning reseeds the private manifest, profile selection, clean default seed, and missing default stores from source defaults while preserving every Theme definition byte-for-byte, including imported and edited definitions. Host configuration/data and source files remain untouched.

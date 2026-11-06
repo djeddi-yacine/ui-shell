@@ -1,11 +1,13 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtQuick.Controls.Basic
 import "../adapters" as Adapters
 import "../config" as Config
 
 ContextPopup {
     id: root
-    required property Adapters.ComponentSettings settings
+    // Null for a panel without component settings (its own controls are the settings).
+    property Adapters.ComponentSettings settings: null
     property string infoTitle: ""
     property string infoDescription: ""
     property var infoDetails: []
@@ -14,6 +16,17 @@ ContextPopup {
         ? pane.item as ComponentSettingsEditor : null
     primaryAction: editor ? editor.primaryAction : null
     objectName: "panelContext"
+    // Unsaved settings: only the exit dialog may close this popup (see STYLE.md).
+    readonly property bool unsaved: editor !== null && editor.dirty
+    closePolicy: unsaved ? Popup.NoAutoClose : Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    ExitDialog {
+        id: exit
+        owner: root.owner
+        style: root.style
+        inputState: root.inputState
+        message: qsTr("Your settings are not saved.")
+        onConfirmed: root.close()
+    }
 
     contentItem: FocusScope {
         id: body
@@ -22,7 +35,8 @@ ContextPopup {
         // Unhandled popup keys stop here, never at the panel's launch/apply handler.
         Keys.onPressed: event => {
             root.inputState.keyboardUsed()
-            if (!root.handleShortcut(event) && event.key === Config.Keyboard.cancelKey) root.close()
+            if (!root.handleShortcut(event) && event.key === Config.Keyboard.cancelKey)
+                exit.request(root.unsaved, root.Window.window ? root.Window.window.activeFocusItem : null)
             event.accepted = true
         }
         Loader {

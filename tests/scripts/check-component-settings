@@ -128,6 +128,32 @@ for dir in "$fresh/ui-shell/components" "$fresh/ui-shell/components/launcher" "$
   [[ $(stat -c %a "$dir") == 700 ]] || fail "settings directory is not private: $dir"
 done
 
+# Audio settings: the third component, declared in shell/config/ComponentSpec.qml.
+render_audio=$(command_path renderAudioSettings)
+for args in '1 100' '5 125' 'undefined 150' '10 undefined' 'undefined undefined'; do
+  read -r a b <<<"$args"
+  "$render_audio" "$a" "$b" | grep -q '^QtObject {' || fail 'audio renderer shape'
+done
+rejects "$render_audio" maybe 100
+rejects "$render_audio" 3 100
+rejects "$render_audio" 11 100
+rejects "$render_audio" 1 99
+rejects "$render_audio" 1 151
+rejects "$render_audio" 1 100 extra
+[[ $("$settings_path" audio default '') == "$XDG_CONFIG_HOME/ui-shell/components/audio/Default.qml" ]] || fail 'audio default path'
+audio_rev=$("$save_settings" audio default '' absent 5 125)
+[[ $audio_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'audio save did not return a digest'
+audio_path=$("$settings_path" audio default '')
+grep -q 'property var volumeStep: 5' "$audio_path" && grep -q 'property var maximumVolume: 125' "$audio_path" || fail 'audio values not persisted'
+rejects "$save_settings" audio default '' "$audio_rev" 3 130
+rejects "$save_settings" audio default '' absent 1 100
+output_rev=$("$save_settings" audio output HDMI-A-1 absent 2 undefined)
+[[ $output_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'audio output override did not save'
+# The spec table and the renderer must agree on the choices the editor offers.
+for step in 1 2 5 10; do "$render_audio" "$step" undefined >/dev/null || fail "spec step $step is not renderable"; done
+for volume in 100 125 150; do "$render_audio" undefined "$volume" >/dev/null || fail "spec choice $volume is not renderable"; done
+grep -q 'choices: \[1, 2, 5, 10\]' /project/shell/config/ComponentSpec.qml && grep -q 'choices: \[100, 125, 150\]' /project/shell/config/ComponentSpec.qml || fail 'ComponentSpec audio choices changed without the renderer'
+
 # Control tuning: the renderer owns the model; the committed seed must equal its defaults.
 render_tuning=$(command_path renderControlTuning)
 "$render_tuning" | cmp -s - /project/shell/theme/GeneratedControlTuning.qml \

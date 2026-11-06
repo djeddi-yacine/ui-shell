@@ -22,6 +22,7 @@ return {
       target = "ui-shell:wallpaper-picker",
     },
     control_tuning = { key = "T", target = "ui-shell:control-tuning" },
+    audio_control = { key = "M", target = "ui-shell:audio-control" },
   },
 
   commands = {

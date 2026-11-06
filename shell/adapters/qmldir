@@ -1,5 +1,6 @@
 module UiShell.Adapters
 AppRunner 1.0 AppRunner.qml
+AudioGraph 1.0 AudioGraph.qml
 QmlSettingsFile 1.0 QmlSettingsFile.qml
 ComponentSettings 1.0 ComponentSettings.qml
 ThemeProfiles 1.0 ThemeProfiles.qml

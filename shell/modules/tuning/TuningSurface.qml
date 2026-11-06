@@ -3,6 +3,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import "../../components" as Controls
+import "../../config" as Config
 
 // Full-output overlay that only the panel card occupies: the mask lets every
 // pointer event outside the card reach the shell underneath, so the live
@@ -33,6 +34,7 @@ PanelWindow {
         anchors.fill: parent
         active: root.panelRequested
         visible: root.visible
+        asynchronous: Config.Tuning.asynchronousPanelLoad
         sourceComponent: TuningPanel {
             screenName: root.modelData.name
             inputState: root.inputState

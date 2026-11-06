@@ -21,7 +21,8 @@ Controls.ContextPopup {
     width: Math.max(0, Math.min(owner.width - Config.ContextPanels.outerMargin * 2, Config.ThemeEditor.maximumWidth))
     height: Math.max(0, Math.min(implicitHeight, owner.height - Config.ThemeEditor.verticalMargin * 2,
         Config.ThemeEditor.maximumHeight))
-    closePolicy: profiles.busy ? Popup.NoAutoClose : Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // With unsaved edits only the dialog below may close it, so a stray Esc or click loses nothing.
+    closePolicy: profiles.busy || root.editor.dirty ? Popup.NoAutoClose : Popup.CloseOnEscape | Popup.CloseOnPressOutside
     onOpened: root.editor.begin(root.wallpaperSelection)
     onClosed: { colorContext.close(); root.editor.colorPicker.close(); failures.close() }
 
@@ -45,9 +46,10 @@ Controls.ContextPopup {
     function handleKey(event) {
         if (event.key === Config.Keyboard.cancelKey) {
             if (failures.visible) failures.close()
-            else if (root.editor.colorPicker.visible) root.editor.colorPicker.close()
+            else if (root.editor.colorPicker.visible) root.editor.colorPicker.requestClose()
             else if (colorContext.visible) colorContext.close()
-            else if (!profiles.busy) root.close()
+            else if (exit.visible) exit.confirm()
+            else if (!profiles.busy) exit.request(root.editor.dirty, root.owner.Window.window.activeFocusItem)
         } else if (failures.visible && event.key === Config.ErrorPanels.copyKey
             && event.modifiers === Config.ErrorPanels.copyModifiers) failures.copyDiagnostic()
         event.accepted = true
@@ -59,6 +61,7 @@ Controls.ContextPopup {
     }
     contentItem: Item {
         id: popupContent
+        Keys.onPressed: event => { if (event.key === Config.Keyboard.cancelKey) handleKey(event) }
         implicitHeight: editorBody.implicitHeight
         ThemeEditor {
             id: editorBody
@@ -70,6 +73,14 @@ Controls.ContextPopup {
             onSaved: { root.close(); root.applied() }
             onBack: root.close()
         }
+    }
+    Controls.ExitDialog {
+        id: exit
+        owner: root.editor
+        style: root.style
+        inputState: root.inputState
+        message: qsTr("Your color edits are not applied.")
+        onConfirmed: root.close()
     }
     Controls.ErrorPopup {
         id: failures

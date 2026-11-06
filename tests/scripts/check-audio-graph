@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# audio-graph is exercised against a fixture; no PipeWire is needed or touched.
+set -euo pipefail
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+rejects() { if "$@" >/dev/null 2>&1; then fail "expected rejection: $*"; fi; }
+script=${1:?path to audio-graph}
+fixture=${2:?path to pw-dump fixture}
+snap=$("$script" snapshot "$fixture")
+q() { jq -e "$1" <<<"$snap" >/dev/null || fail "$2"; }
+
+# Volume is shown as users see it: cube root of the stored linear value.
+q '.sinks[] | select(.name == "speakers") | .volume == 0.5' 'cubic volume: 0.125 linear must read 0.5'
+q '.sinks[] | select(.name == "headset") | .muted == true and .volume == 1' 'mute and unity volume'
+q '.sources[0].volume == 0' 'silent source reads 0, not null'
+q '.defaults == {sink: "speakers", source: "mic"}' 'defaults from metadata'
+q '[.sinks[] | select(.default)] | length == 1 and .[0].name == "speakers"' 'exactly one default sink'
+q '.sinks | length == 2 and (.[0].label == "Desk speakers") and (.[1].label == "Headset")' 'label falls back to nick'
+# Streams: kind, identity precedence (application.id first), targets by name or node id.
+q '[.streams[] | select(.kind == "playback")] | length == 3' 'three playback streams'
+q '.streams[] | select(.id == 30) | .app == "org.mozilla.firefox" and .target == "headset" and .volume == 0.7937' 'firefox identity, name target'
+q '.streams[] | select(.id == 31) | .app == "mpd" and .target == 20 and .volume == null' 'binary identity, node-id target, no volume info'
+q '.streams[] | select(.id == 32) | .kind == "record" and .target == null' 'recording stream'
+q '[.sinks[], .sources[], .streams[]] | all(.id != 40)' 'midi nodes are not audio devices'
+# A stream caught mid-creation reports no channel volumes; that must not break the snapshot.
+q '.streams[] | select(.id == 33) | .volume == 1' 'empty channelVolumes reads as unity, not a division by zero'
+# Nodes the patchbay draws: audio only, with kind and a friendly label.
+q '.nodes | map(.id) | sort == [10, 11, 20, 30, 31, 32, 33]' 'nodes are the audio devices and streams'
+q '.nodes[] | select(.id == 30) | .label == "Firefox" and .detail == "Video"' 'stream node label and detail'
+# Cards, ports, links.
+q '.cards[0].profile == 1 and (.cards[0].profiles | length == 3) and .cards[0].profiles[2].available == "no"' 'card profiles'
+q '((.ports | map(select(.audio)) | length) == 7) and ((.ports | map(select(.audio | not)) | map(.id)) == [52])' 'only audio ports are marked audio (the midi port is not)'
+q '.links == [{id: 60, out: 50, in: 51, outNode: 30, inNode: 10}]' 'links'
+q '(. | keys) == ["cards","defaults","links","nodes","ports","sinks","sources","streams"]' 'snapshot shape is stable'
+
+# Which ports connect would link: channel by channel, mono fans out, nothing without ports.
+pairs() { "$script" pairs "$1" "$2" "$fixture" | tr '\n' ';'; }
+[[ $(pairs 30 10) == '50 51;53 54;' ]] || fail 'stereo to stereo pairs FL-FL and FR-FR'
+[[ $(pairs 11 20) == '55 56;55 57;' ]] || fail 'a mono source fans out to both channels'
+[[ $(pairs 30 20) == '50 56;53 57;' ]] || fail 'another stereo sink pairs by channel'
+[[ -z $(pairs 40 10) ]] || fail 'a node without audio ports pairs with nothing'
+[[ -z $(pairs 30 999) ]] || fail 'an unknown destination pairs with nothing'
+
+# Arguments are validated before any tool runs, so these need no PipeWire.
+rejects "$script" connect 1
+rejects "$script" connect a b
+rejects "$script" disconnect 1 x
+rejects "$script" pairs 1
+rejects "$script"
+rejects "$script" nope
+rejects "$script" snapshot /nonexistent.json
+rejects "$script" volume abc 50
+rejects "$script" volume 1 151
+rejects "$script" volume 1 -1
+rejects "$script" volume 1 5.5
+rejects "$script" mute 1 maybe
+rejects "$script" default '1; rm -rf /'
+rejects "$script" move 1 'bad name'
+rejects "$script" move 1 '$(touch x)'
+rejects "$script" move x speakers
+rejects "$script" link 1
+rejects "$script" unlink a b
+rejects "$script" profile 1 -2
+printf '%s\n' 'Audio graph checks passed.'

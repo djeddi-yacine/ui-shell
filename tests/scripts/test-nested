@@ -208,6 +208,15 @@ args+=(--symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64
   --bind "$test_run_dir/quickshell" "$test_runtime/quickshell"
   --bind "$test_run_dir/hypr" "$test_runtime/hypr"
   --ro-bind "$display_socket" "$test_runtime/$test_parent_display")
+# Opt-in: let the audio module see the host's real PipeWire session. The sandbox gets only
+# the PipeWire socket (no pulse, no D-Bus), but through it the session is fully controllable:
+# volume, mute, defaults, routing and links of REAL devices.
+if [[ ${UI_SHELL_HOST_PIPEWIRE-} == 1 ]]; then
+  pipewire_socket="${XDG_RUNTIME_DIR}/${PIPEWIRE_REMOTE:-pipewire-0}"
+  [[ -S $pipewire_socket ]] || { printf 'UI_SHELL_HOST_PIPEWIRE=1 but %s is not a socket.\n' "$pipewire_socket" >&2; exit 1; }
+  printf '%s\n' 'Host PipeWire shared with the nested session: audio changes affect real devices.' >&2
+  args+=(--ro-bind "$pipewire_socket" "$test_runtime/pipewire-0")
+fi
 if [[ -n $manager_proxy_pid ]]; then
   args+=(--ro-bind "$test_run_dir/$test_manager_socket" "$test_runtime/$test_manager_socket"
     --setenv UI_SHELL_TEST_MANAGER_BUS "unix:path=$test_runtime/$test_manager_socket"
@@ -308,6 +317,10 @@ args+=(--setenv PATH /usr/bin:/bin --setenv HOME "$test_home"
   --setenv UI_SHELL_ROOT "$test_project"
   --setenv UI_SHELL_OPEN_PICKER "$test_open_picker"
   --setenv UI_SHELL_OPEN_TUNING "${UI_SHELL_OPEN_TUNING:-0}"
+  --setenv UI_SHELL_OPEN_AUDIO "${UI_SHELL_OPEN_AUDIO:-0}"
+  --setenv UI_SHELL_AUDIO_TAB "${UI_SHELL_AUDIO_TAB-}"
+  --setenv UI_SHELL_AUDIO_CONTEXT "${UI_SHELL_AUDIO_CONTEXT-}"
+  --setenv UI_SHELL_AUDIO_FIXTURE "${UI_SHELL_AUDIO_FIXTURE-}"
   --setenv UI_SHELL_HOST_PROJECT "$project_root"
   --setenv UI_SHELL_HOST_PID_NS "$(readlink /proc/self/ns/pid)"
   --setenv UI_SHELL_HOST_MNT_NS "$(readlink /proc/self/ns/mnt)"

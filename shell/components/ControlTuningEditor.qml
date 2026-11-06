@@ -85,22 +85,6 @@ ColumnLayout {
         }
     }
 
-    Text {
-        Layout.fillWidth: true
-        text: qsTr("Tune controls")
-        color: root.style.text
-        font.family: root.style.uiFamily
-        font.pointSize: root.style.bodyPointSize
-        font.weight: root.style.emphasisWeight
-    }
-    Text {
-        Layout.fillWidth: true
-        text: qsTr("A mode sets how colours behave; sliders fine-tune it. Changes preview live; Save keeps them, Esc discards.")
-        color: root.style.textMuted
-        wrapMode: Text.Wrap
-        font.family: root.style.uiFamily
-        font.pointSize: root.style.captionPointSize
-    }
     RowLayout {
         Layout.fillWidth: true
         spacing: Config.ContextPanels.spacing

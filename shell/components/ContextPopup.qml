@@ -54,11 +54,10 @@ Popup {
         function onVisibleChanged() { if (!root.owner.visible) root.close() }
     }
     background: Rectangle {
-        color: root.style.surfaceRaised
-        radius: root.style.menuRadius
+        color: root.style.popupSurface
+        radius: root.style.popupRadius
         border.width: Theme.Shape.borderWidth
-        border.color: Theme.Interaction.readable(root.style.outline, root.style.surfaceRaised,
-            Theme.Interaction.minimumStateContrast)
+        border.color: root.style.popupBorder
     }
     Overlay.modal: Rectangle {
         color: Qt.rgba(root.style.scrim.r, root.style.scrim.g, root.style.scrim.b,

@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+# Stress test of scripts/audio-graph against a REAL PipeWire graph with generated audio.
+#
+#   check-audio-live private   (default) its own PipeWire + WirePlumber under a temporary
+#                              XDG_RUNTIME_DIR, with null sinks and a null source. The
+#                              host audio session is never touched; this is verified.
+#   check-audio-live host      the current session. Only streams this script creates
+#                              (uitest-*) are changed; devices, defaults and volumes of
+#                              the host are not. Tones are played very quietly into the
+#                              real default output for a few seconds.
+#
+# Audio is a sine from ffmpeg piped into pw-cat at a few percent amplitude.
+set -uo pipefail
+
+mode=${1:-private}
+[[ $mode == private || $mode == host ]] || { printf 'Usage: %s private|host\n' "${0##*/}" >&2; exit 2; }
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+root=$(cd -- "$here/../.." && pwd -P)
+ag=$root/scripts/audio-graph
+for tool in pipewire wireplumber pw-dump pw-cat pw-link pw-metadata wpctl ffmpeg jq; do
+  command -v "$tool" >/dev/null || { printf 'check-audio-live: %s is required\n' "$tool" >&2; exit 2; }
+done
+
+HOST_RUNTIME=${XDG_RUNTIME_DIR-}
+AMPLITUDE=0.03
+export AMPLITUDE
+work=
+pw_pid=
+wp_pid=
+declare -a stream_groups=()
+passed=0
+failed=0
+start_time=$SECONDS
+
+note() { printf '\n== %s\n' "$*"; }
+pass() { passed=$((passed + 1)); }
+flunk() { failed=$((failed + 1)); printf 'FAIL: %s\n' "$*" >&2; }
+check() { if "$@" >/dev/null 2>&1; then pass; else flunk "$*"; fi; }
+expect() {  # expect DESCRIPTION CONDITION...: run the condition, report by description
+  local description=$1; shift
+  if "$@" >/dev/null 2>&1; then pass; else flunk "$description"; fi
+}
+
+cleanup() {
+  local group
+  for group in "${stream_groups[@]}"; do kill -- "-$group" 2>/dev/null || true; done
+  [[ -z $wp_pid ]] || kill "$wp_pid" 2>/dev/null || true
+  [[ -z $pw_pid ]] || kill "$pw_pid" 2>/dev/null || true
+  sleep 0.5
+  if [[ -n $work && $work == /tmp/ui-shell-audio.* ]]; then rm -rf -- "${work:?}"; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+# ---- session ---------------------------------------------------------------------
+
+host_fingerprint() {  # names and default sink volume of the host session, for the isolation check
+  [[ -n $HOST_RUNTIME ]] || return 0
+  XDG_RUNTIME_DIR=$HOST_RUNTIME "$ag" snapshot 2>/dev/null | jq -S -c '{defaults, sinks: [.sinks[] | {name, volume, muted}], sources: [.sources[] | {name, volume, muted}]}' 2>/dev/null || true
+}
+
+start_private_session() {
+  work=$(mktemp -d /tmp/ui-shell-audio.XXXXXX)
+  mkdir -p "$work/run" "$work/home" "$work/conf"
+  chmod 700 "$work/run"
+  cat >"$work/conf/pipewire.conf" <<'CONF'
+context.properties = { core.daemon = true  core.name = pipewire-0  default.clock.rate = 48000 }
+context.spa-libs = { audio.convert.* = audioconvert/libspa-audioconvert  audio.adapt = audioconvert/libspa-audioconvert  support.* = support/libspa-support }
+context.modules = [
+  { name = libpipewire-module-protocol-native }
+  { name = libpipewire-module-metadata }
+  { name = libpipewire-module-spa-node-factory }
+  { name = libpipewire-module-client-node }
+  { name = libpipewire-module-adapter }
+  { name = libpipewire-module-link-factory }
+  { name = libpipewire-module-access }
+]
+context.objects = [
+  { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-sink-a node.description = "Test sink A" media.class = Audio/Sink object.linger = true audio.position = [ FL FR ] } }
+  { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-sink-b node.description = "Test sink B" media.class = Audio/Sink object.linger = true audio.position = [ FL FR ] } }
+  { factory = adapter args = { factory.name = support.null-audio-sink node.name = test-mic node.description = "Test mic" media.class = Audio/Source/Virtual object.linger = true audio.position = [ FL FR ] } }
+]
+CONF
+  export XDG_RUNTIME_DIR=$work/run HOME=$work/home XDG_CONFIG_HOME=$work/home/.config
+  export XDG_STATE_HOME=$work/home/.state XDG_CACHE_HOME=$work/home/.cache XDG_DATA_HOME=$work/home/.local/share
+  unset PIPEWIRE_REMOTE PIPEWIRE_RUNTIME_DIR DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS
+  pipewire -c "$work/conf/pipewire.conf" >"$work/pipewire.log" 2>&1 &
+  pw_pid=$!
+  local waited=0
+  until [[ -S $work/run/pipewire-0 ]]; do sleep 0.1; waited=$((waited + 1)); (( waited < 100 )) || { cat "$work/pipewire.log" >&2; return 1; }; done
+  wireplumber -p policy >"$work/wireplumber.log" 2>&1 &
+  wp_pid=$!
+  # Ready when the session manager has published a default sink.
+  waited=0
+  until [[ $("$ag" snapshot 2>/dev/null | jq -r '.defaults.sink // empty') == test-sink-a ]]; do
+    sleep 0.2; waited=$((waited + 1)); (( waited < 75 )) || { cat "$work/wireplumber.log" >&2; return 1; }
+  done
+}
+
+# ---- helpers ---------------------------------------------------------------------
+
+snap() { "$ag" snapshot; }
+
+# wait_for SECONDS COMMAND...: poll until the command succeeds.
+wait_for() {
+  local limit=$1; shift
+  local deadline=$((SECONDS + limit))
+  while (( SECONDS <= deadline )); do
+    if "$@" >/dev/null 2>&1; then return 0; fi
+    sleep 0.15
+  done
+  return 1
+}
+
+# spawn_tone NAME [FREQ]: a quiet stereo sine as a playback stream named NAME.
+spawn_tone() {
+  local name=$1 freq=${2:-440}
+  setsid bash -c '
+    ffmpeg -v quiet -re -f lavfi -i "sine=frequency='"$freq"':sample_rate=48000" -af volume='"$AMPLITUDE"' -t 600 -f s16le -ac 2 - |
+    pw-cat --playback --raw --format s16 --rate 48000 --channels 2 \
+      -P "{ node.name=uitest-'"$name"' application.name=\"UiTest '"$name"'\" media.name=\"tone '"$name"'\" }" -' \
+    >/dev/null 2>&1 &
+  stream_groups+=($!)
+  printf '%s\n' "$!"
+}
+kill_tone() { kill -- "-$1" 2>/dev/null || true; }
+
+# spawn_listener NAME: a recording stream reading the default source.
+spawn_listener() {
+  setsid bash -c 'pw-cat --record --raw --format s16 --rate 48000 --channels 2 -P "{ node.name=uitest-rec-'"$1"' application.name=\"UiTest rec '"$1"'\" }" - >/dev/null' >/dev/null 2>&1 &
+  stream_groups+=($!)
+  printf '%s\n' "$!"
+}
+
+stream_id() { jq -r --arg n "UiTest $1" '[.streams[] | select(.appName == $n)] | .[0].id // empty'; }
+sink_id() { jq -r --arg n "$1" '[.sinks[] | select(.name == $n)] | .[0].id // empty'; }
+invalid_count=0
+valid_snapshot() {
+  local out err
+  err=$(mktemp "${work:-/tmp}/snap-err.XXXXXX")
+  if out=$(snap 2>"$err") && jq -e '(.sinks | type == "array") and (.streams | type == "array") and (.links | type == "array")' <<<"$out" >/dev/null 2>>"$err"; then
+    rm -f -- "$err"; return 0
+  fi
+  invalid_count=$((invalid_count + 1))
+  (( invalid_count > 3 )) || { printf 'INVALID SNAPSHOT: %s\n' "$(head -c 400 "$err" | tr '\n' ' ')" >&2; }
+  rm -f -- "$err"; return 1
+}
+# Links from a node, as the set of destination node ids and the link count.
+destinations_of() { snap | jq -r --argjson n "$1" '[.links[] | select(.outNode == $n) | .inNode] | unique | map(tostring) | join(",")'; }
+link_count_of() { snap | jq -r --argjson n "$1" '[.links[] | select(.outNode == $n)] | length'; }
+volume_of() { snap | jq -r --argjson n "$1" '[.streams[], .sinks[], .sources[] | select(.id == $n)][0].volume // empty'; }
+muted_of() { snap | jq -r --argjson n "$1" '[.streams[], .sinks[], .sources[] | select(.id == $n)][0].muted | tostring'; }
+near() { awk -v a="$1" -v b="$2" -v t="${3:-0.011}" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= t) }'; }
+timed_ms() {  # timed_ms COMMAND...: milliseconds
+  local begin end
+  begin=$(date +%s%N); "$@" >/dev/null 2>&1; end=$(date +%s%N)
+  printf '%s\n' $(((end - begin) / 1000000))
+}
+
+# ---- run ---------------------------------------------------------------------------
+
+before=$(host_fingerprint)
+if [[ $mode == private ]]; then
+  note "starting a private PipeWire + WirePlumber session"
+  start_private_session || { printf 'could not start the private session\n' >&2; exit 1; }
+  [[ $XDG_RUNTIME_DIR == "$work/run" && $XDG_RUNTIME_DIR != "$HOST_RUNTIME" ]] || { printf 'isolation failed\n' >&2; exit 1; }
+  printf 'private session at %s\n' "$XDG_RUNTIME_DIR"
+  STREAMS=16; BIG=40; ROUNDS=4; AMPLITUDE=0.03
+  SWEEP=(0 1 25 50 100 149 150 37)
+else
+  note "using the current session; only uitest-* streams are touched"
+  # Real speakers may be listening: whisper-quiet tones and nothing above 100%.
+  STREAMS=5; BIG=0; ROUNDS=2; AMPLITUDE=0.006
+  SWEEP=(0 1 25 50 100 37)
+fi
+
+note "1. baseline snapshot"
+expect 'snapshot is valid JSON with the stable shape' valid_snapshot
+expect 'snapshot has at least one sink' bash -c "[[ \$('$ag' snapshot | jq '.sinks | length') -ge 1 ]]"
+default_sink=$(snap | jq -r '.defaults.sink // empty')
+expect 'a default sink is known' test -n "$default_sink"
+mapfile -t sinks < <(snap | jq -r '.sinks[].name')
+sink_a=${sinks[0]}
+sink_b=${sinks[1]:-}
+if [[ $mode == private ]]; then sink_a=test-sink-a; sink_b=test-sink-b; fi
+printf 'sinks: %s\n' "${sinks[*]}"
+
+note "2. one stream: appears, is routed, disappears"
+pid=$(spawn_tone solo)
+expect 'stream appears within 4s' wait_for 4 bash -c "[[ -n \$('$ag' snapshot | jq -r '.streams[] | select(.appName == \"UiTest solo\") | .id') ]]"
+sid=$(snap | stream_id solo)
+expect 'stream is a playback stream labelled by its media name' bash -c "'$ag' snapshot | jq -e '.streams[] | select(.id == $sid) | .kind == \"playback\" and .label == \"tone solo\"'"
+expect 'stream gets linked (stereo, two links) by the session manager' wait_for 4 bash -c "[[ \$('$ag' snapshot | jq '[.links[] | select(.outNode == $sid)] | length') == 2 ]]"
+kill_tone "$pid"
+expect 'stream disappears within 4s' wait_for 4 bash -c "[[ -z \$('$ag' snapshot | jq -r '.streams[] | select(.appName == \"UiTest solo\") | .id') ]]"
+
+note "3. $STREAMS concurrent streams"
+declare -A tone_pid=() tone_id=()
+for n in $(seq 1 "$STREAMS"); do tone_pid[$n]=$(spawn_tone "$n" $((200 + n * 37))); done
+expect "all $STREAMS streams appear" wait_for 10 bash -c "[[ \$('$ag' snapshot | jq '[.streams[] | select(.appName | startswith(\"UiTest \"))] | length') == $STREAMS ]]"
+for n in $(seq 1 "$STREAMS"); do tone_id[$n]=$(snap | stream_id "$n"); done
+expect 'every stream has a distinct id' bash -c "[[ \$(printf '%s\n' ${tone_id[*]} | sort -u | wc -l) == $STREAMS ]]"
+times=()
+for i in $(seq 1 15); do times+=("$(timed_ms "$ag" snapshot)"); done
+sorted=($(printf '%s\n' "${times[@]}" | sort -n))
+printf 'snapshot latency over 15 runs: min %sms median %sms max %sms\n' "${sorted[0]}" "${sorted[7]}" "${sorted[14]}"
+expect 'snapshot median under 800ms with the graph loaded' test "${sorted[7]}" -lt 800
+
+note "4. routing: move every stream between sinks, $ROUNDS rounds"
+routed_to() { [[ "$(destinations_of "$1")" == "$2" && "$(link_count_of "$1")" == 2 ]]; }
+if [[ -n $sink_b ]]; then
+  a_id=$(snap | sink_id "$sink_a"); b_id=$(snap | sink_id "$sink_b")
+  for round in $(seq 1 "$ROUNDS"); do
+    for n in $(seq 1 "$STREAMS"); do
+      if (( (n + round) % 2 == 0 )); then target=$sink_a want=$a_id; else target=$sink_b want=$b_id; fi
+      "$ag" move "${tone_id[$n]}" "$target" || flunk "move ${tone_id[$n]} $target"
+      pending[$n]=$want
+    done
+    for n in $(seq 1 "$STREAMS"); do
+      expect "round $round: stream $n follows its target (links to node ${pending[$n]})" wait_for 6 routed_to "${tone_id[$n]}" "${pending[$n]}"
+    done
+  done
+  for n in 1 2 3; do "$ag" move "${tone_id[$n]}" default || flunk "move default $n"; done
+  for n in 1 2 3; do
+    expect "stream $n follows the default again" wait_for 6 bash -c "[[ \$('$ag' snapshot | jq -r '.streams[] | select(.id == ${tone_id[$n]}) | .target') == null ]]"
+  done
+else
+  printf 'only one sink here: routing between sinks skipped\n'
+fi
+
+note "5. volume sweep and mute on every stream"
+for n in $(seq 1 "$STREAMS"); do
+  for percent in "${SWEEP[@]}"; do
+    "$ag" volume "${tone_id[$n]}" "$percent" || { flunk "volume $percent on ${tone_id[$n]}"; continue; }
+    expect "stream $n volume $percent% reads back" wait_for 4 bash -c "$(declare -f near volume_of snap); ag='$ag'; near \"\$(volume_of ${tone_id[$n]})\" $(awk -v p=$percent 'BEGIN{printf "%.4f", p/100}')"
+  done
+  "$ag" mute "${tone_id[$n]}" on && expect "stream $n muted" wait_for 4 bash -c "$(declare -f muted_of snap); ag='$ag'; [[ \$(muted_of ${tone_id[$n]}) == true ]]"
+  "$ag" mute "${tone_id[$n]}" toggle && expect "stream $n unmuted by toggle" wait_for 4 bash -c "$(declare -f muted_of snap); ag='$ag'; [[ \$(muted_of ${tone_id[$n]}) == false ]]"
+done
+
+note "6. concurrency: 90 mixed actions, 12 at a time"
+actions=()
+for k in $(seq 1 90); do
+  n=$(( (k * 7) % STREAMS + 1 ))
+  case $((k % 3)) in
+    0) actions+=("volume ${tone_id[$n]} $(( (k * 13) % 151 ))") ;;
+    1) actions+=("mute ${tone_id[$n]} $([[ $((k % 2)) == 0 ]] && echo on || echo off)") ;;
+    2) if [[ -n $sink_b ]]; then actions+=("move ${tone_id[$n]} $([[ $((k % 4)) == 2 ]] && echo "$sink_a" || echo "$sink_b")"); else actions+=("volume ${tone_id[$n]} 50"); fi ;;
+  esac
+done
+failures=$(printf '%s\n' "${actions[@]}" | xargs -P 12 -I{} bash -c "'$ag' {} >/dev/null 2>&1 || echo FAIL" | grep -c FAIL || true)
+expect 'no concurrent action failed' test "$failures" -eq 0
+expect 'graph is still valid after the storm' valid_snapshot
+for n in $(seq 1 "$STREAMS"); do "$ag" mute "${tone_id[$n]}" off; done
+expect 'every stream is linked to exactly one sink with two links' wait_for 10 bash -c "
+  s=\$('$ag' snapshot); jq -e '[.streams[] | select(.appName | startswith(\"UiTest \")) | .id] as \$ids
+   | all(\$ids[]; . as \$i | ([\$s_links[]? | select(.outNode == \$i)] | length) == 2)' --argjson s_links \"\$(jq -c .links <<<\"\$s\")\" <<<\"\$s\""
+expect 'no duplicate links anywhere' bash -c "[[ \$('$ag' snapshot | jq '[.links[] | [.out, .in]] | length as \$all | unique | length == \$all') == true ]]"
+
+note "7. patchbay: connect and disconnect toggled repeatedly"
+if [[ -n $sink_b ]]; then
+  n=1; sid=${tone_id[$n]}; a_id=$(snap | sink_id "$sink_a"); b_id=$(snap | sink_id "$sink_b")
+  "$ag" move "$sid" "$sink_a"; wait_for 6 routed_to "$sid" "$a_id"
+  for i in $(seq 1 12); do
+    "$ag" connect "$sid" "$b_id" || flunk "connect $sid $b_id"
+    expect "toggle $i: connect adds the second sink (four links)" wait_for 4 bash -c "$(declare -f link_count_of snap); ag='$ag'; [[ \$(link_count_of $sid) == 4 ]]"
+    "$ag" connect "$sid" "$b_id" || flunk 'second connect is a no-op, not an error'
+    expect "toggle $i: connecting twice does not duplicate links" bash -c "$(declare -f link_count_of snap); ag='$ag'; [[ \$(link_count_of $sid) == 4 ]]"
+    "$ag" disconnect "$sid" "$b_id" || flunk "disconnect $sid $b_id"
+    expect "toggle $i: disconnect removes exactly that sink" wait_for 4 bash -c "$(declare -f link_count_of destinations_of snap); ag='$ag'; [[ \$(link_count_of $sid) == 2 && \$(destinations_of $sid) == '$a_id' ]]"
+  done
+  "$ag" disconnect "$sid" "$a_id"
+  expect 'disconnecting the last route leaves the stream unlinked for the moment' wait_for 4 bash -c "$(declare -f link_count_of snap); ag='$ag'; [[ \$(link_count_of $sid) -le 2 ]]"
+  # Put it back where the session manager wants it, so later checks start from a linked graph.
+  "$ag" move "$sid" default
+  expect 'the stream is routed again after move default' wait_for 8 bash -c "$(declare -f link_count_of snap); ag='$ag'; [[ \$(link_count_of $sid) == 2 ]]"
+else
+  printf 'only one sink here: connect and disconnect toggles skipped\n'
+fi
+rec_pid=$(spawn_listener one)
+expect 'a recording stream appears' wait_for 6 bash -c "[[ -n \$('$ag' snapshot | jq -r '.streams[] | select(.appName == \"UiTest rec one\") | .id') ]]"
+expect 'it is classified as a recording stream' bash -c "'$ag' snapshot | jq -e '.streams[] | select(.appName == \"UiTest rec one\") | .kind == \"record\"'"
+kill_tone "$rec_pid"
+
+CHURN=${AUDIO_CHURN:-25}   # AUDIO_CHURN=300 make test-audio hunts for rare races
+note "8. churn: $CHURN streams created and killed while snapshotting"
+bad=0
+for i in $(seq 1 "$CHURN"); do
+  p=$(spawn_tone "churn$i")
+  sleep 0.$(( (i * 3) % 7 ))
+  valid_snapshot || bad=$((bad + 1))
+  kill_tone "$p"
+  valid_snapshot || bad=$((bad + 1))
+done
+expect 'every snapshot taken during churn was valid' test "$bad" -eq 0
+expect 'churn streams are all gone afterwards' wait_for 8 bash -c "[[ \$('$ag' snapshot | jq '[.streams[] | select(.appName | startswith(\"UiTest churn\"))] | length') == 0 ]]"
+
+note "9. failure paths fail fast and clean"
+dead=999999
+begin=$SECONDS
+if timeout 10 "$ag" volume "$dead" 50 >/dev/null 2>&1; then flunk 'volume on a missing node should fail'; else pass; fi
+if timeout 10 "$ag" mute "$dead" on >/dev/null 2>&1; then flunk 'mute on a missing node should fail'; else pass; fi
+if timeout 10 "$ag" connect "$dead" "$dead" >/dev/null 2>&1; then flunk 'connect between missing nodes should fail'; else pass; fi
+expect 'failing actions returned within 10s each' test $((SECONDS - begin)) -lt 25
+expect 'the graph is unaffected by failed actions' valid_snapshot
+
+if [[ $mode == private ]]; then
+  note "10. $BIG streams: a large graph"
+  declare -a big_pids=()
+  for n in $(seq 1 "$BIG"); do big_pids+=("$(spawn_tone "big$n" $((100 + n * 11)))"); done
+  expect "all $BIG extra streams appear" wait_for 20 bash -c "[[ \$('$ag' snapshot | jq '[.streams[] | select(.appName | startswith(\"UiTest big\"))] | length') == $BIG ]]"
+  big_ms=$(timed_ms "$ag" snapshot)
+  printf 'snapshot with %s streams: %sms\n' "$((STREAMS + BIG))" "$big_ms"
+  expect 'snapshot under 2.5s with a large graph' test "$big_ms" -lt 2500
+  if command -v node >/dev/null; then
+    tail -n +2 "$root/shell/modules/audio/PatchLogic.js" >"$work/PatchLogic.mjs"
+    printf 'export { split, edges };\n' >>"$work/PatchLogic.mjs"
+    # Streams publish their ports a little after they appear; the patchbay only draws nodes with ports.
+    ports_ready() { [[ $(snap | jq '[.streams[].id] as $ids | [.ports[] | select(.direction == "output" and .audio and (.node as $n | $ids | index($n)))] | length') -ge $(((STREAMS + BIG) * 2)) ]]; }
+    expect 'every stream has published both output channels' wait_for 30 ports_ready
+    snap >"$work/big.json"
+    if ! node --input-type=module -e "
+      import fs from 'fs'; import * as L from '$work/PatchLogic.mjs';
+      const g = JSON.parse(fs.readFileSync('$work/big.json'));
+      const p = L.split(g.nodes, g.ports, g.links);
+      const e = L.edges(g.links, p.sources, p.destinations);
+      const tones = p.sources.filter(n => n.label.startsWith('UiTest '));
+      if (tones.length < $((STREAMS + BIG))) throw new Error('sources ' + tones.length);
+      if (!e.every(x => x.count === 2)) throw new Error('an edge is not stereo');
+      if (e.length < $((STREAMS + BIG))) throw new Error('edges ' + e.length);" 2>"$work/patch.err"; then
+      flunk "PatchLogic over the large live graph: $(head -c 300 "$work/patch.err" | tr '\n' ' ')"
+    else pass; fi
+  fi
+  for p in "${big_pids[@]}"; do kill_tone "$p"; done
+  expect 'the large graph drains' wait_for 15 bash -c "[[ \$('$ag' snapshot | jq '[.streams[] | select(.appName | startswith(\"UiTest big\"))] | length') == 0 ]]"
+
+  note "11. defaults and a source device"
+  a_id=$(snap | sink_id test-sink-a); b_id=$(snap | sink_id test-sink-b); mic_id=$(snap | jq -r '.sources[] | select(.name == "test-mic") | .id')
+  "$ag" default "$b_id"
+  expect 'default sink switches to B' wait_for 5 bash -c "[[ \$('$ag' snapshot | jq -r '.defaults.sink') == test-sink-b ]]"
+  "$ag" default "$a_id"
+  expect 'default sink switches back to A' wait_for 5 bash -c "[[ \$('$ag' snapshot | jq -r '.defaults.sink') == test-sink-a ]]"
+  expect 'the virtual source shows up as a source device' test -n "$mic_id"
+  "$ag" volume "$b_id" 64
+  expect 'sink volume 64% reads back' wait_for 4 bash -c "$(declare -f near volume_of snap); ag='$ag'; near \"\$(volume_of $b_id)\" 0.64"
+
+  note "12. the host session was not touched"
+  after=$(host_fingerprint)
+  if [[ -n $before ]]; then
+    if [[ $before == "$after" ]]; then pass
+    else flunk "host session changed: $(diff <(jq . <<<"$before") <(jq . <<<"$after") | head -12 | tr '\n' ' ')"; fi
+  else printf 'no host session to compare\n'; fi
+fi
+
+for p in "${tone_pid[@]}"; do kill_tone "$p"; done
+printf '\n%s: %d checks passed, %d failed in %ds\n' "audio live ($mode)" "$passed" "$failed" "$((SECONDS - start_time))"
+(( failed == 0 ))

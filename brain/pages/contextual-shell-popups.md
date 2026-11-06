@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [shell, ux, keyboard, configuration]
 created: "2026-10-05T02:03:50"
-updated: "2026-10-12T02:21:19"
+updated: "2026-11-06T02:41:15"
 ---
 
 <!-- compiled_truth -->
@@ -162,4 +162,16 @@ Ctrl+Return and Ctrl+keypad Enter activate the explicit primary button of the to
   kind: decision
   summary: Make scrollable popup selectors keyboard-owned while retaining pointer activation and scrolling
   source: "User input-modality request; offscreen selector tests and isolated launcher/wallpaper runs, 2026-10-12"
+  affects: [contextual-shell-popups]
+
+- time: 2026-11-06T02:35:50
+  kind: decision
+  summary: "Exit rule: Esc always leaves. View-only panels close on one Esc; panels with unsaved work (tuning, theme editor) show ExitDialog, where Esc means dismiss-and-quit, so leaving takes a double Esc and a stray key loses nothing. Keep editing is the default button. Documented in STYLE.md."
+  source: user request 2026-11-06
+  affects: [contextual-shell-popups]
+
+- time: 2026-11-06T02:41:15
+  kind: decision
+  summary: "ExitDialog also guards the Ctrl+E component settings popup (draft vs file) and the theme editor's colour picker (changed channels not yet used). View-only panels stay one-Esc."
+  source: user request 2026-11-06
   affects: [contextual-shell-popups]

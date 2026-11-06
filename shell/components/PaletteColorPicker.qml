@@ -17,6 +17,19 @@ ContextPopup {
         channels.green / Config.ThemeEditor.channelMaximum, channels.blue / Config.ThemeEditor.channelMaximum, 1)
     primaryAction: chooseButton
     signal chosen(string color)
+    // A colour you changed and did not use is unsaved work: leaving asks first.
+    readonly property bool dirty: !Qt.colorEqual(value, seedColor)
+    closePolicy: dirty ? Popup.NoAutoClose : Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    function requestClose() { exit.request(dirty, root.Window.window ? root.Window.window.activeFocusItem : null) }
+    ExitDialog {
+        id: exit
+        owner: root.owner
+        style: root.style
+        inputState: root.inputState
+        z: 3
+        message: qsTr("This color is not used yet.")
+        onConfirmed: root.close()
+    }
     shortcutsEnabled: false
     width: Math.min(owner.width - Config.ContextPanels.outerMargin * 2, Config.ThemeEditor.colorPickerWidth)
     onOpened: {
@@ -38,6 +51,9 @@ ContextPopup {
     }
     contentItem: ColumnLayout {
         spacing: Config.ContextPanels.spacing
+        Keys.onPressed: event => {
+            if (event.key === Config.Keyboard.cancelKey) { root.requestClose(); event.accepted = true }
+        }
         Text {
             Layout.fillWidth: true
             text: root.role ? root.role.label : ""

@@ -29,6 +29,16 @@ QtObject {
     readonly property int menuRadius: Shape.menuRadius
     readonly property int badgeRadius: Shape.badgeRadius
     readonly property int indicatorRadius: Shape.indicatorRadius
+    // Surface rules. A PICKER is a full panel (wallpaper, apps, audio, tuning): the base
+    // surface, one outline, the menu radius. A POPUP opens over a picker (context, error,
+    // colour, combo menus): one step up (elevated) with a readable outline, so it never
+    // blends into the picker beneath. Use these, never raw surface/elevated, for either.
+    readonly property color pickerSurface: surface
+    readonly property color pickerBorder: controls.outline
+    readonly property int pickerRadius: menuRadius
+    readonly property color popupSurface: surfaceRaised
+    readonly property color popupBorder: Interaction.readable(outline, surfaceRaised, Interaction.minimumStateContrast)
+    readonly property int popupRadius: menuRadius
     readonly property int spacing: Density.spacing
     readonly property int controlHeight: Density.controlHeight
     readonly property int controlPaddingX: Density.controlPaddingX

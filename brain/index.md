@@ -1,8 +1,9 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-05T06:01:31.753Z._
+_Auto-generated. Last updated 2026-11-06T01:41:15.392Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
+- [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
 - [contextual-shell-popups](pages/contextual-shell-popups.md) — category: decision | tags: [shell, ux, keyboard, configuration] | # Decision
 - [gui-test-viewport](pages/gui-test-viewport.md) — category: decision | tags: [tests, gui, viewport] | # Decision
 - [hyprland-native-composition](pages/hyprland-native-composition.md) — category: decision | tags: [hyprland, lua, workspaces, groups] | # Decision

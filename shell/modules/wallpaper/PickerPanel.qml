@@ -295,10 +295,10 @@ FocusScope {
             ShellConfig.WallpaperPicker.maximumHeight,
             panelLayout.implicitHeight + styleTokens.spacing * ShellConfig.WallpaperPicker.innerSpacingUnits * 2)
         anchors.centerIn: parent
-        color: styleTokens.surface
-        radius: styleTokens.menuRadius
+        color: styleTokens.pickerSurface
+        radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth
-        border.color: styleTokens.outline
+        border.color: styleTokens.pickerBorder
         transform: Translate { y: panelMotion.offset }
 
         MouseArea {

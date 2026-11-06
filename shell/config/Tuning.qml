@@ -5,6 +5,7 @@ import QtQuick
 QtObject {
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "control-tuning"
+    readonly property bool asynchronousPanelLoad: true
     readonly property int maximumWidth: 860
     readonly property int outerMargin: 24
 }

@@ -10,6 +10,7 @@ import "modules/wallpaper" as Wallpaper
 import "components" as Controls
 import "modules/apps" as Apps
 import "modules/tuning" as Tuning
+import "modules/audio" as Audio
 import "adapters" as Adapters
 import "config" as Config
 
@@ -32,13 +33,17 @@ ShellRoot {
         active: Config.Config.controlTuningEnabled
         sourceComponent: Tuning.TuningShortcut {}
     }
+    Loader {
+        active: Config.Config.audioControlEnabled
+        sourceComponent: Audio.AudioShortcut {}
+    }
     Connections {
         target: Apps.AppState
-        function onOpenChanged() { if (Apps.AppState.open) { Wallpaper.PickerState.open = false; Tuning.TuningState.open = false } }
+        function onOpenChanged() { if (Apps.AppState.open) { Wallpaper.PickerState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false } }
     }
     Connections {
         target: Wallpaper.PickerState
-        function onOpenChanged() { if (Wallpaper.PickerState.open) { Apps.AppState.open = false; Tuning.TuningState.open = false } }
+        function onOpenChanged() { if (Wallpaper.PickerState.open) { Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false } }
     }
 
     Variants {
@@ -59,5 +64,9 @@ ShellRoot {
     Variants {
         model: Config.Config.controlTuningEnabled ? Quickshell.screens : []
         Tuning.TuningSurface { inputState: shellInput }
+    }
+    Variants {
+        model: Config.Config.audioControlEnabled ? Quickshell.screens : []
+        Audio.AudioSurface { inputState: shellInput }
     }
 }

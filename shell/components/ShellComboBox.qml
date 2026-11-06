@@ -85,10 +85,10 @@ ComboBox {
         }
     }
     popup.background: Rectangle {
-        radius: Theme.Shape.menuRadius
-        color: root.style.surface
+        radius: root.style.popupRadius
+        color: root.style.popupSurface
         border.width: Theme.Shape.borderWidth
-        border.color: root.style.controls.outline
+        border.color: root.style.popupBorder
     }
     Keys.priority: Keys.BeforeItem
     Keys.onPressed: event => {

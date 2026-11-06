@@ -33,6 +33,10 @@ ColumnLayout {
     // valid one, and Save is off until a source loads.
     property string failedCandidateId: ""
     readonly property bool sourceUnavailable: failedCandidateId !== ""
+    // Unsaved edits: the draft differs from what it was when it was read or last saved.
+    property string savedSignature: ""
+    readonly property bool dirty: savedSignature !== "" && savedSignature !== draftSignature()
+    function draftSignature() { return JSON.stringify([sourceId, customName, mode, colors]) }
     readonly property Controls.PaletteColorPicker colorPicker: colorPopup
     readonly property Controls.ShellButton primaryAction: saveAction
     signal saved()
@@ -81,6 +85,7 @@ ColumnLayout {
             restoreDraft(kept)
             if (source === "wallpaper") draft(wallpaper.colors)
         }
+        savedSignature = draftSignature()
     }
     function begin(selection) {
         const previous = wallpaper

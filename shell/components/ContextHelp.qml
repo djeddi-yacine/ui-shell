@@ -26,12 +26,16 @@ ColumnLayout {
             Shortcut { id: sequence; sequence: Config.Keyboard.shortcut(row.modelData.key, row.modelData.modifiers); enabled: false }
             Text {
                 Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
                 text: row.modelData.action
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
                 color: root.style.textMuted
                 font.family: root.style.uiFamily
                 font.pointSize: root.style.bodyPointSize
             }
             Text {
+                Layout.alignment: Qt.AlignTop
                 text: sequence.nativeText
                 color: root.style.text
                 font.family: root.style.monoFamily

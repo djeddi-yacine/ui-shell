@@ -16,19 +16,20 @@ ColumnLayout {
     property bool committing: false
     property var firstValue: undefined
     property var secondValue: undefined
-    readonly property bool launcher: settings.component === "launcher"
     readonly property var file: settings.fileForScope(scope)
-    readonly property var firstChoices: [{ label: defaultLabel(firstKey, firstDefault), value: undefined }].concat(launcher
-        ? [{ label: qsTr("On"), value: true }, { label: qsTr("Off"), value: false }]
-        : integers(1, 6))
-    readonly property var secondChoices: [{ label: defaultLabel(secondKey, secondDefault), value: undefined }].concat(integers(1, launcher ? 24 : 4))
-    readonly property string firstKey: launcher ? "showIcons" : "wideColumns"
-    readonly property string secondKey: launcher ? "visibleRows" : "maximumVisibleRows"
-    readonly property var firstDefault: launcher ? Config.AppLauncher.showIcons : Config.WallpaperPicker.wideColumns
-    readonly property int secondDefault: launcher ? Config.AppLauncher.visibleRows : Config.WallpaperPicker.maximumVisibleRows
+    // The component's two options come from Config.ComponentSpec.
+    readonly property var first: Config.ComponentSpec.components[settings.component][0]
+    readonly property var second: Config.ComponentSpec.components[settings.component][1]
+    readonly property string firstKey: first.key
+    readonly property string secondKey: second.key
+    readonly property var firstChoices: choicesFor(first)
+    readonly property var secondChoices: choicesFor(second)
     readonly property string error: settings.saveError || file.error
     readonly property bool editable: file.ready && !awaitingScope && !settings.busy && !file.error
     readonly property ShellButton primaryAction: saveButton
+    // Unsaved: the draft differs from the file it was read from.
+    readonly property bool dirty: file.ready && !awaitingScope
+        && (firstValue !== file.values[firstKey] || secondValue !== file.values[secondKey])
     signal saved()
     spacing: Config.ContextPanels.spacing
 
@@ -36,6 +37,12 @@ ColumnLayout {
         const values = []
         for (let value = first; value <= last; value++) values.push({ label: String(value), value: value })
         return values
+    }
+    function choicesFor(option) {
+        const inherited = { label: defaultLabel(option.key, option.fallback), value: undefined }
+        if (option.kind === "boolean") return [inherited, { label: qsTr("On"), value: true }, { label: qsTr("Off"), value: false }]
+        if (option.kind === "choices") return [inherited].concat(option.choices.map(value => ({ label: String(value), value: value })))
+        return [inherited].concat(integers(option.min, option.max))
     }
     function defaultLabel(key, configuredDefault) {
         const value = scope === "default" ? configuredDefault : settings.sharedValue(key, configuredDefault)
@@ -97,7 +104,7 @@ ColumnLayout {
             Accessible.name: qsTr("Settings scope")
             onActivated: index => root.loadScope(model[index].value)
         }
-        Text { text: root.launcher ? qsTr("Icons") : qsTr("Columns"); color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
+        Text { text: root.first.label; color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
         ShellComboBox {
             objectName: "settingsFirstChoice"
             Layout.fillWidth: true
@@ -109,10 +116,10 @@ ColumnLayout {
             textRole: "label"
             currentIndex: root.indexFor(root.firstChoices, root.firstValue)
             enabled: root.editable
-            Accessible.name: root.launcher ? qsTr("Application icons") : qsTr("Wide wallpaper grid columns")
+            Accessible.name: root.first.name
             onActivated: index => root.firstValue = root.firstChoices[index].value
         }
-        Text { text: qsTr("Rows"); color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
+        Text { text: root.second.label; color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
         ShellComboBox {
             objectName: "settingsRowsChoice"
             Layout.fillWidth: true
@@ -124,7 +131,7 @@ ColumnLayout {
             textRole: "label"
             currentIndex: root.indexFor(root.secondChoices, root.secondValue)
             enabled: root.editable
-            Accessible.name: qsTr("Visible rows")
+            Accessible.name: root.second.name
             onActivated: index => root.secondValue = root.secondChoices[index].value
         }
     }

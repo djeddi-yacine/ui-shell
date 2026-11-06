@@ -37,6 +37,30 @@ The Theme editor uses its visible content's natural height plus normal popup pad
 
 The three contextual popups are implemented: Ctrl+I information, Ctrl+Space component help, and Ctrl+E component settings. See [CONFIGURATION.md](CONFIGURATION.md) for settings scope and persistence.
 
+## Pickers and popups: surface rules
+
+A **picker** is a full panel (wallpaper, apps, audio, control tuning). A **popup** opens over a
+picker (context help/info/settings, errors, the colour picker, combo menus). Both read their
+colours from `Theme.Style`/`MonitorStyle`, never from raw `surface`/`elevated`:
+
+| | surface | border | radius |
+|---|---|---|---|
+| Picker | `pickerSurface` (base surface) | `pickerBorder` (control outline) | `pickerRadius` |
+| Popup | `popupSurface` (elevated, one step up) | `popupBorder` (outline made readable on it) | `popupRadius` |
+
+Rules: every picker has the same background; a popup is always lighter than the picker
+beneath it, so it never blends in; rows and cards inside a picker use `background` (one
+step down) with an outlined border; a new picker or popup uses these tokens or it is a bug.
+
+## Leaving a panel: the exit rule
+
+Esc always leaves. A panel that is only a view closes on one Esc. A panel with unsaved
+work (control tuning, the theme editor and its colour picker, the Ctrl+E settings popup) asks first with `Controls.ExitDialog`, where Esc
+means "dismiss and quit": leaving takes two Esc presses, and one stray key loses nothing.
+"Keep editing" is the default button and a click outside also keeps the work. Wire a panel
+with `exit.request(hasUnsavedChanges, focusItem)` and `onConfirmed`; while it is dirty the
+panel must not close itself on Esc or an outside click.
+
 ## Component-scoped error popup
 
 Runtime operation, validation, loading and settings-conflict errors use the shared `ErrorPopup.qml`. Backend failure signals trigger one popup for each new failure observation. Dismissing a popup does not reopen it for the same failure; a subsequent failure signal presents the new failure. No inline error banner, added error row or error-driven resizing belongs in the runner or picker. A scoped settings error appears above the editor without replacing it. The backend/module still owns error state and intentional retry; the popup presents the specific failure without silently substituting another option.
@@ -216,3 +240,12 @@ Caelestia's `components/controls/StyledTextField.qml` consumes shared typography
 - `scripts/` — Bash generation and system-side effects
 - `qt/` — Qt theme integration and generated toolkit assets
 - `gtk/` — GTK theme integration and generated toolkit assets
+
+## Adding a shell module
+
+Every module (launcher, wallpaper picker, control tuning, audio) has the same parts: a state singleton, a shortcut, a surface (a layer-shell window, exclusive keyboard, namespace `ui-shell-<name>`, listed in `hypr/rules.lua`) and a panel. The panel follows the shared contract:
+
+- **Keys, information and options live in the context popup, not on screen.** Ctrl+Space lists the keys (the panel's `bindings`), Ctrl+I shows information, Ctrl+E opens the component's settings. Use `PanelContext`; a panel without component settings passes `settings: null`. No permanent key hints, usage text or repeated identity titles.
+- **Options are data.** A component's two Ctrl+E options are one entry in `shell/config/ComponentSpec.qml` plus a `scripts/render-<component>-settings` renderer (registered as an optional command in the manifest). The editor, the settings adapter and the file reader all read the spec.
+- **Load the panel asynchronously** (`Config.<Module>.asynchronousPanelLoad`, true): popups created in the same frame as the window's first layout distort it.
+- **One shortcut per module, checked against the existing binds** (`hypr/binds/*.lua`), since `test-hypr-config` does not detect duplicates. Taken `SUPER` keys include A, D, F, G, L, P, S, V, X, W, Space, Return, Tab; the shell modules use Space (launcher), W (wallpaper), T (tuning) and M (audio).

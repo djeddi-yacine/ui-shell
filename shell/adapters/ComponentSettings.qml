@@ -25,6 +25,12 @@ Item {
     signal committed(string scope)
     signal failed()
 
+    // An option's effective value for this component: output override, shared default, then
+    // the explicit default declared in Config.ComponentSpec.
+    function option(key) {
+        const entry = Config.ComponentSpec.components[component].find(item => item.key === key)
+        return value(key, entry ? entry.fallback : undefined)
+    }
     function value(key, configuredDefault) {
         const override = monitor.values[key]
         return override === undefined ? sharedValue(key, configuredDefault) : override

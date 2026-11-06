@@ -48,15 +48,14 @@ Item {
             finish("")
             return
         }
-        const first = component === "launcher" ? item.showIcons : item.wideColumns
-        const second = component === "launcher" ? item.visibleRows : item.maximumVisibleRows
-        const validFirst = first === undefined || (component === "launcher" ? typeof first === "boolean"
-            : Number.isInteger(first) && first >= 1 && first <= 6)
-        const validSecond = second === undefined || Number.isInteger(second) && second >= 1
-            && second <= (component === "launcher" ? 24 : 4)
-        if (!validFirst || !validSecond) { finish(qsTr("Invalid QML settings values: %1").arg(path)); return }
-        values = component === "launcher" ? { showIcons: first, visibleRows: second }
-            : { wideColumns: first, maximumVisibleRows: second }
+        const options = Config.ComponentSpec.components[component]
+        if (!options) { finish(qsTr("Unknown component settings: %1").arg(component)); return }
+        if (!options.every(option => Config.ComponentSpec.valid(option, item[option.key]))) {
+            finish(qsTr("Invalid QML settings values: %1").arg(path)); return
+        }
+        const next = {}
+        for (const option of options) next[option.key] = item[option.key]
+        values = next
         ready = true
         finish("")
     }

@@ -167,10 +167,10 @@ FocusScope {
         width: Math.min(parent.width - Config.AppLauncher.outerMargin * 2, Config.AppLauncher.maximumWidth)
         height: Math.min(parent.height - Config.AppLauncher.outerMargin * 2,
             Config.AppLauncher.maximumHeight, panelLayout.implicitHeight + Config.AppLauncher.panelPadding * 2)
-        color: styleTokens.surface
-        radius: styleTokens.menuRadius
+        color: styleTokens.pickerSurface
+        radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth
-        border.color: styleTokens.outline
+        border.color: styleTokens.pickerBorder
         transform: Translate { y: motion.offset }
         MouseArea { anchors.fill: parent; onClicked: function() {} }
         ColumnLayout {

@@ -9,6 +9,7 @@ runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
 case $component in
   launcher) renderer=$(jq -er '.commands.renderLauncherSettings' "$runtime") ;;
   wallpaper) renderer=$(jq -er '.commands.renderPickerSettings' "$runtime") ;;
+  audio) renderer=$(jq -er '.commands.renderAudioSettings' "$runtime") ;;
   controls) renderer=$(jq -er '.commands.renderControlTuning' "$runtime") ;;
   *) printf '%s\n' 'Unknown component.' >&2; exit 2 ;;
 esac

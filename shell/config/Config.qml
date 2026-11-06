@@ -9,6 +9,7 @@ QtObject {
     readonly property bool barEnabled: true
     readonly property bool appLauncherEnabled: true
     readonly property bool controlTuningEnabled: true
+    readonly property bool audioControlEnabled: true
     readonly property int barHeight: 32
     readonly property string barLabel: "ui-shell"
     readonly property list<int> barWorkspaceNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]

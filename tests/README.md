@@ -218,3 +218,11 @@ After separating runtime, development and test code, `make test`, `make test-wal
 The earlier focus checkpoint remains recorded in [test-report-2026-10-07-093548.md](../.build/tests/reports/test-report-2026-10-07-093548.md), with retained runs `/tmp/ui-shell-test.umaF8P`, `/tmp/ui-shell-test.85SThN` and `/tmp/ui-shell-test.zIId6R`. It verified native focus ownership, bounded selectable/copyable errors, restored candidates/drafts and unchanged panel geometry. Known Quickshell type-metadata limitations still produce qmllint warnings. The deliberately missing test palette generator logs exactly one expected failed-start warning; other live QML diagnostics remain fatal.
 
 Persistent restart last passed on 2026-10-06 in `/tmp/ui-shell-test.ogNVX1`; that profile was not rerun for this structural refactor. File-palette preview was rerun successfully by `make test-theme`.
+
+## Audio tests
+
+`scripts/audio-graph` and the audio module are tested in three layers.
+
+- **Hermetic** (part of `make test-pipelines` and `make test-qml`): `check-audio-graph` runs the helper against the fixture `tests/audio/pw-dump.json` (volume maths, defaults, stream identity, channel pairing, argument rejection), and `tst_PatchLogic` covers the patchbay logic (source and destination split, edges, row geometry, curve hit tests). No PipeWire is needed.
+- **`make test-audio`**: a stress test on a real PipeWire. It starts its own PipeWire and WirePlumber (policy profile, null sinks and a null source) under a temporary `XDG_RUNTIME_DIR`, generates quiet tones with `ffmpeg` piped into `pw-cat`, and exercises snapshots, routing between sinks, volume and mute sweeps, 90 concurrent actions, patchbay connect and disconnect toggles, stream churn (`AUDIO_CHURN=300` hunts rare races), a 56-stream graph, defaults, and failure paths. It then verifies that the host session is unchanged. It runs on the host, outside the sandbox, because PipeWire needs real sockets.
+- **`make test-audio-host`**: the same checks on the current PipeWire session. Only the streams it creates (`uitest-*`) are touched, with whisper-quiet tones and no volume above 100%; devices, defaults and volumes of the host are not changed. Use it when a private session cannot reproduce something.

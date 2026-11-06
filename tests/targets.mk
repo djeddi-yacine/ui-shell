@@ -2,7 +2,7 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-persistent test-env-fresh test-env-apps test-env-phantomat test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
+.PHONY: test-env-audio test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-persistent test-env-fresh test-env-apps test-env-phantomat test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
 
 test-help:
 	@printf '%s\n' \
@@ -12,6 +12,7 @@ test-help:
 		'  test-import-themes Regenerate reference definitions in private themes; no profile/window' \
 		'  test-env-fresh    Open a disposable nested session' \
 		'  test-env-apps     Open a disposable launcher; apps use private test scopes' \
+		'  test-env-audio    Open a disposable session with the audio panel on the HOST PipeWire (real devices)' \
 		'  test-env-phantomat Open test-env with Phantomat loaded; retain private state' \
 		'  test-env-snapshot Restart saved test state, capture diagnostics, then close' \
 		'  test-env-clean    Reset private choices/cache; keep all Theme definitions' \
@@ -26,6 +27,8 @@ test-help:
 		'  test-pipelines    Check generated wallpaper and component pipelines' \
 		'  test-wallpaper    Check picker/UI and real wallpaper application' \
 		'  test-launcher     Check launcher and app2unit dry-run without starting an app' \
+		'  test-audio        Stress the audio helper on a PRIVATE PipeWire+WirePlumber session (generated tones; host audio untouched)' \
+		'  test-audio-host   Same stress test on the CURRENT PipeWire session; only its own uitest-* streams are touched' \
 		'  test-app2unit     Register a host scope, then verify its app is sandboxed' \
 		'  test-app-launch   Launch a real nested GUI app; verify handoff, error and cleanup' \
 		'  test-session-close Close the nested host window with a live app; verify teardown' \
@@ -56,6 +59,11 @@ test-import-themes:
 
 test-env-fresh:
 	@bash "$(TEST_RUNNER)" run ephemeral
+
+# The nested session with the audio panel open on the HOST's PipeWire (real devices).
+# Everything you change there (volume, mute, default, routing, links) is real; Esc closes the panel.
+test-env-audio:
+	@UI_SHELL_HOST_PIPEWIRE=1 UI_SHELL_OPEN_AUDIO=1 bash "$(TEST_RUNNER)" run ephemeral
 
 test-env-apps:
 	@bash "$(TEST_RUNNER)" apps ephemeral
@@ -110,3 +118,12 @@ test-pipelines:
 
 test-env-phantomat: dev-build-phantomat
 	@bash "$(TEST_RUNNER)" phantomat persistent
+
+# Audio stress tests run on the host, outside the sandbox: PipeWire needs real sockets.
+# `test-audio` starts its own PipeWire and WirePlumber under a temporary runtime directory,
+# so nothing of the desktop's audio can be reached; the test verifies that afterwards.
+test-audio:
+	@bash "$(ROOT)/tests/scripts/check-audio-live" private
+
+test-audio-host:
+	@bash "$(ROOT)/tests/scripts/check-audio-live" host
