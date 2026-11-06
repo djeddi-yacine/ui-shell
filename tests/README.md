@@ -221,3 +221,15 @@ Persistent restart last passed on 2026-10-06 in `/tmp/ui-shell-test.ogNVX1`; tha
 - **Hermetic** (part of `make test-pipelines` and `make test-qml`): `check-audio-graph` runs the helper against the fixture `tests/audio/pw-dump.json` (volume maths, defaults, stream identity, channel pairing, argument rejection), and `tst_PatchLogic` covers the patchbay logic (source and destination split, edges, row geometry, curve hit tests). No PipeWire is needed.
 - **`make test-audio`**: a stress test on a real PipeWire. It starts its own PipeWire and WirePlumber (policy profile, null sinks and a null source) under a temporary `XDG_RUNTIME_DIR`, generates quiet tones with `ffmpeg` piped into `pw-cat`, and exercises snapshots, routing between sinks, volume and mute sweeps, 90 concurrent actions, patchbay connect and disconnect toggles, stream churn (`AUDIO_CHURN=300` hunts rare races), a 56-stream graph, defaults, and failure paths. It then verifies that the host session is unchanged. It runs on the host, outside the sandbox, because PipeWire needs real sockets.
 - **`make test-audio-host`**: the same checks on the current PipeWire session. Only the streams it creates (`uitest-*`) are touched, with whisper-quiet tones and no volume above 100%; devices, defaults and volumes of the host are not changed. Use it when a private session cannot reproduce something.
+
+## Authentication dialog, live (owner, on the host)
+
+The nested session has no polkit daemon, so the real flow is checked on the host. Preview with a fake request: `UI_SHELL_OPEN_AUTH=1 make test-env` (the password `0` is right, anything else is wrong; Esc cancels) or `UI_SHELL_OPEN_AUTH=loop` to get a new request 1.5 s after each one ends.
+
+1. `systemctl --user stop hyprpolkitagent`, restart the shell (`make dev-run` or your usual way).
+2. `pkexec true`: the dialog appears. Type the password (nothing changes on screen) and press Enter. The command succeeds.
+3. `pkexec true` and type a wrong password: the dialog says "Wrong password. Press any key." and stays; any key closes it and `pkexec` fails.
+4. `pkexec true`, then Esc: the dialog closes and `pkexec` reports it was dismissed.
+5. Run `pkexec true` in two terminals: the second dialog appears only after the first ends.
+6. Start `scripts/screen-record`, open the dialog with `pkexec true`, stop, and look at a frame: is the dialog in the recording? Record the answer in `features/designs/polkit.md`.
+7. Way back: `systemctl --user start hyprpolkitagent` after stopping the shell.

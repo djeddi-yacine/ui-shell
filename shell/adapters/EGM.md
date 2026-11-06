@@ -31,3 +31,5 @@ QML adapters between the shell UI and external helpers (app2unit, PipeWire helpe
 
 ## Verification
 - Run: `make test-qml`
+- `PolkitSource` (singleton) [PolkitSource.qml]: the only importer of `Quickshell.Services.Polkit`; owns the `PolkitAgent` (path `/org/quickshell/PolkitAgent`, set once, never bound); exposes `flow` and `agentActive`.
+- `PolkitAuth` [PolkitAuth.qml]: polkit logic over an injected `source` (`flow`, `agentActive`); phases `idle|prompt|checking|succeeded|failed|refused` (`succeeded` shows for `successMs` before the dialog closes; the next queued request waits behind it), `displayed` snapshot, `submit`, `cancel`, `selectAccount`, `dismissFailure`. A wrong password ends the request (cancel deferred one event-loop turn) and stays as `failed` until `dismissFailure()`. One request at a time; the module queues the rest. Tested with fakes in `tests/auth/`.

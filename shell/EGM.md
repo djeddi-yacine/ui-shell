@@ -28,3 +28,4 @@
 
 ## System Verification
 - Run: `make test-qml` (defined in `tests/targets.mk`, included by the root `Makefile`).
+- Authentication dialog: `modules/auth` over `adapters/PolkitAuth` and `components/SecretDialog` (design `features/designs/polkit.md`). The polkit agent lives in the shell process, so it needs no daemon of its own.

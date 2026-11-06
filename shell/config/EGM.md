@@ -26,3 +26,4 @@ Singleton QML configuration for the shell: feature toggles, key bindings, panel 
 
 ## Verification
 - Run: `make test-qml`
+- `Auth` (singleton) [Auth.qml]: `namespace`, `inputGuardMs`, `startupGraceMs`, `cardWidth`, `fieldHeight`, `scrimOpacity`, status texts.

@@ -22,6 +22,10 @@ The project wallpapers in `wallpapers/` are not tracked in git (about 25 MB). `w
 
 **Super+P** opens the screenshot panel: choose a screen, a window or a region, choose the clipboard, a file or both (Ctrl+E sets the defaults), and press Capture. The panel hides while the picture is taken so it is not in it, then shows what was saved, with its size and a Copy path button. It uses `grim` and `wl-copy` through one script, `scripts/screen-shot`, and works inside `make test-env` too (a screenshot needs no GPU access). `make test-shot` checks the script with stand-ins; `make test-shot-live` takes real screenshots of this desktop.
 
+## Authentication
+
+When a program needs a privilege (`pkexec`, a package install), the shell shows its own password dialog: a message, the account, one field that shows nothing while you type, and Enter or Esc. A wrong password ends the request. Polkit allows one agent per session, so `hyprpolkitagent` must be stopped first: `systemctl --user stop hyprpolkitagent`, restart the shell, and check with `pkexec true`. To go back, stop the shell and run `systemctl --user start hyprpolkitagent`. If the shell cannot register, the bar shows "No auth agent". Nothing is claimed about screen recordings until `tests/README.md` "Authentication dialog, live" has been run. `make test-auth` checks the layer rule; the dialog and the polkit logic are in `make test-qml`.
+
 ## Quick start
 
 Run `make test-env` to open the persistent private nested session with popups closed. Nested shortcuts use Ctrl+Alt: Ctrl+Alt+W opens the wallpaper picker, Ctrl+Alt+Space opens the launcher, Ctrl+Alt+Q opens foot, and Ctrl+Alt+Escape exits gracefully from any submap. Production bindings continue to use Super. The nested session's preferences and cache stay under `.test-state/nested/`; run `make test-env-clean` only when deliberately resetting private choices and cache. Cleaning reseeds the private manifest, profile selection, clean default seed, and missing default stores from source defaults while preserving every Theme definition byte-for-byte, including imported and edited definitions. Host configuration/data and source files remain untouched.

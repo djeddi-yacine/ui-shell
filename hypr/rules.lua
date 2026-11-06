@@ -5,8 +5,17 @@ local profile = require("profile")
 
 hl.layer_rule({
   name = "shell-owns-motion",
-  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot)$" },
+  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|auth|auth-scrim)$" },
   no_anim = true,
+})
+
+-- The authentication dialog's card is kept out of compositor screen sharing (captures show a
+-- black rectangle there; the dimming layer around it is not hidden). Whether the screen
+-- recorder, which captures below the compositor, honours this is tested, not assumed.
+hl.layer_rule({
+  name = "auth-not-shared",
+  match = { namespace = "^ui-shell-auth$" },
+  no_screen_share = true,
 })
 
 hl.window_rule({

@@ -20,3 +20,4 @@ Per-output top bar content: launcher button, wallpaper-picker button, Hyprland w
 
 ## Verification
 - Run: `make test-qml`
+- `AuthChip` [AuthChip.qml]: "No auth agent" entry, visible only when `Config.authEnabled`, the start-up grace has passed and `AuthState.auth.agentActive` is false; click explains why in an inline popup.

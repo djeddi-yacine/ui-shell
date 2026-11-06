@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# The authentication dialog's layer namespace is written in the window (QML) and twice in
+# hypr/rules.lua. They must agree, or the rule silently stops applying. The dialog and adapter
+# suites (tst_SecretDialog, tst_PolkitAuth) run under test-qml.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+qml=$root/shell/modules/auth/AuthSurface.qml
+rules=$root/hypr/rules.lua
+namespace=$(sed -n 's/.*property string namespace: "\(ui-shell-[a-z-]*\)".*/\1/p' "$qml")
+[[ -n $namespace ]] || { echo "check-auth: no namespace in $qml" >&2; exit 1; }
+config=$(sed -n 's/.*property string namespace: "\(ui-shell-[a-z-]*\)".*/\1/p' "$root/shell/config/Auth.qml")
+[[ $config == "$namespace" ]] || { echo "check-auth: Config.Auth namespace '$config' differs from the window's '$namespace'" >&2; exit 1; }
+short=${namespace#ui-shell-}
+scrim=$(sed -n 's/.*property string scrimNamespace: "\(ui-shell-[a-z-]*\)".*/\1/p' "$qml")
+[[ $scrim == "$namespace-scrim" ]] || { echo "check-auth: scrim namespace '$scrim' is not $namespace-scrim" >&2; exit 1; }
+grep -q "^  match = { namespace = \"^$namespace\\$\" }," "$rules" \
+  || { echo "check-auth: hypr/rules.lua has no exact rule for $namespace" >&2; exit 1; }
+grep -q "|$short|$short-scrim)\\$\" }" "$rules" \
+  || { echo "check-auth: $short and $short-scrim must both be in the shell-owns-motion pattern" >&2; exit 1; }
+grep -q 'no_screen_share = true' "$rules" || { echo "check-auth: no_screen_share missing" >&2; exit 1; }
+printf '%s\n' "Authentication namespace check passed ($namespace)."

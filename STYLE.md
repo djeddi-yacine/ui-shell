@@ -241,6 +241,10 @@ Caelestia's `components/controls/StyledTextField.qml` consumes shared typography
 - Qt and GTK adapters must not introduce a second independent theme vocabulary.
 - Each subsystem gets its own focused renderer script when its real adapter is introduced; every renderer writes its output atomically from one extracted semantic palette.
 
+## Icons
+
+`shell/icons/` holds the shell's SVG icons. They are filled white on purpose: a component tints one with `layer.effect: MultiEffect { colorization: 1; colorizationColor: <theme token> }`, so it follows the theme. The tint needs a GPU renderer; the offscreen QML tests draw the untinted icon only, so they check the icon's source, not its colour.
+
 ## Folder responsibilities
 
 - `hypr/` — Hyprland Lua configuration and policy
@@ -257,3 +261,7 @@ Every module (launcher, wallpaper picker, control tuning, audio) has the same pa
 - **Options are data.** A component's two Ctrl+E options are one entry in `shell/config/ComponentSpec.qml` plus a `scripts/render-<component>-settings` renderer (registered as an optional command in the manifest). The editor, the settings adapter and the file reader all read the spec.
 - **Load the panel asynchronously** (`Config.<Module>.asynchronousPanelLoad`, true): popups created in the same frame as the window's first layout distort it.
 - **One shortcut per module, checked against the existing binds** (`hypr/binds/*.lua`), since `test-hypr-config` does not detect duplicates. Taken `SUPER` keys include A, D, F, G, L, P, S, V, X, W, Space, Return, Tab; the shell modules use Space (launcher), W (wallpaper), T (tuning) and M (audio).
+
+## The authentication dialog (centred modal)
+
+A centred modal is neither a picker nor a popup. It uses the popup tokens (`popupSurface`, `popupBorder`, `popupRadius`) on a dimmed backdrop (`scrimColor(Config.Auth.scrimOpacity)`), holds the keyboard exclusively, and loads synchronously. The card and the backdrop are separate layers so only the card is kept out of screen capture. A single Esc cancels (there is no unsaved work, so the exit rule's second press does not apply) and the cancel must reach the thing that asked, not only close the window. A secret field shows no characters, no length and no reaction to a key.

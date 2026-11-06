@@ -60,3 +60,4 @@ Popups and panels
 
 ## Verification
 - Run: `make test-qml` (defined in `tests/targets.mk`, included by the root Makefile: lints QML and runs isolated Qt Quick Test suites)
+- `SecretDialog` [SecretDialog.qml]: generic secret prompt. Inputs `message`, `accounts`, `selectedIndex`, `prompt`, `visibleEcho`, `info`, `error`, `checking`, `failed`, `refused`; signals `submitted(secret)`, `cancelled()`, `accountChosen(index)`, `keyAfterFailure()`. Invariants: no Text or accessible value reads the typed secret (except a `visibleEcho` prompt); Backspace empties the field; Ctrl/Alt/Meta chords ignored; keys dropped during the `guardMs` window and while checking; Enter on an empty field ignored; Esc always emits `cancelled()`. `succeeded` switches the lock to the checked icon (`shell/icons/lock-checked.svg`) and drops all keys; `failed` shows `lock-cross.svg` in the field; the icons are tinted by the field's border colour.

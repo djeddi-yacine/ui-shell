@@ -10,7 +10,8 @@ mapfile -t qml_files < <(rg --files "$shell_directory" -g '*.qml')
 mkdir -p /artifacts/build/tests/reports/junit /artifacts/build/tests/gallery
 # Keep these components independent of sibling Quickshell singletons while
 # preserving their real source and relative imports.
-mkdir -p "$shell_directory/tests/wallpaper" "$shell_directory/tests/apps"
+mkdir -p "$shell_directory/tests/wallpaper" "$shell_directory/tests/apps" "$shell_directory/tests/auth"
+cp "$shell_directory/adapters/PolkitAuth.qml" "$shell_directory/tests/auth/PolkitAuth.qml"
 cp "$shell_directory/modules/wallpaper/WallpaperTile.qml" "$shell_directory/tests/wallpaper/WallpaperTile.qml"
 cp "$shell_directory/modules/apps/AppSearch.qml" "$shell_directory/tests/apps/AppSearch.qml"
 
@@ -18,7 +19,7 @@ for qml_test in \
   tst_ControlColors tst_ControlTuning tst_ControlState tst_ShellButton tst_ShellComboOption \
   tst_ShellComboBox tst_WallpaperTile tst_ShellTextField tst_PaletteColorField \
   tst_PaletteColorPicker tst_ThemeEditor tst_OutputPalette tst_AppSearch \
-  tst_LauncherOutput tst_ContextPopup tst_ErrorPopup tst_StateGallery tst_ModeGallery tst_PatchLogic tst_ShellSlider tst_ContextHelp tst_ExitDialog tst_TargetPicker tst_PointerTracker; do
+  tst_LauncherOutput tst_ContextPopup tst_ErrorPopup tst_StateGallery tst_ModeGallery tst_PatchLogic tst_ShellSlider tst_ContextHelp tst_ExitDialog tst_TargetPicker tst_PointerTracker tst_SecretDialog tst_PolkitAuth; do
   test_report=/artifacts/build/tests/reports/junit/qmltests-$qml_test-$(date -u +%Y-%m-%d-%H%M%S).xml
   QT_QPA_PLATFORM=offscreen "$test_qmltestrunner" \
     -input "$test_project/tests/$qml_test.qml" \

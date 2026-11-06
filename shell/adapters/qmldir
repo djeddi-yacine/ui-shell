@@ -7,3 +7,5 @@ ThemeProfiles 1.0 ThemeProfiles.qml
 singleton ControlTuningStore 1.0 ControlTuningStore.qml
 singleton RecordState 1.0 RecordState.qml
 singleton ShotRunner 1.0 ShotRunner.qml
+PolkitAuth 1.0 PolkitAuth.qml
+singleton PolkitSource 1.0 PolkitSource.qml

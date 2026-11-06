@@ -71,6 +71,12 @@ Item {
                 Layout.fillHeight: true
             }
 
+            AuthChip {
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
             WorkspaceNumbers {
                 visible: ShellConfig.Config.barWorkspacesEnabled
                 screenName: root.screenName

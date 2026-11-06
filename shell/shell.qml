@@ -13,6 +13,7 @@ import "modules/tuning" as Tuning
 import "modules/audio" as Audio
 import "modules/record" as Record
 import "modules/shot" as Shot
+import "modules/auth" as Auth
 import "adapters" as Adapters
 import "config" as Config
 
@@ -47,6 +48,9 @@ ShellRoot {
         active: Config.Config.screenShotEnabled
         sourceComponent: Shot.ShotShortcut {}
     }
+    // The authentication dialog is modal: it appears over whatever is open and is not part of
+    // the panel mutual exclusion below.
+    Auth.AuthSurface {}
     Connections {
         target: Record.RecordPanelState
         function onOpenChanged() { if (Record.RecordPanelState.open) { Wallpaper.PickerState.open = false; Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Shot.ShotPanelState.open = false } }

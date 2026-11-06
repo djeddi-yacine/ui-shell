@@ -1,0 +1,5 @@
+module UiShell.Auth
+singleton AuthState 1.0 AuthState.qml
+AuthSurface 1.0 AuthSurface.qml
+AuthDialog 1.0 AuthDialog.qml
+PreviewFlow 1.0 PreviewFlow.qml
