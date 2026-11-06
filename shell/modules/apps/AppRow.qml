@@ -19,6 +19,8 @@ Item {
     property bool pooled: false
     readonly property bool launchPulseRunning: pulse.running
     objectName: "appEntryRow"
+    // Whether the pointer hover is being shown (the pointer is the active input and over the row).
+    readonly property bool hoverShown: visual.pointerHover
     signal chosen()
     signal activated()
     // The list owns keyboard focus, including when delegates are reused.
@@ -38,8 +40,9 @@ Item {
         enabled: root.enabled
         // Keep the launch candidate visible while search owns text focus.
         selected: root.selected && root.candidateVisible
-        // Scrollable candidates are keyboard-owned; pointer movement must not add a second highlight.
-        hovered: false
+        // The keyboard owns the selection; the pointer only hovers (a different colour) and never
+        // selects until it clicks. The shared input state drops hover while the keyboard is in use.
+        hovered: root.inputState.pointerActive && pointer.containsMouse
         pressed: pointer.pressed
         focused: root.selected && root.keyboardCandidate
     }

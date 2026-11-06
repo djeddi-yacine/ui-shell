@@ -63,6 +63,14 @@ Item {
                 }
             }
 
+            RecordButton {
+                visible: ShellConfig.Config.screenRecordEnabled
+                screenName: root.screenName
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
             WorkspaceNumbers {
                 visible: ShellConfig.Config.barWorkspacesEnabled
                 screenName: root.screenName

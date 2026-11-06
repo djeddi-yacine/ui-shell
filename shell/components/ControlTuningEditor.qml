@@ -133,7 +133,7 @@ ColumnLayout {
                 required property int index
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignTop
-                spacing: 2
+                spacing: Theme.Shape.borderWidth * 2
                 Text {
                     text: group.modelData.name
                     color: root.style.controls.muted
@@ -150,7 +150,7 @@ ColumnLayout {
                         Layout.fillWidth: true
                         spacing: Config.ContextPanels.spacing
                         Text {
-                            Layout.preferredWidth: 170
+                            Layout.preferredWidth: Config.Tuning.labelWidth
                             text: row.modelData.label
                             color: root.style.text
                             elide: Text.ElideRight
@@ -174,7 +174,7 @@ ColumnLayout {
                             Component.onCompleted: if (column.modelData === 0 && group.index === 0 && row.index === 0) firstSlider.target = slider
                         }
                         Text {
-                            Layout.preferredWidth: 44
+                            Layout.preferredWidth: root.style.readoutWidth
                             text: String(root.draft[row.modelData.key] ?? row.modelData.default)
                             color: root.draft[row.modelData.key] !== row.modelData.default ? root.style.controls.primary : root.style.controls.muted
                             font.family: root.style.monoFamily

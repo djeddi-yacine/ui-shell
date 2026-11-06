@@ -6,6 +6,8 @@ singleton ContextPanels 1.0 ContextPanels.qml
 singleton ErrorPanels 1.0 ErrorPanels.qml
 singleton Tuning 1.0 Tuning.qml
 singleton Audio 1.0 Audio.qml
+singleton Record 1.0 Record.qml
+singleton Shot 1.0 Shot.qml
 singleton ComponentSpec 1.0 ComponentSpec.qml
 singleton WallpaperPicker 1.0 WallpaperPicker.qml
 singleton Outputs 1.0 Outputs.qml

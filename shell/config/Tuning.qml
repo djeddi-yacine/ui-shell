@@ -8,4 +8,6 @@ QtObject {
     readonly property bool asynchronousPanelLoad: true
     readonly property int maximumWidth: 860
     readonly property int outerMargin: 24
+    // The width of a knob's name, so the sliders line up.
+    readonly property int labelWidth: 170
 }

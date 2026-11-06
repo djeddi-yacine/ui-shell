@@ -20,3 +20,4 @@ PanelContext 1.0 PanelContext.qml
 PaletteColorField 1.0 PaletteColorField.qml
 PaletteColorPicker 1.0 PaletteColorPicker.qml
 ExitDialog 1.0 ExitDialog.qml
+TargetPicker 1.0 TargetPicker.qml

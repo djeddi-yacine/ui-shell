@@ -5,3 +5,5 @@ QmlSettingsFile 1.0 QmlSettingsFile.qml
 ComponentSettings 1.0 ComponentSettings.qml
 ThemeProfiles 1.0 ThemeProfiles.qml
 singleton ControlTuningStore 1.0 ControlTuningStore.qml
+singleton RecordState 1.0 RecordState.qml
+singleton ShotRunner 1.0 ShotRunner.qml

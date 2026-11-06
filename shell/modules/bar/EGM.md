@@ -5,6 +5,7 @@ Per-output top bar content: launcher button, wallpaper-picker button, Hyprland w
 
 ## Interface
 - `Bar`: `Item` with `screenName`, `inputState` [bar/Bar.qml:Bar]
+- `RecordButton`: bar entry for recording; idle opens the panel, while recording shows the elapsed time and a `PopupWindow` with the target and Stop [bar/RecordButton.qml]
 - `WorkspaceNumbers`: `RowLayout` with `screenName`, `style`, `inputState`, `monitor` (`HyprlandMonitor`) [bar/WorkspaceNumbers.qml:WorkspaceNumbers]
 
 ## Invariants

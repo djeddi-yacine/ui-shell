@@ -20,7 +20,11 @@ ItemDelegate {
     font.family: style.uiFamily
     font.pointSize: style.bodyPointSize
     font.weight: style.bodyWeight
-    hoverEnabled: false
+    // One cursor for mouse and keyboard: while the pointer is the active input, hovering a row
+    // moves the combo box's highlight (Qt does that for hover-enabled delegates), so there is a
+    // single highlighted row and the pointer is never ignored. While the keyboard drives, hover is
+    // off, so a pointer resting under a freshly opened list cannot steal the keyboard's choice.
+    hoverEnabled: inputState.pointerActive && visual.flags.hover !== "none"
     Accessible.selected: currentChoice
     onPressed: inputState.pointerUsed()
 
@@ -29,7 +33,7 @@ ItemDelegate {
         style: root.style
         emphasis: root.emphasis
         enabled: root.enabled
-        // Native list navigation owns the candidate; pointer clicks remain enabled.
+        // The candidate (keyboard or hover, see above) is the only highlight; no second one here.
         hovered: false
         pressed: root.down
         selected: root.candidate

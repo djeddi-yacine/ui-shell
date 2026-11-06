@@ -1,7 +1,7 @@
 # shell Blueprint
 
 ## System Overview
-`shell/` is the Quickshell (QML) rice: a top bar plus four on-demand panels (wallpaper picker, app launcher, control tuning, audio). Each panel is a self-contained module under `modules/` with a state singleton, a global shortcut, a layer-shell surface and a panel. Panels share controls and popups from `components/`, colours and control look from `theme/`, options from `config/`, and reach processes only through `adapters/`. Nothing here runs a daemon of its own.
+`shell/` is the Quickshell (QML) rice: a top bar plus four on-demand panels (wallpaper picker, app launcher, control tuning, audio, screen recording, screenshot). Each panel is a self-contained module under `modules/` with a state singleton, a global shortcut, a layer-shell surface and a panel. Panels share controls and popups from `components/`, colours and control look from `theme/`, options from `config/`, and reach processes only through `adapters/`. Nothing here runs a daemon of its own.
 
 ## Local Interface & Invariants
 - `shell.qml`: `ShellRoot` that creates one `InputState` (`shellInput`) and, per output via `Variants`, `Surfaces.BarSurface`, `Wallpaper.PickerSurface`, `Apps.AppSurface`, `Tuning.TuningSurface` and `Audio.AudioSurface` [shell.qml:ShellRoot, Variants].
@@ -13,7 +13,7 @@
 - adapters: [./adapters/EGM.md](./adapters/EGM.md) - process-wrapping adapters (app2unit, audio graph, settings files, theme profiles, tuning store).
 - components: [./components/EGM.md](./components/EGM.md) - shared controls and the context, error, exit and colour popups.
 - config: [./config/EGM.md](./config/EGM.md) - singleton configuration, key maps, component option tables, generated runtime placeholders.
-- modules: [./modules/EGM.md](./modules/EGM.md) - the panels: apps, audio, bar, themes, tuning, wallpaper.
+- modules: [./modules/EGM.md](./modules/EGM.md) - the panels: apps, audio, bar, record, shot, themes, tuning, wallpaper.
 - surfaces: [./surfaces/EGM.md](./surfaces/EGM.md) - the layer-shell window that hosts the bar.
 - theme: [./theme/EGM.md](./theme/EGM.md) - palette, shape, density, typography, motion, control colours and tuning.
 

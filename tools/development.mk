@@ -70,7 +70,7 @@ dev-build-phantomat:
 
 dev-verify-phantomat: dev-build-phantomat
 	@test -s "$(PHANTOMAT_PLUGIN)"
-	@printf '%s\n' 'Phantomat build is ready. Use make test-env-phantomat for the isolated interactive session.'
+	@printf '%s\n' 'Phantomat build is ready. make test-env loads it automatically.'
 
 dev-run: dev-configure
 	@runtime=$$(<"$(RUNTIME_FILE)"); env UI_SHELL_RUNTIME="$$runtime" qs --no-duplicate --path "$$(jq -r '.paths.quickshell' "$$runtime")"

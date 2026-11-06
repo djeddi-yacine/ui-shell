@@ -31,6 +31,8 @@ Popups and panels
 - `ContextHelp` [ContextHelp.qml:ContextHelp] `style`, `bindings` required; lists shortcuts via `Config.Keyboard.shortcut`.
 - `ContextDetails` [ContextDetails.qml:ContextDetails] `style`, `title`, `description`, `details` required.
 
+- `TargetPicker` [TargetPicker.qml]: what to capture (screen, window or region). In: `monitors`, `windows`, `kinds`, `lastRegion`. Out: `target` ("monitor:NAME", "window:ADDRESS", "region:WxH+X+Y", empty while nothing valid) and `pickRegionRequested()`. Left/Right change the kind; Up/Down move in a list. A choice that disappears from its list falls back to the first entry.
+
 ## Invariants
 - Every control and popup requires `style` and `inputState` [ShellButton.qml:style/inputState], [ShellSlider.qml:style/inputState], [ShellComboBox.qml:style/inputState], [ContextPopup.qml:style/inputState]; they must be supplied, not defaulted.
 - Hover is honoured only while the pointer is the active input; keyboard use clears it via `inputState.keyboardUsed()` [ShellControlState.qml:hovered], [InputState.qml:keyboardUsed]. Controls call `keyboardUsed()` in `Keys.onPressed` and `PointerTracker` calls `pointerUsed()` [ShellButton.qml:Keys.onPressed], [PointerTracker.qml:observe].
@@ -51,7 +53,7 @@ Popups and panels
 ## Side Effects
 - Motion: `Theme.Motion.active` gates all animations (instant when false) [ContextPopup.qml:enter/exit], [PanelMotion.qml:enter/leave], [ShellSlider.qml:glide].
 - ErrorPopup.copyDiagnostic writes to the system clipboard through a hidden `TextEdit` (`selectAll/copy/deselect`) and sets `copied` [ErrorPopup.qml:copyDiagnostic].
-- ComponentSettingsEditor refreshes the scope file (`settings.fileForScope(scope).refresh()`), clears `settings.saveError`, and persists via `settings.save(scope, revision, first, second)` [ComponentSettingsEditor.qml:loadScope, save].
+- ComponentSettingsEditor refreshes the scope file (`settings.fileForScope(scope).refresh()`), clears `settings.saveError`, and persists via `settings.save(scope, revision, values)` (values in `Config.ComponentSpec` order) [ComponentSettingsEditor.qml:loadScope, save].
 - ControlTuningEditor writes live preview state to `Theme.ControlTuning.draft` / `draftMode`, and persists via `store.save(draftMode, draft)` [ControlTuningEditor.qml:setValue, applyMode, save].
 - ContextPopup mutates focus (`previous.forceActiveFocus()`) on close and registers window-level `Shortcut`s [ContextPopup.qml:onClosed, Shortcut].
 - No processes spawned and no files touched directly in this package; file/process access lives in `../adapters`.

@@ -48,10 +48,10 @@ Item {
             root.forceActiveFocus()
             input.keyboardUsed()
         }
-        function test_pointerMovementDoesNotAddHoverState_data() {
+        function test_pointerMovementAddsNoSecondHighlight_data() {
             return [{ tag: "ordinary", current: false }, { tag: "committed", current: true }]
         }
-        function test_pointerMovementDoesNotAddHoverState(data) {
+        function test_pointerMovementAddsNoSecondHighlight(data) {
             const option = createTemporaryObject(optionComponent, root, { currentChoice: data.current })
             verify(!!option, "Component exists")
             tryCompare(option, "foregroundColor", data.current ? Theme.Style.controls.currentText : Theme.Style.controls.text)
@@ -59,13 +59,16 @@ Item {
             mouseMove(option, option.width / 2, option.height / 2)
             mouseMove(option, option.width / 2 + 1, option.height / 2)
             tryCompare(input, "pointerActive", true)
-            tryCompare(option, "hovered", false)
+            // Hover is live while the pointer drives (it moves the combo box's highlight), but the row
+            // itself paints no separate hover style: the candidate is the single highlight.
+            compare(option.hoverEnabled, true)
             tryCompare(option, "foregroundColor", data.current ? Theme.Style.controls.currentText : Theme.Style.controls.text)
             tryCompare(option.background.border, "color", Theme.Interaction.transparentColor)
             tryCompare(option, "currentChoice", data.current)
             compare(option.font.weight, Theme.Style.bodyWeight)
             verify(Theme.Interaction.contrast(option.foregroundColor, option.background.color) >= Theme.Interaction.minimumTextContrast)
             input.keyboardUsed()
+            compare(option.hoverEnabled, false, "hover is off while the keyboard drives")
             tryCompare(option, "foregroundColor", data.current ? Theme.Style.controls.currentText : Theme.Style.controls.text)
             tryCompare(option, "candidate", false)
         }

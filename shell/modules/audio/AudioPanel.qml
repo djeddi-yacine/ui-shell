@@ -170,7 +170,7 @@ FocusScope {
 
     Rectangle {
         anchors.fill: parent
-        color: Qt.rgba(styleTokens.scrim.r, styleTokens.scrim.g, styleTokens.scrim.b, Config.ContextPanels.scrimOpacity)
+        color: styleTokens.scrimColor(Config.ContextPanels.scrimOpacity)
         MouseArea { anchors.fill: parent; onClicked: root.requestClose() }
     }
     Rectangle {
@@ -190,11 +190,11 @@ FocusScope {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: Config.Audio.padding
-            spacing: 18
+            spacing: styleTokens.spacingLoose
 
             // One tab per task; Left and Right move between them.
             RowLayout {
-                spacing: 8
+                spacing: styleTokens.spacingTight
                 Repeater {
                     id: tabBar
                     model: root.tabs
@@ -220,7 +220,7 @@ FocusScope {
                     text: audio.error
                     color: styleTokens.negative
                     elide: Text.ElideRight
-                    Layout.maximumWidth: 260
+                    Layout.maximumWidth: Config.Audio.errorMaximumWidth
                     font.family: styleTokens.uiFamily
                     font.pointSize: styleTokens.captionPointSize
                 }
@@ -235,7 +235,7 @@ FocusScope {
                 contentHeight: content.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
                 onContentYChanged: { root.scrolling = true; scrollQuiet.restart() }
-                Timer { id: scrollQuiet; interval: 280; onTriggered: root.scrolling = false }
+                Timer { id: scrollQuiet; interval: Theme.Motion.scrollQuietDelay; onTriggered: root.scrolling = false }
 
                 ColumnLayout {
                     id: content
@@ -244,16 +244,16 @@ FocusScope {
 
                     // The tab's name and size, ruled like the references' section labels.
                     RowLayout {
-                        Layout.topMargin: Config.Audio.sectionSpacing - 14
-                        spacing: 10
+                        Layout.topMargin: Config.Audio.sectionSpacing - styleTokens.cardPadding
+                        spacing: styleTokens.spacingTight
                         Text {
                             text: root.currentTab.label.toUpperCase()
                             color: styleTokens.controls.muted
                             font.family: styleTokens.monoFamily
                             font.pointSize: styleTokens.captionPointSize
-                            font.letterSpacing: 1.2
+                            font.letterSpacing: styleTokens.labelLetterSpacing
                         }
-                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: styleTokens.controls.outline; opacity: 0.45 }
+                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: Theme.Shape.borderWidth; color: styleTokens.rule }
                         Text {
                             visible: root.currentTab.count >= 0
                             text: String(root.currentTab.count)
@@ -322,7 +322,7 @@ FocusScope {
                             }
                             Controls.ShellComboBox {
                                 id: profileChooser
-                                Layout.preferredWidth: Config.Audio.chooserWidth + 120
+                                Layout.preferredWidth: Config.Audio.cardChooserWidth
                                 style: styleTokens
                                 inputState: root.inputState
                                 emphasis: Theme.Interaction.selectorEmphasis

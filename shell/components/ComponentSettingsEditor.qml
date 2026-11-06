@@ -14,22 +14,17 @@ ColumnLayout {
     property string revision: ""
     property bool awaitingScope: false
     property bool committing: false
-    property var firstValue: undefined
-    property var secondValue: undefined
+    // The draft: option key -> chosen value (undefined = use the default).
+    property var drafts: ({})
     readonly property var file: settings.fileForScope(scope)
-    // The component's two options come from Config.ComponentSpec.
-    readonly property var first: Config.ComponentSpec.components[settings.component][0]
-    readonly property var second: Config.ComponentSpec.components[settings.component][1]
-    readonly property string firstKey: first.key
-    readonly property string secondKey: second.key
-    readonly property var firstChoices: choicesFor(first)
-    readonly property var secondChoices: choicesFor(second)
+    // The component's options come from Config.ComponentSpec; there can be any number of them.
+    readonly property var options: Config.ComponentSpec.components[settings.component]
     readonly property string error: settings.saveError || file.error
     readonly property bool editable: file.ready && !awaitingScope && !settings.busy && !file.error
     readonly property ShellButton primaryAction: saveButton
     // Unsaved: the draft differs from the file it was read from.
     readonly property bool dirty: file.ready && !awaitingScope
-        && (firstValue !== file.values[firstKey] || secondValue !== file.values[secondKey])
+        && options.some(option => drafts[option.key] !== file.values[option.key])
     signal saved()
     spacing: Config.ContextPanels.spacing
 
@@ -41,13 +36,21 @@ ColumnLayout {
     function choicesFor(option) {
         const inherited = { label: defaultLabel(option.key, option.fallback), value: undefined }
         if (option.kind === "boolean") return [inherited, { label: qsTr("On"), value: true }, { label: qsTr("Off"), value: false }]
-        if (option.kind === "choices") return [inherited].concat(option.choices.map(value => ({ label: String(value), value: value })))
+        if (option.kind === "choices") return [inherited].concat(option.choices.map(value => ({ label: option.labels?.[value] ?? String(value), value: value })))
         return [inherited].concat(integers(option.min, option.max))
     }
     function defaultLabel(key, configuredDefault) {
         const value = scope === "default" ? configuredDefault : settings.sharedValue(key, configuredDefault)
-        return qsTr("Default (%1)").arg(typeof value === "boolean" ? (value ? qsTr("On") : qsTr("Off")) : String(value))
+        return qsTr("Default (%1)").arg(typeof value === "boolean" ? (value ? qsTr("On") : qsTr("Off")) : (labelOf(key, value)))
     }
+    function labelOf(key, value) {
+        const option = options.find(item => item.key === key)
+        return option?.labels?.[value] ?? String(value)
+    }
+    function setDraft(key, value) { const next = Object.assign({}, drafts); next[key] = value; drafts = next }
+    // By position in the option list (the settings GUI tests address options this way).
+    function draftAt(index) { return drafts[options[index].key] }
+    function setDraftAt(index, value) { setDraft(options[index].key, value) }
     function indexFor(choices, value) { return choices.findIndex(choice => choice.value === value) }
     function begin() { loadScope(Config.ContextPanels.initialSettingsScope); scopeControl.forceActiveFocus() }
     function loadScope(nextScope) {
@@ -58,14 +61,15 @@ ColumnLayout {
     }
     function readDraft() {
         revision = file.revision
-        firstValue = file.values[firstKey]
-        secondValue = file.values[secondKey]
+        const next = {}
+        for (const option of options) next[option.key] = file.values[option.key]
+        drafts = next
         awaitingScope = false
     }
     function save() {
         if (!editable) return
         committing = true
-        settings.save(scope, revision, firstValue, secondValue)
+        settings.save(scope, revision, options.map(option => drafts[option.key]))
     }
     Connections {
         target: root.settings
@@ -88,7 +92,7 @@ ColumnLayout {
         columns: 2
         columnSpacing: Config.ContextPanels.spacing
         rowSpacing: Config.ContextPanels.spacing
-        Text { text: qsTr("Scope"); color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
+        Text { Layout.preferredWidth: Config.ContextPanels.optionLabelWidth; text: qsTr("Scope"); color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
         ShellComboBox {
             id: scopeControl
             objectName: "settingsScope"
@@ -104,35 +108,59 @@ ColumnLayout {
             Accessible.name: qsTr("Settings scope")
             onActivated: index => root.loadScope(model[index].value)
         }
-        Text { text: root.first.label; color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
-        ShellComboBox {
-            objectName: "settingsFirstChoice"
-            Layout.fillWidth: true
-            style: root.style
-            inputState: root.inputState
-            emphasis: Theme.Interaction.selectorEmphasis
-            optionEmphasis: Theme.Interaction.selectorOptionEmphasis
-            model: root.firstChoices
-            textRole: "label"
-            currentIndex: root.indexFor(root.firstChoices, root.firstValue)
-            enabled: root.editable
-            Accessible.name: root.first.name
-            onActivated: index => root.firstValue = root.firstChoices[index].value
+    }
+    // The options scroll when they do not fit; the scope and the buttons stay in place.
+    Flickable {
+        id: optionsFlick
+        Layout.fillWidth: true
+        Layout.preferredHeight: Math.min(optionList.implicitHeight, Config.ContextPanels.maximumOptionsHeight)
+        contentWidth: width
+        contentHeight: optionList.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        function reveal(item) {
+            if (!item) return
+            const y = item.mapToItem(optionsFlick.contentItem, 0, 0).y
+            if (y < contentY) contentY = y
+            else if (y + item.height > contentY + height) contentY = y + item.height - height
         }
-        Text { text: root.second.label; color: root.style.textMuted; font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
-        ShellComboBox {
-            objectName: "settingsRowsChoice"
-            Layout.fillWidth: true
-            style: root.style
-            inputState: root.inputState
-            emphasis: Theme.Interaction.selectorEmphasis
-            optionEmphasis: Theme.Interaction.selectorOptionEmphasis
-            model: root.secondChoices
-            textRole: "label"
-            currentIndex: root.indexFor(root.secondChoices, root.secondValue)
-            enabled: root.editable
-            Accessible.name: root.second.name
-            onActivated: index => root.secondValue = root.secondChoices[index].value
+        ColumnLayout {
+            id: optionList
+            width: optionsFlick.width
+            spacing: Config.ContextPanels.spacing
+            Repeater {
+                model: root.options
+                RowLayout {
+                    id: optionRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: Config.ContextPanels.spacing
+                    readonly property var choices: root.choicesFor(modelData)
+                    Text {
+                        Layout.preferredWidth: Config.ContextPanels.optionLabelWidth
+                        text: optionRow.modelData.label
+                        color: root.style.textMuted
+                        font.family: root.style.uiFamily
+                        font.pointSize: root.style.bodyPointSize
+                    }
+                    ShellComboBox {
+                        id: choiceBox
+                        objectName: "settingsChoice-" + optionRow.modelData.key
+                        Layout.fillWidth: true
+                        style: root.style
+                        inputState: root.inputState
+                        emphasis: Theme.Interaction.selectorEmphasis
+                        optionEmphasis: Theme.Interaction.selectorOptionEmphasis
+                        model: optionRow.choices
+                        textRole: "label"
+                        currentIndex: root.indexFor(optionRow.choices, root.drafts[optionRow.modelData.key])
+                        enabled: root.editable
+                        Accessible.name: optionRow.modelData.name
+                        onActiveFocusChanged: if (activeFocus) optionsFlick.reveal(optionRow)
+                        onActivated: index => root.setDraft(optionRow.modelData.key, optionRow.choices[index].value)
+                    }
+                }
+            }
         }
     }
     Text {

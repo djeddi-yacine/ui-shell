@@ -23,7 +23,13 @@ return {
     },
     control_tuning = { key = "T", target = "ui-shell:control-tuning" },
     audio_control = { key = "M", target = "ui-shell:audio-control" },
+    screen_record = { key = "R", target = "ui-shell:screen-record" },
+    screen_shot = { key = "P", target = "ui-shell:screen-shot" },
   },
+
+  -- The webcam overlay of a recording: a small floating video window in the bottom-right corner,
+  -- on every workspace, never taking focus. scripts/screen-record starts it with this app id.
+  webcam_overlay = { app_id = "ui-shell-webcam", width = 320, height = 180, margin = 24 },
 
   commands = {
     terminal = "foot",

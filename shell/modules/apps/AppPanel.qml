@@ -157,7 +157,7 @@ FocusScope {
     }
     Rectangle {
         anchors.fill: parent
-        color: Qt.rgba(styleTokens.scrim.r, styleTokens.scrim.g, styleTokens.scrim.b, Config.AppLauncher.scrimOpacity)
+        color: styleTokens.scrimColor(Config.AppLauncher.scrimOpacity)
         MouseArea { anchors.fill: parent; onClicked: root.requestClose() }
     }
     Rectangle {

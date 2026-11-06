@@ -292,8 +292,13 @@ if [[ $mode == check || $mode == qml || $mode == theme-config || $mode == theme 
     args+=(--ro-bind "$project_root/$part" "/source/$part")
   done
 fi
-if [[ $mode == phantomat ]]; then
+# The interactive session loads Phantomat when it is built; its dedicated mode requires it.
+phantomat_loaded=0
+[[ $mode != run || ! -s $project_root/$test_phantomat_plugin ]] || phantomat_loaded=1
+[[ $mode != phantomat ]] || phantomat_loaded=1
+if (( phantomat_loaded )); then
   [[ -s $project_root/$test_phantomat_plugin ]] || { printf '%s\n' 'Build Phantomat before its isolated test.' >&2; exit 1; }
+  args+=(--setenv UI_SHELL_TEST_PHANTOMAT 1)
   sha256sum -- "$project_root/$test_phantomat_plugin" >"$test_run_dir/phantomat-build.log"
   args+=(--ro-bind "$project_root/$test_phantomat_plugin" "$test_config_root/plugins/spatialoverview.so")
 fi
@@ -318,6 +323,13 @@ args+=(--setenv PATH /usr/bin:/bin --setenv HOME "$test_home"
   --setenv UI_SHELL_OPEN_PICKER "$test_open_picker"
   --setenv UI_SHELL_OPEN_TUNING "${UI_SHELL_OPEN_TUNING:-0}"
   --setenv UI_SHELL_OPEN_AUDIO "${UI_SHELL_OPEN_AUDIO:-0}"
+  --setenv UI_SHELL_OPEN_RECORD "${UI_SHELL_OPEN_RECORD:-0}"
+  --setenv UI_SHELL_OPEN_SHOT "${UI_SHELL_OPEN_SHOT:-0}"
+  --setenv UI_SHELL_SHOT_CONTEXT "${UI_SHELL_SHOT_CONTEXT-}"
+  --setenv UI_SHELL_TEST_EXEC "${UI_SHELL_TEST_EXEC-}"
+  --setenv UI_SHELL_RECORD_KIND "${UI_SHELL_RECORD_KIND-}"
+  --setenv UI_SHELL_RECORD_ACTION "${UI_SHELL_RECORD_ACTION-}"
+  --setenv UI_SHELL_RECORD_CONTEXT "${UI_SHELL_RECORD_CONTEXT-}"
   --setenv UI_SHELL_AUDIO_TAB "${UI_SHELL_AUDIO_TAB-}"
   --setenv UI_SHELL_AUDIO_CONTEXT "${UI_SHELL_AUDIO_CONTEXT-}"
   --setenv UI_SHELL_AUDIO_FIXTURE "${UI_SHELL_AUDIO_FIXTURE-}"

@@ -21,6 +21,9 @@ QML adapters between the shell UI and external helpers (app2unit, PipeWire helpe
 
 ## Side Effects
 - Spawns `app2unit` via `AppRunner` [AppRunner.qml:runner].
+- `RecordState` (singleton) [RecordState.qml]: watches the recorder state file with `FileView` (inotify), asks `commands.screenRecord status` for the checked state, exposes `state`, `active`, `elapsed`, `monitors`, `windows`, `cameras`, `audioSources`, `lastRegion`, `picking`, `capabilities`, `start(target, audio, countdown)`, `stop()`, `pickRegion()` and the `failed(failure)`, `regionPicked(region)` and `regionCancelled()` signals for the shared ErrorPopup.
+- `ShotRunner` (singleton) [ShotRunner.qml]: `capture(target, { copy, save, delay })` runs `commands.screenShot capture` once and emits `captured(result)` (`{ file, size, copied }`) or `failed(failure)`; `capabilities`, `lastResult`, `busy`. It keeps no state file.
+- RecordState invariants: never reports `recording` from the file alone (the script verifies pid and start time); `elapsed`/`remaining` tick once a second only while a recording is starting or running; one failure per recording [RecordState.qml:shownFailure]. It spawns `commands.screenRecord` (`status`, `capabilities`, `monitors`, `start`, `stop`).
 - Spawns `Config.GeneratedRuntime.commands.audioGraph` (`snapshot` and action args) and `pw-dump --monitor --no-colors --indent 0` [AudioGraph.qml:reader, actor, watcher].
 - Spawns `commands.readComponentSettings` and `commands.saveComponentSettings`; loads the returned settings file as QML via `file://` Loader [QmlSettingsFile.qml:inspect, qml; ComponentSettings.qml:writer].
 - Spawns `commands.readThemeEditor`, `readThemePalette`, `saveThemeProfile`; loads generated native theme data via Loader; on save calls `Theme.ActivePalettes.apply` [ThemeProfiles.qml:process, data, accept].

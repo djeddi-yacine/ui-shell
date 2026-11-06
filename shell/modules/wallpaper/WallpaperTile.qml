@@ -15,6 +15,8 @@ Item {
     required property var style
     required property Controls.InputState inputState
 
+    // Whether the pointer hover is being shown (the pointer is the active input and over the tile).
+    readonly property bool hoverShown: visual.pointerHover
     signal chosen()
     signal activated()
 
@@ -33,8 +35,9 @@ Item {
         style: root.style
         emphasis: Theme.Interaction.wallpaperTileEmphasis
         enabled: root.enabled
-        // Scrollable candidates are keyboard-owned; pointer movement must not add a second highlight.
-        hovered: false
+        // The keyboard owns the selection; the pointer only hovers (a different colour) and never
+        // selects until it clicks. The shared input state drops hover while the keyboard is in use.
+        hovered: root.inputState.pointerActive && pointer.containsMouse
         pressed: pointer.pressed
         selected: root.selected && root.keyboardCandidate
         focused: root.selected && root.keyboardCandidate

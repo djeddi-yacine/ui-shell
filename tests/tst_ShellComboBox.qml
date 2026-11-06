@@ -48,6 +48,32 @@ Item {
             tryCompare(combo.popup.contentItem, "model", null)
             tryCompare(combo.popup.contentItem, "count", 0)
         }
+        function test_hoveringARowMovesTheHighlightOnlyWhileThePointerIsActive() {
+            const combo = createTemporaryObject(comboComponent, root, { model: choices().slice(0, 6) })
+            input.pointerActive = false
+            combo.popup.open()
+            tryCompare(combo.popup, "opened", true)
+            const list = combo.popup.contentItem
+            tryVerify(() => list.itemAtIndex(3) !== null)
+            const row = list.itemAtIndex(3)
+            const spot = row.mapToItem(root, row.width / 2, row.height / 2)
+            mouseMove(root, spot.x, spot.y)
+            mouseMove(root, spot.x + 2, spot.y + 1)
+            compare(combo.highlightedIndex === 3 && !input.pointerActive, false,
+                "a resting or keyboard-driven pointer must not move the highlight while the keyboard is active")
+            input.pointerActive = true
+            mouseMove(root, spot.x + 4, spot.y + 2)
+            mouseMove(root, spot.x + 6, spot.y + 3)
+            tryCompare(combo, "highlightedIndex", 3)
+            tryCompare(list.itemAtIndex(3), "keyboardCandidate", true)
+            const other = list.itemAtIndex(1)
+            const spot2 = other.mapToItem(root, other.width / 2, other.height / 2)
+            mouseMove(root, spot2.x, spot2.y)
+            mouseMove(root, spot2.x + 2, spot2.y + 1)
+            tryCompare(combo, "highlightedIndex", 1)
+            compare(list.itemAtIndex(3).keyboardCandidate, false, "only one row is highlighted")
+            combo.popup.close()
+        }
         function test_keyboardCanReachLastThemeWithoutCreatingWholeCatalog() {
             const entries = choices()
             const last = entries.find(entry => entry.id === "theme-499")

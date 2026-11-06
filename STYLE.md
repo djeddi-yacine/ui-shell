@@ -61,6 +61,14 @@ means "dismiss and quit": leaving takes two Esc presses, and one stray key loses
 with `exit.request(hasUnsavedChanges, focusItem)` and `onConfirmed`; while it is dirty the
 panel must not close itself on Esc or an outside click.
 
+## The one long-lived process: screen recording
+
+The shell runs no daemon of its own. Screen recording is the single named exception: a recording outlives every panel and a shell reload, so `scripts/screen-record` starts a detached wrapper that is the recorder's parent and writes how it ended into a state file in the runtime directory. The shell watches that file (inotify through `FileView`) and re-reads the checked state; it never polls while idle. A read is trusted only after the recorder's pid and start time are verified in `/proc`, so a killed wrapper cannot leave a false "recording". No other feature may add a long-lived process without extending this section.
+
+## No literals in components
+
+A component or module file never carries a layout number, a gap, a type size, a duration, an opacity or a colour of its own. Every one comes from the unified system: gaps and sizes from `Theme.Density` (`spacing`, `spacingTight`, `spacingLoose`, `cardPadding`, `rowHeight`, `sliderHeight`, `chooserWidth`, `readoutWidth`, `listVisibleRows`), type from `Theme.Typography` (`microPointSize`, `captionPointSize`, `bodyPointSize`, `displayPointSize`, the letter spacings), borders, radii and the quiet-border opacities from `Theme.Shape`, durations and delays from `Theme.Motion`, quiet colours from the style (`softOutline`, `rule`, `softAccent`, `restingLink`, `scrimColor(opacity)`), and a module's own geometry from its `Config.<Module>` singleton. A width that depends on text is measured (`TextMetrics`), not guessed. Interaction values follow the control model too: hover is on only when the active mode's `flags.hover` allows it, never hard-coded off for one control. A new component that needs a number adds a token first.
+
 ## Component-scoped error popup
 
 Runtime operation, validation, loading and settings-conflict errors use the shared `ErrorPopup.qml`. Backend failure signals trigger one popup for each new failure observation. Dismissing a popup does not reopen it for the same failure; a subsequent failure signal presents the new failure. No inline error banner, added error row or error-driven resizing belongs in the runner or picker. A scoped settings error appears above the editor without replacing it. The backend/module still owns error state and intentional retry; the popup presents the specific failure without silently substituting another option.

@@ -3,6 +3,8 @@ local picker = profile.shell_shortcuts.wallpaper_picker
 local launcher = profile.shell_shortcuts.app_launcher
 local tuning = profile.shell_shortcuts.control_tuning
 local audio = profile.shell_shortcuts.audio_control
+local record = profile.shell_shortcuts.screen_record
+local shot = profile.shell_shortcuts.screen_shot
 hl.bind(profile.main_mod .. " + " .. launcher.key, hl.dsp.global(launcher.target), {
   description = "Open application launcher",
 })
@@ -17,4 +19,12 @@ hl.bind(profile.main_mod .. " + " .. tuning.key, hl.dsp.global(tuning.target), {
 
 hl.bind(profile.main_mod .. " + " .. audio.key, hl.dsp.global(audio.target), {
   description = "Open audio control",
+})
+
+hl.bind(profile.main_mod .. " + " .. record.key, hl.dsp.global(record.target), {
+  description = "Open screen recording, or stop the recording",
+})
+
+hl.bind(profile.main_mod .. " + " .. shot.key, hl.dsp.global(shot.target), {
+  description = "Open screenshot",
 })

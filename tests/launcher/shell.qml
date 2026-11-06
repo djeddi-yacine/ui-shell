@@ -177,7 +177,8 @@ ShellRoot {
                         && list.activeFocus && selectedRow.keyboardCandidate
                         && root.sameColor(selectedLabel.color, selectedRow.style.controls.selectionText)
                         && !pointerRow.selected
-                        && root.sameColor(pointerLabel.color, pointerRow.style.controls.text),
+                        // The pointer row only hovers (its own colour); the keyboard keeps the selection.
+                        && pointerRow.hoverShown && root.sameColor(pointerLabel.color, pointerRow.style.controls.hoverText),
                         "pointer movement changed or obscured the keyboard-owned launcher candidate: "
                             + JSON.stringify({ pointer: input.pointerActive, index: panel.selectedIndex,
                                 focus: list.activeFocus, selected: selectedRow.keyboardCandidate,
@@ -406,7 +407,7 @@ ShellRoot {
                 }
                 if (root.phase === "output-editor-capturing") return
                 if (root.phase === "dropdown-open") {
-                    const choice = root.find(root.editor(), "settingsFirstChoice")
+                    const choice = root.find(root.editor(), "settingsChoice-showIcons")
                     root.check(choice && choice.currentIndex === 0, "opening dropdown choice did not reflect the default")
                     input.keyboardUsed()
                     choice.forceActiveFocus()
@@ -415,7 +416,7 @@ ShellRoot {
                     return
                 }
                 if (root.phase === "dropdown-settled") {
-                    const choice = root.find(root.editor(), "settingsFirstChoice")
+                    const choice = root.find(root.editor(), "settingsChoice-showIcons")
                     if (!choice.popup.opened) return
                     const option = choice.popup.contentItem.itemAtIndex(choice.currentIndex)
                     if (!option) return
@@ -437,15 +438,15 @@ ShellRoot {
                 }
                 if (root.phase === "dropdown-capturing") return
                 if (root.phase === "dropdown-captured") {
-                    root.find(root.editor(), "settingsFirstChoice").popup.close()
+                    root.find(root.editor(), "settingsChoice-showIcons").popup.close()
                     root.nextPhase("output-editor-captured")
                     return
                 }
                 if (root.phase === "output-editor-captured") {
-                    if (root.find(root.editor(), "settingsFirstChoice").popup.visible) return
+                    if (root.find(root.editor(), "settingsChoice-showIcons").popup.visible) return
                     const edit = root.editor()
-                    edit.firstValue = false
-                    edit.secondValue = 10
+                    edit.setDraftAt(0, false)
+                    edit.setDraftAt(1, 10)
                     root.check(panel.componentSettings.showIcons === Config.AppLauncher.showIcons
                         && panel.componentSettings.visibleRows === Config.AppLauncher.visibleRows,
                         "output draft edits changed effective launcher settings")
@@ -483,8 +484,8 @@ ShellRoot {
                     root.check(root.defaultSettingsPath.startsWith(Config.GeneratedRuntime.paths.components
                         + "/launcher/") && root.defaultSettingsPath !== root.outputSettingsPath,
                         "default settings path is not distinct under private XDG_CONFIG_HOME")
-                    edit.firstValue = true
-                    edit.secondValue = 8
+                    edit.setDraftAt(0, true)
+                    edit.setDraftAt(1, 8)
                     root.check(!panel.componentSettings.showIcons && panel.componentSettings.visibleRows === 10,
                         "default draft edits changed the active output override")
                     const saveButton = root.find(edit, "settingsSave")
@@ -516,8 +517,8 @@ ShellRoot {
                     if (edit.scope !== "output") { edit.loadScope("output"); return }
                     if (!edit.file.ready || edit.revision !== edit.file.revision) return
                     root.cancelRevision = edit.revision
-                    edit.firstValue = true
-                    edit.secondValue = 6
+                    edit.setDraftAt(0, true)
+                    edit.setDraftAt(1, 6)
                     root.check(panel.componentSettings.showIcons === false && panel.componentSettings.visibleRows === 10,
                         "cancelled output draft changed live settings")
                     root.check(root.key(Config.Keyboard.cancelKey, Qt.NoModifier).accepted,
@@ -541,8 +542,8 @@ ShellRoot {
                     if (edit.scope !== "output") { edit.loadScope("output"); return }
                     if (!edit.file.ready || edit.revision !== edit.file.revision) return
                     root.check(edit.file.path === root.outputSettingsPath, "reopened output scope changed path")
-                    edit.firstValue = undefined
-                    edit.secondValue = undefined
+                    edit.setDraftAt(0, undefined)
+                    edit.setDraftAt(1, undefined)
                     edit.save()
                     root.nextPhase("output-reset")
                     return
@@ -560,12 +561,12 @@ ShellRoot {
                     if (!edit || edit.awaitingScope || !edit.editable) return
                     if (edit.scope !== "output") { edit.loadScope("output"); return }
                     if (!edit.file.ready || edit.revision !== edit.file.revision) return
-                    root.check(edit.firstValue === undefined && edit.secondValue === undefined
+                    root.check(edit.draftAt(0) === undefined && edit.draftAt(1) === undefined
                         && edit.file.path === root.outputSettingsPath
                         && panel.componentSettings.showIcons === true && panel.componentSettings.visibleRows === 8,
                         "reopened editor did not show persisted inherited output settings")
                     const frozenRevision = edit.revision
-                    panel.componentSettings.save("output", frozenRevision, false, 10)
+                    panel.componentSettings.save("output", frozenRevision, [false, 10])
                     root.nextPhase("stale-external-save")
                     return
                 }
@@ -575,7 +576,7 @@ ShellRoot {
                     root.check(edit && edit.revision !== panel.componentSettings.fileForScope("output").revision,
                         "external settings write did not advance the revision")
                     root.interruptedEditor = edit
-                    root.errorDraft = { first: edit.firstValue, second: edit.secondValue, revision: edit.revision }
+                    root.errorDraft = { first: edit.draftAt(0), second: edit.draftAt(1), revision: edit.revision }
                     root.editorHeightBeforeError = edit.height
                     clipboardProbe.text = root.clipboardBefore
                     clipboardProbe.selectAll()
@@ -590,8 +591,8 @@ ShellRoot {
                     if (panel.componentSettings.busy || !panel.errorPopup.opened) return
                     root.check(panel.contextOpen && edit === root.interruptedEditor && edit.error.length > 0,
                         "stale settings save was accepted or closed its editor")
-                    root.check(edit.height === root.editorHeightBeforeError && edit.firstValue === root.errorDraft.first
-                        && edit.secondValue === root.errorDraft.second && edit.revision === root.errorDraft.revision,
+                    root.check(edit.height === root.editorHeightBeforeError && edit.draftAt(0) === root.errorDraft.first
+                        && edit.draftAt(1) === root.errorDraft.second && edit.revision === root.errorDraft.revision,
                         "settings error resized the editor or discarded its draft")
                     root.observedFailure = panel.errorPopup.failure
                     root.interruptedFocus = panel.errorPopup.returnFocus
@@ -644,8 +645,8 @@ ShellRoot {
                 if (root.phase === "settings-error-dismissed") {
                     if (panel.errorOpen) return
                     root.check(panel.contextOpen && root.editor() === root.interruptedEditor
-                        && root.interruptedFocus.activeFocus && root.editor().firstValue === root.errorDraft.first
-                        && root.editor().secondValue === root.errorDraft.second,
+                        && root.interruptedFocus.activeFocus && root.editor().draftAt(0) === root.errorDraft.first
+                        && root.editor().draftAt(1) === root.errorDraft.second,
                         "error dismissal lost editor focus or its unsaved draft")
                     root.check(!panel.errorPopup.present(root.observedFailure, root.interruptedFocus) && !panel.errorOpen,
                         "observing the same settings failure reopened it")
@@ -657,9 +658,9 @@ ShellRoot {
                     const edit = root.editor()
                     if (!edit || edit.awaitingScope || !edit.editable || edit.revision !== edit.file.revision) return
                     root.check(edit.error.length === 0, "explicit reload did not clear the stale revision error")
-                    edit.firstValue = true
-                    edit.secondValue = 6
-                    root.errorDraft = { first: edit.firstValue, second: edit.secondValue, revision: edit.revision }
+                    edit.setDraftAt(0, true)
+                    edit.setDraftAt(1, 6)
+                    root.errorDraft = { first: edit.draftAt(0), second: edit.draftAt(1), revision: edit.revision }
                     root.interruptedEditor = edit
                     root.interruptedFocus = root.find(edit, "settingsScope")
                     root.interruptedFocus.forceActiveFocus()
@@ -676,8 +677,8 @@ ShellRoot {
                     root.observedFailure = panel.errorPopup.failure
                     root.check(edit === root.interruptedEditor && panel.componentSettings.loadError.length > 0
                         && root.observedFailure.title === qsTr("Settings load failed")
-                        && root.observedFailure.target.includes(root.output.name) && edit.firstValue === root.errorDraft.first
-                        && edit.secondValue === root.errorDraft.second && edit.revision === root.errorDraft.revision,
+                        && root.observedFailure.target.includes(root.output.name) && edit.draftAt(0) === root.errorDraft.first
+                        && edit.draftAt(1) === root.errorDraft.second && edit.revision === root.errorDraft.revision,
                         "settings load failure lost scope, editor or draft")
                     root.key(Config.ErrorPanels.dismissKey, Qt.NoModifier)
                     root.nextPhase("settings-load-dismissed")
@@ -695,10 +696,10 @@ ShellRoot {
                 if (root.phase === "settings-load-reloaded") {
                     const edit = root.editor()
                     if (!edit.editable || edit.file.reading) return
-                    root.check(edit.error.length === 0 && edit.firstValue === root.errorDraft.first
-                        && edit.secondValue === root.errorDraft.second, "settings retry discarded the unsaved draft")
-                    edit.firstValue = undefined
-                    edit.secondValue = undefined
+                    root.check(edit.error.length === 0 && edit.draftAt(0) === root.errorDraft.first
+                        && edit.draftAt(1) === root.errorDraft.second, "settings retry discarded the unsaved draft")
+                    edit.setDraftAt(0, undefined)
+                    edit.setDraftAt(1, undefined)
                     edit.save()
                     root.nextPhase("output-final-reset")
                     return
@@ -716,8 +717,8 @@ ShellRoot {
                     if (!edit || edit.awaitingScope || !edit.editable) return
                     if (edit.scope !== "default") { edit.loadScope("default"); return }
                     if (!edit.file.ready || edit.revision !== edit.file.revision) return
-                    edit.firstValue = undefined
-                    edit.secondValue = undefined
+                    edit.setDraftAt(0, undefined)
+                    edit.setDraftAt(1, undefined)
                     edit.save()
                     root.nextPhase("default-final-reset")
                     return
@@ -736,7 +737,7 @@ ShellRoot {
                     if (!edit || edit.awaitingScope || !edit.editable) return
                     if (edit.scope !== "default") { edit.loadScope("default"); return }
                     if (!edit.file.ready || edit.revision !== edit.file.revision) return
-                    root.check(edit.firstValue === undefined && edit.secondValue === undefined
+                    root.check(edit.draftAt(0) === undefined && edit.draftAt(1) === undefined
                         && edit.file.path === root.defaultSettingsPath,
                         "reopened default scope did not confirm inherited configured values/path")
                     edit.loadScope("output")
@@ -748,7 +749,7 @@ ShellRoot {
                     if (!edit || edit.awaitingScope || !edit.editable) return
                     if (edit.scope !== "output") { edit.loadScope("output"); return }
                     if (!edit.file.ready || edit.revision !== edit.file.revision) return
-                    root.check(edit.firstValue === undefined && edit.secondValue === undefined
+                    root.check(edit.draftAt(0) === undefined && edit.draftAt(1) === undefined
                         && edit.file.path === root.outputSettingsPath
                         && root.defaultSettingsPath !== root.outputSettingsPath
                         && panel.componentSettings.showIcons === Config.AppLauncher.showIcons

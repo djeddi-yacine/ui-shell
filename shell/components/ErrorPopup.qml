@@ -116,7 +116,7 @@ ContextPopup {
                     implicitWidth: Config.ErrorPanels.scrollBarWidth
                     focusPolicy: Qt.NoFocus
                     policy: ScrollBar.AsNeeded
-                    contentItem: Rectangle { color: root.style.controls.outline; radius: 0 }
+                    contentItem: Rectangle { color: root.style.controls.outline; radius: Theme.Shape.controlRadius }
                     background: Item {}
                 }
                 Loader {

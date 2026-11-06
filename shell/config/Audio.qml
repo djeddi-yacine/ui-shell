@@ -19,5 +19,16 @@ QtObject {
     readonly property int padding: 26
     readonly property int sectionSpacing: 22
     readonly property int rowSpacing: 16
-    readonly property int chooserWidth: 200
+    readonly property int cardChooserWidth: 320
+    readonly property int titleMaximumWidth: 360
+    readonly property int errorMaximumWidth: 260
+    // Patchbay: the gap between nodes, how wide each column is (a fraction of the view, clamped),
+    // and how far a link's curve is pulled out of its socket (a fraction of the distance, clamped).
+    readonly property int patchGap: 10
+    readonly property int patchColumnMinimum: 180
+    readonly property int patchColumnMaximum: 290
+    readonly property real patchColumnFraction: 0.36
+    readonly property int linkPullMinimum: 40
+    readonly property int linkPullMaximum: 160
+    readonly property real linkPullFraction: 0.5
 }

@@ -6,7 +6,7 @@ source /project/tests/nested.conf
 shell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
 hypr_directory=$(jq -er '.paths.hypr' "$UI_SHELL_RUNTIME")
 config=$test_hypr_config
-[[ $mode != phantomat ]] || config=$test_phantomat_config
+[[ $mode != phantomat && ${UI_SHELL_TEST_PHANTOMAT-} != 1 ]] || config=$test_phantomat_config
 if [[ $mode == smoke ]]; then
   # Quickshell imports cannot escape the entrypoint's config root.
   cp "$test_project/tests/picker-apply/shell.qml" "$shell_directory/picker-apply-test.qml"
@@ -63,6 +63,11 @@ else
 fi
 if [[ $mode == phantomat ]]; then
   printf '%s\n' 'Phantomat is loaded and verified. Ctrl+Shift+F5 toggles the canvas, Ctrl+Shift+O opens the navigator; Ctrl+Alt+Escape exits. Artifacts are kept in /artifacts.'
+fi
+# Debug hook: UI_SHELL_TEST_EXEC runs a shell command inside the live nested session (same
+# environment as the shell) and keeps its output in the artifacts as exec.log.
+if [[ -n ${UI_SHELL_TEST_EXEC-} ]]; then
+  bash -c "$UI_SHELL_TEST_EXEC" >/artifacts/exec.log 2>&1 || printf 'exit status %s\n' "$?" >>/artifacts/exec.log
 fi
 # Interactive modes stay up until the compositor is closed by hand.
 if [[ $mode != smoke && $mode != snapshot && $mode != theme && $mode != profiles && $mode != motion && $mode != launcher && $mode != app-launch && $mode != borders ]]; then

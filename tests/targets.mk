@@ -2,18 +2,13 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-env-audio test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-persistent test-env-fresh test-env-apps test-env-phantomat test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
+.PHONY: test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
 
 test-help:
 	@printf '%s\n' \
 		'Test environment (private HOME and XDG state):' \
-		'  test-env          Open the nested session with popups closed; retain private state' \
-		'  test-env-persistent Restart the nested session with saved private choices' \
+		'  test-env          THE interactive session: nested Hyprland with every feature on (wallpaper picker, launcher, tuning, audio on the HOST PipeWire, recording, Phantomat when built); private saved state. UI_SHELL_HOST_PIPEWIRE=0 keeps audio private.' \
 		'  test-import-themes Regenerate reference definitions in private themes; no profile/window' \
-		'  test-env-fresh    Open a disposable nested session' \
-		'  test-env-apps     Open a disposable launcher; apps use private test scopes' \
-		'  test-env-audio    Open a disposable session with the audio panel on the HOST PipeWire (real devices)' \
-		'  test-env-phantomat Open test-env with Phantomat loaded; retain private state' \
 		'  test-env-snapshot Restart saved test state, capture diagnostics, then close' \
 		'  test-env-clean    Reset private choices/cache; keep all Theme definitions' \
 		'' \
@@ -28,6 +23,10 @@ test-help:
 		'  test-wallpaper    Check picker/UI and real wallpaper application' \
 		'  test-launcher     Check launcher and app2unit dry-run without starting an app' \
 		'  test-audio        Stress the audio helper on a PRIVATE PipeWire+WirePlumber session (generated tones; host audio untouched)' \
+		'  test-record       Check the screen-record state machine with a fake recorder (no screen, no GPU)' \
+		'  test-shot         Check the screenshot script with stand-ins for grim and wl-copy (no screen)' \
+		'  test-shot-live    Take real screenshots of THIS desktop with grim and wl-copy and check them' \
+		'  test-record-live  Record 3 s of THIS desktop with GPU Screen Recorder and validate the file (real screen)' \
 		'  test-audio-host   Same stress test on the CURRENT PipeWire session; only its own uitest-* streams are touched' \
 		'  test-app2unit     Register a host scope, then verify its app is sandboxed' \
 		'  test-app-launch   Launch a real nested GUI app; verify handoff, error and cleanup' \
@@ -38,7 +37,7 @@ test-help:
 		'  test-borders      Verify native output-scoped borders in a disposable session' \
 		''
 
-test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines
+test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot
 	@printf '%s\n' 'Checks passed.'
 
 test-scripts:
@@ -51,22 +50,15 @@ test-scripts:
 	done
 	@bash -n "$(ROOT)/tests/nested.conf"
 
-test-env test-env-persistent:
-	@bash "$(TEST_RUNNER)" run persistent
+# The one interactive session: everything enabled, private saved state. Audio uses the host
+# PipeWire socket (changes are real; set UI_SHELL_HOST_PIPEWIRE=0 to keep audio private).
+# Phantomat is built if needed and loaded when the build works.
+test-env:
+	@$(MAKE) --no-print-directory dev-build-phantomat || printf '%s\n' 'Phantomat build failed; starting without it.' >&2
+	@UI_SHELL_HOST_PIPEWIRE=$${UI_SHELL_HOST_PIPEWIRE:-1} bash "$(TEST_RUNNER)" run persistent
 
 test-import-themes:
 	@bash "$(TEST_RUNNER)" import-themes persistent
-
-test-env-fresh:
-	@bash "$(TEST_RUNNER)" run ephemeral
-
-# The nested session with the audio panel open on the HOST's PipeWire (real devices).
-# Everything you change there (volume, mute, default, routing, links) is real; Esc closes the panel.
-test-env-audio:
-	@UI_SHELL_HOST_PIPEWIRE=1 UI_SHELL_OPEN_AUDIO=1 bash "$(TEST_RUNNER)" run ephemeral
-
-test-env-apps:
-	@bash "$(TEST_RUNNER)" apps ephemeral
 
 test-env-snapshot:
 	@bash "$(TEST_RUNNER)" snapshot persistent
@@ -116,9 +108,6 @@ test-theme-config:
 test-pipelines:
 	@bash "$(TEST_RUNNER)" pipelines ephemeral
 
-test-env-phantomat: dev-build-phantomat
-	@bash "$(TEST_RUNNER)" phantomat persistent
-
 # Audio stress tests run on the host, outside the sandbox: PipeWire needs real sockets.
 # `test-audio` starts its own PipeWire and WirePlumber under a temporary runtime directory,
 # so nothing of the desktop's audio can be reached; the test verifies that afterwards.
@@ -127,3 +116,17 @@ test-audio:
 
 test-audio-host:
 	@bash "$(ROOT)/tests/scripts/check-audio-live" host
+
+test-record:
+	@bash "$(ROOT)/tests/scripts/check-screen-record"
+
+# Records the real screen with the real recorder; needs a Wayland session and gpu-screen-recorder.
+test-record-live:
+	@bash "$(ROOT)/tests/scripts/check-screen-record-live"
+
+test-shot:
+	@bash "$(ROOT)/tests/scripts/check-screen-shot"
+
+# Takes real screenshots of the real screen; needs a Wayland session, grim, wl-copy and wl-paste.
+test-shot-live:
+	@bash "$(ROOT)/tests/scripts/check-screen-shot-live"

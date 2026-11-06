@@ -4,10 +4,10 @@
 Singleton QML configuration for the shell: feature toggles, key bindings, panel geometry, and per-component option specs. Module `UiShell.Config` ([config/qmldir]). Three files are source-tree placeholders replaced at runtime preparation (see Side Effects).
 
 ## Interface
-- `Config` [Config.qml]: `watchSourceFiles`, `barEnabled`, `appLauncherEnabled`, `controlTuningEnabled`, `audioControlEnabled`, `barHeight`, `barLabel`, `barWorkspaceNumbers`, `barWorkspacesEnabled`, `barControlMode`.
+- `Config` [Config.qml]: `watchSourceFiles`, `barEnabled`, `appLauncherEnabled`, `controlTuningEnabled`, `audioControlEnabled`, `screenRecordEnabled`, `screenShotEnabled`, `barHeight`, `barLabel`, `barWorkspaceNumbers`, `barWorkspacesEnabled`, `barControlMode`.
 - `AppLauncher` [AppLauncher.qml]: shortcut (`shortcutAppId`, `shortcutName`), runner (`runnerExecutable`, `runnerArguments`), layout, row and key properties (`visibleRows`, `showIcons`, `previousKey`, ...).
 - `Audio` [Audio.qml]: `shortcutName`, `maximumVolumePercent`, `volumeStepPercent`, `refreshDelay`, layout sizes.
-- `ComponentSpec` [ComponentSpec.qml:components, valid]: option tables for `launcher`, `wallpaper`, `audio`; `valid(option, value)`.
+- `ComponentSpec` [ComponentSpec.qml:components, valid]: option tables (any number of options; integer, boolean or choices of numbers or strings, with optional labels) for `launcher`, `wallpaper`, `audio`, `record`, `shot`; `valid(option, value)`.
 - `Keyboard` [Keyboard.qml]: key/modifier constants, `namedKeys`, `shortcut(key, modifiers)`.
 - `WallpaperPicker` [WallpaperPicker.qml], `ThemeEditor` [ThemeEditor.qml] (roles, sources, colorChannels), `Tuning` [Tuning.qml], `ContextPanels` [ContextPanels.qml], `ErrorPanels` [ErrorPanels.qml]: panel geometry and key settings.
 - `Outputs` [Outputs.qml:launcherScreen, pickerScreen]: target-screen selection by `screen-index` or `output-name`.

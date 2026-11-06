@@ -238,8 +238,8 @@ ShellRoot {
             check(edit.settings.screenName === outputName && edit.scope === "output", "picker settings guessed a monitor")
             check(edit.file.path.startsWith(ShellConfig.GeneratedRuntime.paths.components + "/wallpaper/outputs/"),
                 "picker settings did not stay in private per-output QML")
-            edit.firstValue = 3
-            edit.secondValue = 2
+            edit.setDraftAt(0, 3)
+            edit.setDraftAt(1, 2)
             check(panel.componentSettings.wideColumns === ShellConfig.WallpaperPicker.wideColumns
                 && panel.componentSettings.maximumVisibleRows === ShellConfig.WallpaperPicker.maximumVisibleRows,
                 "picker draft changed the live grid")
@@ -254,7 +254,7 @@ ShellRoot {
             return
         }
         if (phase === "settings-captured") {
-            find(panel.contextPopup.editor, "settingsRowsChoice").forceActiveFocus()
+            find(panel.contextPopup.editor, "settingsChoice-maximumVisibleRows").forceActiveFocus()
             nativeKeys.keyClick(ShellConfig.Keyboard.applyKey, ShellConfig.Keyboard.popupActionModifiers)
             phase = "settings-saved"
             return
@@ -274,9 +274,9 @@ ShellRoot {
         if (phase === "settings-reopened") {
             const edit = panel.contextPopup.editor
             if (!edit || !edit.editable || edit.awaitingScope) return
-            check(edit.firstValue === 3 && edit.secondValue === 2, "picker did not reload saved QML grid choices")
-            edit.firstValue = undefined
-            edit.secondValue = undefined
+            check(edit.draftAt(0) === 3 && edit.draftAt(1) === 2, "picker did not reload saved QML grid choices")
+            edit.setDraftAt(0, undefined)
+            edit.setDraftAt(1, undefined)
             edit.save()
             phase = "settings-reset"
             return

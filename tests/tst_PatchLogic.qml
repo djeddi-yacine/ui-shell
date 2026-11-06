@@ -32,6 +32,8 @@ Item {
     ]
 
     TestCase {
+        // Explicit numbers: the logic has none of its own, the view feeds it the theme's.
+        readonly property var metrics: ({ row: 54, gap: 10, pullMinimum: 40, pullMaximum: 160, pullFraction: 0.5 })
         name: "PatchLogic"
 
         function ids(list) { return list.map(node => node.id) }
@@ -71,17 +73,17 @@ Item {
         }
 
         function test_rowGeometry() {
-            compare(Logic.step(), Logic.ROW + Logic.GAP)
-            compare(Logic.rowTop(2), 2 * Logic.step())
-            compare(Logic.rowCenter(0), Logic.ROW / 2)
+            compare(Logic.step(metrics), metrics.row + metrics.gap)
+            compare(Logic.rowTop(metrics, 2), 2 * Logic.step(metrics))
+            compare(Logic.rowCenter(metrics, 0), metrics.row / 2)
         }
 
         function test_curveControlPointsAreClamped() {
-            const near = Logic.controlPoints(0, 0, 20, 100)
+            const near = Logic.controlPoints(metrics, 0, 0, 20, 100)
             compare(near.c1x, 40, "short links still bow out by at least 40")
-            const far = Logic.controlPoints(0, 0, 2000, 100)
+            const far = Logic.controlPoints(metrics, 0, 0, 2000, 100)
             compare(far.c1x, 160, "long links bow out by at most 160")
-            const middle = Logic.controlPoints(0, 10, 200, 90)
+            const middle = Logic.controlPoints(metrics, 0, 10, 200, 90)
             compare(middle.c1x, 100)
             compare(middle.c2x, 100)
             compare(middle.c1y, 10)

@@ -37,7 +37,7 @@ Slider {
         inputState: root.inputState; emphasis: Theme.Interaction.buttonEmphasis }
     PointerTracker { inputState: root.inputState; enabled: root.enabled }
 
-    readonly property real trackHeight: Config.ThemeEditor.channelTrackHeight + 4
+    readonly property real trackHeight: Config.ThemeEditor.channelTrackHeight + Theme.Shape.borderWidth * 4
     readonly property bool glide: Theme.Motion.active && !root.pressed
     background: Rectangle {
         x: root.leftPadding
@@ -67,7 +67,7 @@ Slider {
         border.width: Theme.Shape.borderWidth
         border.color: visual.focused ? root.style.controls.focus
             : root.pressed || root.hovered ? root.style.controls.primary : root.style.controls.outline
-        Behavior on x { enabled: root.glide; NumberAnimation { duration: 110; easing.type: Easing.OutCubic } }
+        Behavior on x { enabled: root.glide; NumberAnimation { duration: Theme.Motion.glideDuration; easing.type: Easing.OutCubic } }
         Behavior on color { enabled: root.glide; ColorAnimation { duration: Theme.Motion.stateDuration } }
     }
 }

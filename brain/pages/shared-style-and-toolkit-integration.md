@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [style, theme, qt, gtk, qml, composition]
 created: "2026-09-30T20:10:22"
-updated: "2026-11-05T16:35:17"
+updated: "2026-11-06T11:08:05"
 ---
 
 <!-- compiled_truth -->
@@ -381,4 +381,16 @@ The manifest selects a named profile; its file provider chooses a required defau
   kind: decision
   summary: "Surface rules: every picker (wallpaper, apps, audio, tuning) uses Style.pickerSurface/pickerBorder/pickerRadius; every popup (ContextPopup family, combo menus) uses popupSurface/popupBorder/popupRadius (elevated, one step above the picker). Cards inside a picker use background. Documented in STYLE.md."
   source: user request 2026-11-05
+  affects: [shared-style-and-toolkit-integration]
+
+- time: 2026-11-06T10:59:32
+  kind: decision
+  summary: "No literals in components: layout numbers, gaps, type sizes, durations, opacities and quiet colours come from Theme.Density/Typography/Shape/Motion tokens and Config.<Module> singletons (new: spacingTight/Loose, cardPadding, rowHeight, sliderHeight, chooserWidth, readoutWidth, listVisibleRows, micro/displayPointSize, softOutline, rule, softAccent, restingLink, scrimColor). Dropdown rows follow the mode's hover flag and move the single highlight on hover instead of being hard-coded to no hover. PatchLogic takes its metrics as an argument. Documented in STYLE.md."
+  source: "user: check every hardcoded value, 2026-11-06"
+  affects: [shared-style-and-toolkit-integration]
+
+- time: 2026-11-06T11:08:05
+  kind: decision
+  summary: "Pointer hover on app rows and wallpaper tiles (was hard-coded off): hover shows through the shared control state only while the pointer is the active input and over the item, in its own colour; it never selects (selection is keyboard-owned and set by click); any key press drops hover. Dropdown rows follow the same rule."
+  source: user 2026-11-06
   affects: [shared-style-and-toolkit-integration]

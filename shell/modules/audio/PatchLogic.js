@@ -5,8 +5,8 @@
 // points pulled out horizontally by half the distance, clamped) follows Ziryt's
 // omarchy-plugin-audio.
 
-var ROW = 54
-var GAP = 10
+// Every metric comes in as `m` = { row, gap, pullMinimum, pullMaximum, pullFraction } from the
+// theme and Config.Audio, so the layout has one source for its numbers.
 
 // A class as people say it.
 function kindLabel(mediaClass) {
@@ -17,9 +17,9 @@ function kindLabel(mediaClass) {
   return mediaClass
 }
 
-function step() { return ROW + GAP }
-function rowCenter(index) { return index * step() + ROW / 2 }
-function rowTop(index) { return index * step() }
+function step(m) { return m.row + m.gap }
+function rowCenter(m, index) { return index * step(m) + m.row / 2 }
+function rowTop(m, index) { return index * step(m) }
 
 function audioPorts(ports, node, direction) {
   return ports.filter(port => port.node === node && port.direction === direction && port.audio)
@@ -63,7 +63,7 @@ function linked(edgeList, out, into) {
   return edgeList.some(edge => edge.out === out && edge.in === into)
 }
 
-function controlPoints(x1, y1, x2, y2) {
-  const pull = Math.max(40, Math.min(160, Math.abs(x2 - x1) * 0.5))
+function controlPoints(m, x1, y1, x2, y2) {
+  const pull = Math.max(m.pullMinimum, Math.min(m.pullMaximum, Math.abs(x2 - x1) * m.pullFraction))
   return { c1x: x1 + pull, c1y: y1, c2x: x2 - pull, c2y: y2 }
 }

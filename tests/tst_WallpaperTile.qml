@@ -157,6 +157,23 @@ Item {
             signalName: "activated"
         }
 
+        function test_hoverShowsOnlyWhilePointerDrivesAndNeverSelects() {
+            const selectedTile = createTemporaryObject(firstTileComponent, root)
+            const other = createTemporaryObject(secondTileComponent, root)
+            verify(!!selectedTile && !!other)
+            tileInput.keyboardUsed()
+            root.candidateIndex = 0
+            root.ownerActive = true
+            mouseMove(root, 5, 5)
+            mouseMove(other, other.width / 2, other.height / 2)
+            mouseMove(other, other.width / 2 + 3, other.height / 2 + 2)
+            tryCompare(tileInput, "pointerActive", true)
+            tryCompare(other, "hoverShown", true)
+            compare(selectedTile.hoverShown, false, "only the tile under the pointer hovers")
+            compare(root.candidateIndex, 0, "hovering must not move the keyboard selection")
+            tileInput.keyboardUsed()
+            compare(other.hoverShown, false, "hover is dropped while the keyboard drives")
+        }
         function init() {
             root.candidateIndex = 0
             root.ownerActive = false

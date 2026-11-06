@@ -11,6 +11,8 @@ import "components" as Controls
 import "modules/apps" as Apps
 import "modules/tuning" as Tuning
 import "modules/audio" as Audio
+import "modules/record" as Record
+import "modules/shot" as Shot
 import "adapters" as Adapters
 import "config" as Config
 
@@ -37,13 +39,37 @@ ShellRoot {
         active: Config.Config.audioControlEnabled
         sourceComponent: Audio.AudioShortcut {}
     }
+    Loader {
+        active: Config.Config.screenRecordEnabled
+        sourceComponent: Record.RecordShortcut {}
+    }
+    Loader {
+        active: Config.Config.screenShotEnabled
+        sourceComponent: Shot.ShotShortcut {}
+    }
+    Connections {
+        target: Record.RecordPanelState
+        function onOpenChanged() { if (Record.RecordPanelState.open) { Wallpaper.PickerState.open = false; Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Shot.ShotPanelState.open = false } }
+    }
+    Connections {
+        target: Shot.ShotPanelState
+        function onOpenChanged() { if (Shot.ShotPanelState.open) { Wallpaper.PickerState.open = false; Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false } }
+    }
+    Connections {
+        target: Tuning.TuningState
+        function onOpenChanged() { if (Tuning.TuningState.open) { Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false } }
+    }
+    Connections {
+        target: Audio.AudioState
+        function onOpenChanged() { if (Audio.AudioState.open) { Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false } }
+    }
     Connections {
         target: Apps.AppState
-        function onOpenChanged() { if (Apps.AppState.open) { Wallpaper.PickerState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false } }
+        function onOpenChanged() { if (Apps.AppState.open) { Wallpaper.PickerState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false } }
     }
     Connections {
         target: Wallpaper.PickerState
-        function onOpenChanged() { if (Wallpaper.PickerState.open) { Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false } }
+        function onOpenChanged() { if (Wallpaper.PickerState.open) { Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false } }
     }
 
     Variants {
@@ -68,5 +94,13 @@ ShellRoot {
     Variants {
         model: Config.Config.audioControlEnabled ? Quickshell.screens : []
         Audio.AudioSurface { inputState: shellInput }
+    }
+    Variants {
+        model: Config.Config.screenRecordEnabled ? Quickshell.screens : []
+        Record.RecordSurface { inputState: shellInput }
+    }
+    Variants {
+        model: Config.Config.screenShotEnabled ? Quickshell.screens : []
+        Shot.ShotSurface { inputState: shellInput }
     }
 }

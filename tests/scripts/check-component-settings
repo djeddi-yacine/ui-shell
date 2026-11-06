@@ -154,6 +154,52 @@ for step in 1 2 5 10; do "$render_audio" "$step" undefined >/dev/null || fail "s
 for volume in 100 125 150; do "$render_audio" undefined "$volume" >/dev/null || fail "spec choice $volume is not renderable"; done
 grep -q 'choices: \[1, 2, 5, 10\]' /project/shell/config/ComponentSpec.qml && grep -q 'choices: \[100, 125, 150\]' /project/shell/config/ComponentSpec.qml || fail 'ComponentSpec audio choices changed without the renderer'
 
+# Recording and screenshot settings: the fourth and fifth components.
+render_record=$(command_path renderRecordSettings)
+render_shot=$(command_path renderShotSettings)
+for args in '0 true false 60 high auto opus auto mp4 true false' '3 false true 24 very_high h264 aac 2500 mkv false true' '5 undefined undefined 144 ultra vp9 undefined 80000 mkv undefined undefined' 'undefined true undefined undefined undefined undefined undefined undefined undefined undefined undefined' '10 undefined true 30 medium hevc aac 12000 mp4 true false'; do
+  read -r a b c d e f g h i j k <<<"$args"
+  "$render_record" "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h" "$i" "$j" "$k" | grep -q '^QtObject {' || fail 'record renderer shape'
+done
+"$render_record" 5 true true 60 very_high auto aac 5000 mkv false true | grep -q 'property var quality: "very_high"' || fail 'record renderer must quote strings'
+rejects "$render_record" 4 true false 60 high auto opus auto mp4 true false
+rejects "$render_record" 3 maybe false 60 high auto opus auto mp4 true false
+rejects "$render_record" 3 true false 61 high auto opus auto mp4 true false
+rejects "$render_record" 3 true false 60 best auto opus auto mp4 true false
+rejects "$render_record" 3 true false 60 high vp8 opus auto mp4 true false
+rejects "$render_record" 3 true false 60 high auto opus auto avi true false
+rejects "$render_record" 3 true false 60 high auto flac auto mp4 true false
+rejects "$render_record" 3 true false 60 high auto mp3 auto mp4 true false
+rejects "$render_record" 3 true false 60 high auto opus 1234 mp4 true false
+rejects "$render_record" 3 true false 60 high auto opus auto mp4 maybe false
+rejects "$render_record" 3 true false 60 high auto opus auto mp4 true false extra
+rejects "$render_record" 3 true
+for args in 'true true' 'true false' 'false true' 'undefined undefined'; do
+  read -r a b <<<"$args"
+  "$render_shot" "$a" "$b" | grep -q '^QtObject {' || fail 'shot renderer shape'
+done
+rejects "$render_shot" false false
+rejects "$render_shot" yes true
+[[ $("$settings_path" record default '') == "$XDG_CONFIG_HOME/ui-shell/components/record/Default.qml" ]] || fail 'record default path'
+[[ $("$settings_path" shot default '') == "$XDG_CONFIG_HOME/ui-shell/components/shot/Default.qml" ]] || fail 'shot default path'
+record_rev=$("$save_settings" record default '' absent 5 true true 30 ultra hevc aac 8000 mkv false true)
+[[ $record_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'record save did not return a digest'
+record_path=$("$settings_path" record default '')
+grep -q 'property var countdown: 5' "$record_path" && grep -q 'property var microphone: true' "$record_path" && grep -q 'property var webcam: true' "$record_path" && grep -q 'property var fps: 30' "$record_path" && grep -q 'property var codec: "hevc"' "$record_path" && grep -q 'property var audioCodec: "aac"' "$record_path" && grep -q 'property var bitrate: "8000"' "$record_path" && grep -q 'property var cursor: false' "$record_path" || fail 'record values not persisted'
+rejects "$save_settings" record default '' "$record_rev" 4 true false 60 high auto opus auto mp4 true false
+rejects "$save_settings" record default '' absent 3 true false 60 high auto opus auto mp4 true false
+shot_rev=$("$save_settings" shot default '' absent true false)
+[[ $shot_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'shot save did not return a digest'
+
+# The record spec and its renderer must agree on every choice the popup offers.
+for q in medium high very_high ultra; do "$render_record" undefined undefined undefined undefined "$q" undefined undefined undefined undefined undefined undefined >/dev/null || fail "spec quality $q is not renderable"; done
+for c in auto h264 hevc av1 vp9; do "$render_record" undefined undefined undefined undefined undefined "$c" undefined undefined undefined undefined undefined >/dev/null || fail "spec codec $c is not renderable"; done
+for b in auto 2500 5000 8000 12000 20000 40000 80000; do "$render_record" undefined undefined undefined undefined undefined undefined undefined "$b" undefined undefined undefined >/dev/null || fail "spec bitrate $b is not renderable"; done
+for a in opus aac; do "$render_record" undefined undefined undefined undefined undefined undefined "$a" undefined undefined undefined undefined >/dev/null || fail "spec audio codec $a is not renderable"; done
+grep -q 'choices: \["opus", "aac"\]' /project/shell/config/ComponentSpec.qml || fail 'ComponentSpec audio codec choices changed without the renderer'
+for f in 24 30 60 90 120 144; do "$render_record" undefined undefined undefined "$f" undefined undefined undefined undefined undefined undefined undefined >/dev/null || fail "spec fps $f is not renderable"; done
+grep -q 'choices: \[24, 30, 60, 90, 120, 144\]' /project/shell/config/ComponentSpec.qml && grep -q 'choices: \["medium", "high", "very_high", "ultra"\]' /project/shell/config/ComponentSpec.qml && grep -q 'choices: \["auto", "h264", "hevc", "av1", "vp9"\]' /project/shell/config/ComponentSpec.qml || fail 'ComponentSpec record choices changed without the renderer'
+
 # Control tuning: the renderer owns the model; the committed seed must equal its defaults.
 render_tuning=$(command_path renderControlTuning)
 "$render_tuning" | cmp -s - /project/shell/theme/GeneratedControlTuning.qml \

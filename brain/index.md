@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-06T01:41:15.392Z._
+_Auto-generated. Last updated 2026-11-06T11:08:33.029Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
@@ -13,6 +13,7 @@ _Auto-generated. Last updated 2026-11-06T01:41:15.392Z._
 - [phantomat-patch-provenance](pages/phantomat-patch-provenance.md) — category: decision | tags: [phantomat, git, fork, workflow] | # Decision
 - [phantomat-toggle-and-focus](pages/phantomat-toggle-and-focus.md) — category: decision | ## Compiled truth
 - [reference-survey](pages/reference-survey.md) — category: reference | tags: [quickshell, hyprland, composition, ipc] | # Reference survey findings
+- [screen-capture-module](pages/screen-capture-module.md) — category: decision | tags: [screen-recording, gsr, features] | <current best understanding — replace this with the real content>
 - [shared-style-and-toolkit-integration](pages/shared-style-and-toolkit-integration.md) — category: decision | tags: [style, theme, qt, gtk, qml, composition] | # Decision
 - [shell-architecture-and-omarchy-boundary](pages/shell-architecture-and-omarchy-boundary.md) — category: decision | tags: [shell, omarchy, quickshell, qml, composition] | # Decision
 - [shell-scope-and-layout](pages/shell-scope-and-layout.md) — category: decision | tags: [scope, quickshell, hyprland, qml, lua, bash] | # Decision

@@ -39,6 +39,27 @@ QtObject {
     readonly property color popupSurface: surfaceRaised
     readonly property color popupBorder: Interaction.readable(outline, surfaceRaised, Interaction.minimumStateContrast)
     readonly property int popupRadius: menuRadius
+    readonly property int spacingTight: Density.spacingTight
+    readonly property int spacingLoose: Density.spacingLoose
+    readonly property int cardPadding: Density.cardPadding
+    readonly property int rowHeight: Density.rowHeight
+    readonly property int sliderHeight: Density.sliderHeight
+    readonly property int nodeSocketSize: Density.nodeSocketSize
+    readonly property int chooserWidth: Density.chooserWidth
+    readonly property int readoutWidth: Density.readoutWidth
+    readonly property int listVisibleRows: Density.listVisibleRows
+    readonly property real microPointSize: Typography.microPointSize
+    readonly property real displayPointSize: Typography.displayPointSize
+    readonly property real labelLetterSpacing: Typography.labelLetterSpacing
+    readonly property real chipLetterSpacing: Typography.chipLetterSpacing
+    readonly property int glideDuration: Motion.glideDuration
+    // Quiet versions of the control outline and the accent, for cards, rules, chips and resting links.
+    readonly property color softOutline: Qt.alpha(controls.outline, Shape.softBorderOpacity)
+    readonly property color rule: Qt.alpha(controls.outline, Shape.ruleOpacity)
+    readonly property color softAccent: Qt.alpha(controls.primary, Shape.accentBorderOpacity)
+    readonly property color restingLink: Qt.alpha(controls.outline, Shape.linkRestOpacity)
+    // The dimming over everything behind a panel.
+    function scrimColor(opacity) { return Qt.rgba(scrim.r, scrim.g, scrim.b, opacity) }
     readonly property int spacing: Density.spacing
     readonly property int controlHeight: Density.controlHeight
     readonly property int controlPaddingX: Density.controlPaddingX

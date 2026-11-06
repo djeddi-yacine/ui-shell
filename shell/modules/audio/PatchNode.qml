@@ -21,15 +21,15 @@ Controls.ShellButton {
     emphasis: Theme.Interaction.selectorEmphasis
     keyboardCandidate: cursor
     Accessible.name: qsTr("%1, %2 links").arg(node.label).arg(linkCount)
-    implicitHeight: 54
-    topPadding: 6
-    bottomPadding: 6
+    implicitHeight: style.rowHeight
+    topPadding: style.controlPaddingY
+    bottomPadding: style.controlPaddingY
 
     contentItem: RowLayout {
-        spacing: 10
+        spacing: root.style.spacingTight
         ColumnLayout {
             Layout.fillWidth: true
-            Layout.maximumWidth: 100000
+            Layout.maximumWidth: Infinity
             spacing: 0
             Text {
                 Layout.fillWidth: true
@@ -60,7 +60,7 @@ Controls.ShellButton {
 
     // The socket sits on the card's edge and lights up when the node has links.
     Rectangle {
-        width: 12; height: 12
+        width: root.style.nodeSocketSize; height: root.style.nodeSocketSize
         x: root.isSource ? root.width - width / 2 : -width / 2
         y: (root.height - height) / 2
         color: root.linkCount > 0 ? root.style.controls.primary : root.style.surface

@@ -63,13 +63,14 @@ Item {
         if (fileForScope(scope).error) { saveError = fileForScope(scope).error; reportFailure(scope, true, saveError) }
         else committed(scope)
     }
-    function save(scope, revision, first, second) {
+    // `values` are the options' values in the order of Config.ComponentSpec (undefined = default).
+    function save(scope, revision, values) {
         if (busy || (scope !== "default" && scope !== "output")) return
         saveError = ""
         savedScope = scope
         saving = true
         writer.command = [Config.GeneratedRuntime.commands.saveComponentSettings, component,
-            scope, scope === "default" ? "" : screenName, revision, String(first), String(second)]
+            scope, scope === "default" ? "" : screenName, revision].concat(values.map(String))
         writer.running = true
     }
     QmlSettingsFile {

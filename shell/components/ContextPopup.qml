@@ -60,8 +60,7 @@ Popup {
         border.color: root.style.popupBorder
     }
     Overlay.modal: Rectangle {
-        color: Qt.rgba(root.style.scrim.r, root.style.scrim.g, root.style.scrim.b,
-            Config.ContextPanels.scrimOpacity)
+        color: root.style.scrimColor(Config.ContextPanels.scrimOpacity)
     }
     enter: Transition {
         ParallelAnimation {

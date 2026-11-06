@@ -3,6 +3,7 @@ import QtQuick
 import QtQuick.Shapes
 import "../../components" as Controls
 import "../../config" as Config
+import "../../theme" as Theme
 import "PatchLogic.js" as Logic
 
 // The patchbay: sources on the left, destinations on the right, joined by curved links.
@@ -31,11 +32,14 @@ FocusScope {
     readonly property var sources: parts.sources
     readonly property var destinations: parts.destinations
     readonly property var edgeList: Logic.edges(graph.links ?? [], sources, destinations)
-    readonly property real columnWidth: Math.max(180, Math.min(290, width * 0.36))
+    // The layout's numbers, all from the theme and Config.Audio.
+    readonly property var metrics: ({ row: style.rowHeight, gap: Config.Audio.patchGap,
+        pullMinimum: Config.Audio.linkPullMinimum, pullMaximum: Config.Audio.linkPullMaximum, pullFraction: Config.Audio.linkPullFraction })
+    readonly property real columnWidth: Math.max(Config.Audio.patchColumnMinimum, Math.min(Config.Audio.patchColumnMaximum, width * Config.Audio.patchColumnFraction))
     readonly property real leftSocket: columnWidth
     readonly property real rightSocket: width - columnWidth
     readonly property int rows: Math.max(sources.length, destinations.length, 1)
-    implicitHeight: rows * Logic.step() - Logic.GAP
+    implicitHeight: rows * Logic.step(metrics) - metrics.gap
 
     // What a click on a node does, from the selection: select it, deselect it, or link
     // it with the selected node on the other side.
@@ -79,18 +83,18 @@ FocusScope {
             required property var modelData
             anchors.fill: parent
             preferredRendererType: Shape.CurveRenderer
-            readonly property var points: Logic.controlPoints(root.leftSocket, Logic.rowCenter(modelData.from), root.rightSocket, Logic.rowCenter(modelData.to))
+            readonly property var points: Logic.controlPoints(root.metrics, root.leftSocket, Logic.rowCenter(root.metrics, modelData.from), root.rightSocket, Logic.rowCenter(root.metrics, modelData.to))
             readonly property bool active: root.touchesSelection(modelData)
             ShapePath {
                 fillColor: "transparent"
-                strokeWidth: link.active ? 3 : 2
-                strokeColor: link.active ? root.style.controls.primary : Qt.alpha(root.style.controls.outline, 0.85)
+                strokeWidth: Theme.Shape.borderWidth * (link.active ? 3 : 2)
+                strokeColor: link.active ? root.style.controls.primary : root.style.restingLink
                 capStyle: ShapePath.RoundCap
                 startX: root.leftSocket
-                startY: Logic.rowCenter(link.modelData.from)
+                startY: Logic.rowCenter(root.metrics, link.modelData.from)
                 PathCubic {
                     x: root.rightSocket
-                    y: Logic.rowCenter(link.modelData.to)
+                    y: Logic.rowCenter(root.metrics, link.modelData.to)
                     control1X: link.points.c1x; control1Y: link.points.c1y
                     control2X: link.points.c2x; control2Y: link.points.c2y
                 }
@@ -104,9 +108,9 @@ FocusScope {
             required property var modelData
             required property int index
             x: 0
-            y: Logic.rowTop(index)
+            y: Logic.rowTop(root.metrics, index)
             width: root.columnWidth
-            height: Logic.ROW
+            height: root.metrics.row
             node: modelData
             isSource: true
             style: root.style
@@ -123,9 +127,9 @@ FocusScope {
             required property var modelData
             required property int index
             x: root.width - root.columnWidth
-            y: Logic.rowTop(index)
+            y: Logic.rowTop(root.metrics, index)
             width: root.columnWidth
-            height: Logic.ROW
+            height: root.metrics.row
             node: modelData
             isSource: false
             style: root.style

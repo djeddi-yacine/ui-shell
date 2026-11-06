@@ -43,17 +43,19 @@ Rectangle {
     // A new row first shows 0 and then takes its real value, so the slider glides in
     // (a tab switch builds fresh rows) instead of appearing already set.
     property bool revealed: false
-    Timer { running: true; interval: 40; onTriggered: root.revealed = true }
+    Timer { running: true; interval: Theme.Motion.revealDelay; onTriggered: root.revealed = true }
+    // The widest label of the mute button, so it does not change size when it toggles.
+    TextMetrics { id: muteMetrics; text: qsTr("Muted"); font.family: root.style.uiFamily; font.pointSize: root.style.bodyPointSize }
     signal volumeMoved(int percent)
     signal muteToggled()
     signal defaultRequested()
     signal choiceMade(string value)
 
     implicitHeight: layout.implicitHeight + padding * 2
-    readonly property int padding: 14
+    readonly property int padding: style.cardPadding
     color: focusWithin ? root.style.controls.focusSurface : root.style.background
     border.width: Theme.Shape.borderWidth
-    border.color: focusWithin ? root.style.controls.focus : Qt.alpha(root.style.controls.outline, 0.7)
+    border.color: focusWithin ? root.style.controls.focus : root.style.softOutline
     Behavior on border.color { enabled: Theme.Motion.active; ColorAnimation { duration: Theme.Motion.stateDuration } }
 
     Keys.onPressed: event => {
@@ -66,20 +68,20 @@ Rectangle {
         id: layout
         anchors.fill: parent
         anchors.margins: root.padding
-        spacing: 10
+        spacing: root.style.spacingTight
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: root.style.spacing
             ColumnLayout {
                 Layout.fillWidth: true
                 // A child's maximumWidth would otherwise cap how far this column can grow.
-                Layout.maximumWidth: 100000
-                spacing: 1
+                Layout.maximumWidth: Infinity
+                spacing: 0
                 RowLayout {
-                    spacing: 8
+                    spacing: root.style.spacingTight
                     Text {
-                        Layout.maximumWidth: 360
+                        Layout.maximumWidth: Config.Audio.titleMaximumWidth
                         text: root.title
                         color: root.muted ? root.style.controls.muted : root.style.text
                         elide: Text.ElideRight
@@ -93,15 +95,15 @@ Rectangle {
                         implicitHeight: tagText.implicitHeight + 4
                         color: root.style.controls.container
                         border.width: Theme.Shape.borderWidth
-                        border.color: Qt.alpha(root.style.controls.primary, 0.6)
+                        border.color: root.style.softAccent
                         Text {
                             id: tagText
                             anchors.centerIn: parent
                             text: root.tag.toUpperCase()
                             color: root.style.controls.containerText
                             font.family: root.style.monoFamily
-                            font.pointSize: root.style.captionPointSize * 0.85
-                            font.letterSpacing: 0.6
+                            font.pointSize: root.style.microPointSize
+                            font.letterSpacing: root.style.chipLetterSpacing
                         }
                     }
                 }
@@ -118,7 +120,7 @@ Rectangle {
             Controls.ShellComboBox {
                 id: chooser
                 visible: root.choices.length > 0
-                Layout.preferredWidth: Config.Audio.chooserWidth
+                Layout.preferredWidth: root.style.chooserWidth
                 style: root.style
                 inputState: root.inputState
                 emphasis: Theme.Interaction.selectorEmphasis
@@ -131,7 +133,7 @@ Rectangle {
             }
             Text {
                 visible: root.volume !== null
-                Layout.preferredWidth: 48
+                Layout.preferredWidth: root.style.readoutWidth
                 horizontalAlignment: Text.AlignRight
                 // While dragging, the number follows the handle, not the lagging graph.
                 text: Math.round(root.shown * 100) + "%"
@@ -151,7 +153,7 @@ Rectangle {
             }
             Controls.ShellButton {
                 visible: root.volume !== null
-                Layout.preferredWidth: 78
+                Layout.preferredWidth: Math.ceil(muteMetrics.advanceWidth) + root.style.controlPaddingX * 2 + Theme.Shape.borderWidth * 2
                 text: root.muted ? qsTr("Muted") : qsTr("Mute")
                 style: root.style
                 inputState: root.inputState
@@ -165,7 +167,7 @@ Rectangle {
             id: slider
             visible: root.volume !== null
             Layout.fillWidth: true
-            Layout.preferredHeight: root.style.controlHeight * 0.7
+            Layout.preferredHeight: root.style.sliderHeight
             style: root.style
             inputState: root.inputState
             wheelAllowed: root.wheelAllowed
