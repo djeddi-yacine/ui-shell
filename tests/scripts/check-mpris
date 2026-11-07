@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# The media control's layer namespace is read from Config.Mpris by the window, and written in
+# hypr/rules.lua. They must agree, or the compositor rule silently stops applying. From phase 2 the
+# media keys are checked too: the shortcut names in the config equal the Hyprland targets, and
+# the old playerctl binds are gone. The card and selection suites (tst_MprisCard, tst_MediaSelection)
+# run under test-qml.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+config=$root/shell/config/Mpris.qml
+surface=$root/shell/modules/mpris/MprisSurface.qml
+rules=$root/hypr/rules.lua
+profile=$root/hypr/profile.lua
+namespace=$(sed -n 's/.*readonly property string namespace: "\(ui-shell-[a-z-]*\)".*/\1/p' "$config")
+[[ -n $namespace ]] || { echo "check-mpris: no namespace in $config" >&2; exit 1; }
+grep -q 'WlrLayershell.namespace: Config.Mpris.namespace' "$surface" || { echo "check-mpris: $surface must read the namespace from Config.Mpris.namespace" >&2; exit 1; }
+short=${namespace#ui-shell-}
+grep -q "|$short|" "$rules" || grep -q "|$short)" "$rules" || { echo "check-mpris: $short is missing from the shell-owns-motion pattern in hypr/rules.lua" >&2; exit 1; }
+grep -q 'media_panel = { key = "[A-Z0-9]*", target = "ui-shell:media-panel" }' "$profile" || { echo "check-mpris: media_panel entry missing in hypr/profile.lua" >&2; exit 1; }
+panel_name=$(sed -n 's/.*readonly property string shortcutName: "\([a-z-]*\)".*/\1/p' "$config")
+[[ $panel_name == media-panel ]] || { echo "check-mpris: Config.Mpris.shortcutName '$panel_name' differs from the Hyprland target media-panel" >&2; exit 1; }
+if grep -q 'media_keys' "$profile"; then
+  while IFS= read -r name; do
+    grep -q "target = \"ui-shell:$name\"" "$profile" || { echo "check-mpris: no media_keys target for shortcut $name" >&2; exit 1; }
+  done < <(sed -n 's/^ *[a-zA-Z]*: { name: "\(media-[a-z-]*\)".*/\1/p' "$config")
+  # And the other way: every media_keys target is a shortcut the shell defines.
+  while IFS= read -r name; do
+    grep -q "name: \"$name\"" "$config" || { echo "check-mpris: media_keys target $name has no shortcut in Config.Mpris.keyShortcuts" >&2; exit 1; }
+  done < <(sed -n 's/.*target = "ui-shell:\(media-[a-z-]*\)".*/\1/p' "$profile" | grep -v '^media-panel$')
+  # Each media key is bound once, through the profile table, and kept working on the lock screen.
+  duplicate=$(sed -n 's/.*key = "\(XF86[A-Za-z]*\)".*/\1/p' "$profile" | sort | uniq -d)
+  [[ -z $duplicate ]] || { echo "check-mpris: media key bound twice in hypr/profile.lua: $duplicate" >&2; exit 1; }
+  grep -q 'ipairs(profile.media_keys)' "$root/hypr/binds/hardware.lua" || { echo "check-mpris: hardware.lua must bind the keys from profile.media_keys" >&2; exit 1; }
+  grep -q 'hl.dsp.global(media_key.target), { locked = true' "$root/hypr/binds/hardware.lua" || { echo "check-mpris: the media binds must keep locked = true" >&2; exit 1; }
+  ! grep -q 'playerctl' "$root/hypr/binds/hardware.lua" || { echo "check-mpris: hardware.lua still has a playerctl bind" >&2; exit 1; }
+fi
+printf '%s\n' "Media control namespace check passed ($namespace)."

@@ -12,6 +12,7 @@ case $component in
   audio) renderer=$(jq -er '.commands.renderAudioSettings' "$runtime") ;;
   record) renderer=$(jq -er '.commands.renderRecordSettings' "$runtime") ;;
   shot) renderer=$(jq -er '.commands.renderShotSettings' "$runtime") ;;
+  mpris) renderer=$(jq -er '.commands.renderMprisSettings' "$runtime") ;;
   controls) renderer=$(jq -er '.commands.renderControlTuning' "$runtime") ;;
   *) printf '%s\n' 'Unknown component.' >&2; exit 2 ;;
 esac

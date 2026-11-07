@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# tools (no network, no real picture tools needed). Checks the contract: exactly one JSON line,
+# the right error code for each refusal and failure, the scheme allow-list, the size cap, the
+# timeout on every step, reuse of an existing file, atomic writes, prune, and no leftovers.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+script=$root/scripts/media-art
+work=$(mktemp -d "${TMPDIR:-/tmp}/media-art-test.XXXXXX")
+trap 'rm -rf -- "${work:?}"' EXIT
+fail() { printf 'check-media-art: %s\n' "$*" >&2; exit 1; }
+
+fake=$work/fake core=$work/core cache=$work/cache
+mkdir -p "$fake" "$core" "$work/home"
+for tool in bash jq sha256sum cut file stat mktemp rm mv head tail timeout realpath find sort mkdir cat cp touch date sleep dirname basename env printf tr wc; do
+  path=$(command -v "$tool" 2>/dev/null) || continue
+  [[ $path == /* ]] && ln -sf "$path" "$core/$tool"
+done
+# A one-pixel PNG.
+png=$work/pic.png
+base64 -d >"$png" <<'PNG'
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
+PNG
+printf 'plain text\n' >"$work/text.txt"
+export FAKE_PNG=$png FAKE_LOG=$work/calls
+: >"$FAKE_LOG"
+
+cat >"$fake/curl" <<'SHIM'
+#!/usr/bin/env bash
+echo curl >>"$FAKE_LOG"
+out=''
+while [[ $# -gt 0 ]]; do case $1 in -o) out=$2; shift 2 ;; *) shift ;; esac; done
+case ${FAKE_MODE-ok} in
+  ok) cp "$FAKE_PNG" "$out" ;;
+  timeout) exit 28 ;;
+  large) exit 63 ;;
+  html) echo '<html></html>' >"$out" ;;
+  empty) : >"$out" ;;
+  fail) echo 'curl: (7) could not connect' >&2; exit 7 ;;
+  slow) sleep 5 ;;
+esac
+SHIM
+cat >"$fake/vips" <<'SHIM'
+#!/usr/bin/env bash
+echo vips >>"$FAKE_LOG"
+case ${FAKE_MODE-ok} in
+  ok) cp "$FAKE_PNG" "$3" ;;
+  fail) echo 'vips: unsupported image' >&2; exit 1 ;;
+  nothing) ;;
+  slow) sleep 5 ;;
+esac
+SHIM
+cat >"$fake/ffmpeg" <<'SHIM'
+#!/usr/bin/env bash
+echo ffmpeg >>"$FAKE_LOG"
+case ${FAKE_MODE-ok} in
+  ok) cp "$FAKE_PNG" "${*: -1}" ;;
+  fail) echo 'ffmpeg: invalid data' >&2; exit 1 ;;
+  nothing) ;;
+  slow) sleep 5 ;;
+esac
+SHIM
+cat >"$fake/blurhash_encoder" <<'SHIM'
+#!/usr/bin/env bash
+echo encoder >>"$FAKE_LOG"
+case ${FAKE_MODE-ok} in
+  ok) echo 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' ;;
+  badhash) echo 'bad hash with spaces' ;;
+  nohash) ;;
+  fail) echo 'Failed to load image file' >&2; exit 1 ;;
+  slow) sleep 5 ;;
+esac
+SHIM
+cat >"$fake/blurhash_decoder" <<'SHIM'
+#!/usr/bin/env bash
+echo decoder >>"$FAKE_LOG"
+case ${FAKE_MODE-ok} in
+  nopicture) : >"$4" ;;
+  *) cp "$FAKE_PNG" "$4" ;;
+esac
+SHIM
+chmod +x "$fake"/*
+
+# Runs the script with only the stand-ins and the core tools on PATH; prints its one line.
+art() { HOME=$work/home PATH="$fake:$core" UI_SHELL_MPRIS_DIR=$cache FAKE_MODE=${FAKE_MODE-ok} bash "$script" "$@"; }
+art_without_stand_ins() { HOME=$work/home PATH="$core" UI_SHELL_MPRIS_DIR=$cache bash "$script" "$@"; }
+field() { jq -r ".$1" <<<"$out"; }
+expect_error() {
+  out=$("$@") || fail "exited non-zero: $*"
+  [[ $(wc -l <<<"$out") == 1 ]] || fail "not exactly one line: $out"
+  [[ $(field ok) == false ]] || fail "expected a failure ($EXPECT) from: $* (FAKE_MODE=${FAKE_MODE-ok}): $out"
+  [[ $(field error) == "$EXPECT" ]] || fail "expected $EXPECT, got $(field error): $out"
+}
+expect_ok() {
+  out=$("$@") || fail "exited non-zero: $*"
+  [[ $(wc -l <<<"$out") == 1 ]] || fail "not exactly one line: $out"
+  [[ $(field ok) == true ]] || fail "expected success: $out"
+  [[ -s $(field path) ]] || fail "the reported file does not exist: $out"
+}
+rejects() { if "$@" >/dev/null 2>&1; then fail "should have been refused: $*"; fi; }
+calls() { grep -c "^$1\$" "$FAKE_LOG" || true; }
+
+# --- usage errors exit 2 and print nothing on stdout
+rejects bash "$script"
+rejects bash "$script" nope
+rejects art fetch --max-bytes abc http://x.test/a
+rejects art fetch --max-bytes 100 --bogus 1 http://x.test/a
+rejects art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 40,3 --size 32 "$png"
+rejects art prune --dir "$cache" --max-bytes 10
+[[ -z $(art nope 2>/dev/null || true) ]] || fail 'a usage error must print nothing on stdout'
+
+# --- fetch: the scheme allow-list
+EXPECT=scheme
+for address in 'data:image/png;base64,AAAA' 'blob:https://x.test/1' 'javascript:alert(1)' 'ftp://x.test/a.png' 'gopher://x.test/' 'about:blank' 'file:relative.png'; do
+  expect_error art fetch --max-bytes 1000000 "$address"
+done
+EXPECT=bad-input
+expect_error art fetch --max-bytes 1000000 ''
+expect_error art fetch --max-bytes 1000000 "$work/missing.png"
+expect_error art fetch --max-bytes 1000000 "$work/text.txt"
+expect_error art fetch --max-bytes 1000000 "$work"
+expect_error art fetch --max-bytes 1000000 'file:///x%zz'
+expect_error art fetch --max-bytes 1000000 'file:///x%2'
+
+# --- fetch: local files are returned in place, never copied
+expect_ok art fetch --max-bytes 1000000 "$png"
+[[ $(field path) == "$(realpath "$png")" ]] || fail 'a local file must be returned in place'
+expect_ok art fetch --max-bytes 1000000 "file://$png"
+cp "$png" "$work/with space.png"
+expect_ok art fetch --max-bytes 1000000 "file://${work}/with%20space.png"
+[[ $(field path) == "$work/with space.png" ]] || fail 'a file address must be percent-decoded'
+EXPECT=too-large
+expect_error art fetch --max-bytes 10 "$png"
+[[ $(calls curl) == 0 ]] || fail 'a local file must not call curl'
+
+# --- fetch: web addresses
+FAKE_MODE=ok expect_ok art fetch --max-bytes 1000000 https://x.test/a.jpg
+first=$(field path)
+[[ $first == "$cache"/*.src ]] || fail 'a download is cached as <hash>.src'
+before=$(calls curl)
+FAKE_MODE=ok expect_ok art fetch --max-bytes 1000000 https://x.test/a.jpg
+[[ $(field path) == "$first" && $(calls curl) == "$before" ]] || fail 'an existing file must be reused without downloading again'
+EXPECT=timeout
+FAKE_MODE=timeout expect_error art fetch --max-bytes 1000000 https://x.test/slow1
+FAKE_MODE=slow expect_error art fetch --max-bytes 1000000 --timeout 1 https://x.test/slow2
+EXPECT=too-large
+FAKE_MODE=large expect_error art fetch --max-bytes 1000000 https://x.test/big
+EXPECT=bad-input
+FAKE_MODE=html expect_error art fetch --max-bytes 1000000 https://x.test/page
+EXPECT=tool-failed
+FAKE_MODE=fail expect_error art fetch --max-bytes 1000000 https://x.test/down
+[[ $(field detail) == *connect* ]] || fail 'the failure detail must carry the tool message'
+FAKE_MODE=empty expect_error art fetch --max-bytes 1000000 https://x.test/empty
+EXPECT=missing-tool
+expect_error art_without_stand_ins fetch --max-bytes 1000000 https://x.test/nocurl
+
+# --- shrink (vips or ffmpeg)
+FAKE_MODE=ok expect_ok art shrink --tool vips --size 128 "$png"
+shrunk=$(field path)
+before=$(calls vips)
+expect_ok art shrink --tool vips --size 128 "$png"
+[[ $(field path) == "$shrunk" && $(calls vips) == "$before" ]] || fail 'an existing shrunk file must be reused'
+expect_ok art shrink --tool ffmpeg --size 128 "$png"
+[[ $(calls ffmpeg) == 1 ]] || fail 'ffmpeg was not used'
+rejects art shrink --tool magick --size 128 "$png"
+rejects art shrink --tool vips "$png"
+EXPECT=tool-failed
+FAKE_MODE=fail expect_error art shrink --tool vips --size 64 "$png"
+FAKE_MODE=fail expect_error art shrink --tool ffmpeg --size 64 "$png"
+FAKE_MODE=nothing expect_error art shrink --tool vips --size 32 "$png"
+FAKE_MODE=nothing expect_error art shrink --tool ffmpeg --size 32 "$png"
+EXPECT=timeout
+FAKE_MODE=slow expect_error art shrink --tool vips --size 16 --timeout 1 "$png"
+FAKE_MODE=slow expect_error art shrink --tool ffmpeg --size 16 --timeout 1 "$png"
+EXPECT=bad-input
+expect_error art shrink --tool vips --size 128 "$work/missing.png"
+EXPECT=missing-tool
+expect_error art_without_stand_ins shrink --tool vips --size 129 "$png"
+expect_error art_without_stand_ins shrink --tool ffmpeg --size 129 "$png"
+
+# --- capabilities: what exists here, answered once at start-up
+check_caps() { out=$("$@") || fail "capabilities exited non-zero"; [[ $(wc -l <<<"$out") == 1 && $(field ok) == true ]] || fail "capabilities: $out"; }
+check_caps art capabilities --encoder blurhash_encoder --decoder blurhash_decoder --shrink-tools vips,ffmpeg
+[[ $(field shrink) == vips && $(field blurhash) == true ]] || fail "capabilities with everything present: $out"
+rm -f "$fake/vips"
+check_caps art capabilities --encoder blurhash_encoder --decoder blurhash_decoder --shrink-tools vips,ffmpeg
+[[ $(field shrink) == ffmpeg && $(field blurhash) == true ]] || fail "capabilities must fall back to ffmpeg: $out"
+check_caps art capabilities --encoder nope_encoder --decoder blurhash_decoder --shrink-tools vips,ffmpeg
+[[ $(field blurhash) == false && $(field shrink) == ffmpeg ]] || fail "capabilities with no encoder: $out"
+check_caps art capabilities --encoder blurhash_encoder --decoder nope_decoder --shrink-tools ffmpeg
+[[ $(field blurhash) == false ]] || fail "capabilities with no decoder: $out"
+rm -f "$fake/ffmpeg"
+check_caps art capabilities --encoder blurhash_encoder --decoder blurhash_decoder --shrink-tools vips,ffmpeg
+[[ -z $(field shrink) && $(field blurhash) == false ]] || fail "blurhash needs a shrink tool: $out"
+check_caps art_without_stand_ins capabilities --encoder blurhash_encoder --decoder blurhash_decoder --shrink-tools vips
+[[ $(field fetch) == false ]] || fail "capabilities must say when curl is missing: $out"
+check_caps art capabilities --encoder blurhash_encoder --decoder blurhash_decoder --shrink-tools vips
+[[ $(field fetch) == true ]] || fail "capabilities must find curl: $out"
+rejects art capabilities --encoder blurhash_encoder --decoder blurhash_decoder --shrink-tools magick
+rejects art capabilities --shrink-tools vips extra-input
+# The tools put back for the rest of the checks.
+cat >"$fake/vips" <<'SHIM'
+#!/usr/bin/env bash
+cp "$FAKE_PNG" "$3"
+SHIM
+chmod +x "$fake/vips"
+
+# --- blurhash
+FAKE_MODE=ok expect_ok art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 32 "$png"
+EXPECT=tool-failed
+FAKE_MODE=badhash expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 33 "$png"
+FAKE_MODE=nohash expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 34 "$png"
+FAKE_MODE=fail expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 35 "$png"
+FAKE_MODE=nopicture expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 36 "$png"
+EXPECT=timeout
+FAKE_MODE=slow expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 37 --timeout 1 "$png"
+EXPECT=missing-tool
+expect_error art blurhash --encoder nope_encoder --decoder blurhash_decoder --components 4,3 --size 38 "$png"
+expect_error art blurhash --encoder blurhash_encoder --decoder nope_decoder --components 4,3 --size 39 "$png"
+# A tool is also found by its full path, and in ~/.local/bin.
+mkdir -p "$work/home/.local/bin"; cp "$fake/blurhash_decoder" "$work/home/.local/bin/only_here"
+FAKE_MODE=ok expect_ok art blurhash --encoder "$fake/blurhash_encoder" --decoder only_here --components 4,3 --size 40 "$png"
+
+# --- prune: oldest first, never the file in use, never directories or symlinks
+rm -f -- "$cache"/*
+for i in 1 2 3 4 5; do cp "$png" "$cache/f$i.png"; touch -d "$((60 - i)) minutes ago" "$cache/f$i.png"; done
+mkdir "$cache/subdir"; ln -s "$png" "$cache/link.png"
+expect_ok_prune() { out=$(art prune --dir "$cache" "$@"); [[ $(field ok) == true ]] || fail "prune failed: $out"; }
+expect_ok_prune --max-bytes 1000000 --max-entries 3 --keep "$cache/f5.png"
+[[ $(field removed) == 2 ]] || fail "prune by count removed $(field removed), expected 2"
+[[ ! -e $cache/f1.png && ! -e $cache/f2.png ]] || fail 'prune must remove the oldest files first'
+[[ -e $cache/f3.png && -e $cache/f4.png && -e $cache/f5.png ]] || fail 'prune must keep the newest files'
+[[ -d $cache/subdir && -L $cache/link.png ]] || fail 'prune must not touch directories or symlinks'
+expect_ok_prune --max-bytes 1 --max-entries 100 --keep "$cache/f3.png"
+[[ -e $cache/f3.png ]] || fail 'prune must keep the file in use'
+remaining=$(find "$cache" -maxdepth 1 -type f | wc -l)
+[[ $remaining == 1 ]] || fail "prune by size left $remaining files, expected only the kept one"
+
+# --- no leftovers from any step, and the directory is private
+leftovers=$(find "$cache" -maxdepth 1 -name '.tmp.*' | wc -l)
+[[ $leftovers == 0 ]] || fail "$leftovers temporary files were left behind"
+[[ $(stat -c %a "$cache") == 700 ]] || fail 'the cache directory must be private (0700)'
+printf '%s\n' 'media-art checks passed.'

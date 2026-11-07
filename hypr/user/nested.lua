@@ -8,7 +8,7 @@ return {
     action_mod = "CTRL + SHIFT",
     workspace_silent_mod = "CTRL",
     workspace_previous_bind = "CTRL + ALT + P",
-    workspace_empty_bind = "CTRL + ALT + N",
+    workspace_empty_bind = "CTRL + ALT + E", -- N opens the media panel (Ctrl+Alt is the nested main mod).
     workspace_move_empty_bind = "CTRL + SHIFT + N",
     window_cycle_mod = "CTRL + ALT",
     window_cycle_previous_bind = "CTRL + ALT + PAGE_UP",

@@ -16,3 +16,4 @@ singleton GeneratedWallpapers 1.0 GeneratedWallpapers.qml
 singleton GeneratedRuntime 1.0 GeneratedRuntime.qml
 singleton ThemeEditor 1.0 ThemeEditor.qml
 singleton Auth 1.0 Auth.qml
+singleton Mpris 1.0 Mpris.qml

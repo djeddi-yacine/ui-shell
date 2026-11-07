@@ -2,7 +2,7 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-auth test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
+.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
 
 test-help:
 	@printf '%s\n' \
@@ -24,6 +24,7 @@ test-help:
 		'  test-launcher     Check launcher and app2unit dry-run without starting an app' \
 		'  test-audio        Stress the audio helper on a PRIVATE PipeWire+WirePlumber session (generated tones; host audio untouched)' \
 		'  test-record       Check the screen-record state machine with a fake recorder (no screen, no GPU)' \
+		'  test-mpris        Check the media control namespace and keys against the Hyprland config, and the art script with stand-in tools (no player, no network)' \
 		'  test-auth         Check the authentication dialog and polkit logic with a fake request (no polkit)' \
 		'  test-shot         Check the screenshot script with stand-ins for grim and wl-copy (no screen)' \
 		'  test-shot-live    Take real screenshots of THIS desktop with grim and wl-copy and check them' \
@@ -38,7 +39,7 @@ test-help:
 		'  test-borders      Verify native output-scoped borders in a disposable session' \
 		''
 
-test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot test-auth
+test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot test-auth test-mpris
 	@printf '%s\n' 'Checks passed.'
 
 test-scripts:
@@ -126,6 +127,11 @@ test-record-live:
 	@bash "$(ROOT)/tests/scripts/check-screen-record-live"
 
 # The authentication dialog and its polkit logic, with a fake request (no polkit daemon).
+# The media control: the layer namespace and (from phase 2) the media keys agree with the Hyprland config.
+test-mpris:
+	@bash "$(ROOT)/tests/scripts/check-mpris"
+	@bash "$(ROOT)/tests/scripts/check-media-art"
+
 test-auth:
 	@bash "$(ROOT)/tests/scripts/check-auth"
 

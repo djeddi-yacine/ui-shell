@@ -9,3 +9,7 @@ singleton RecordState 1.0 RecordState.qml
 singleton ShotRunner 1.0 ShotRunner.qml
 PolkitAuth 1.0 PolkitAuth.qml
 singleton PolkitSource 1.0 PolkitSource.qml
+singleton MprisSource 1.0 MprisSource.qml
+MediaSelection 1.0 MediaSelection.qml
+MediaArt 1.0 MediaArt.qml
+MediaArtRunner 1.0 MediaArtRunner.qml

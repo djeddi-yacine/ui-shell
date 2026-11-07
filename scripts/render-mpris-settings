@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: render-mpris-settings SEEK_STEP ART_MODE' >&2; exit 2; }
+case $1 in 5|10|15|30|undefined) ;; *) printf '%s\n' 'seekStep must be 5, 10, 15, 30, or undefined.' >&2; exit 2;; esac
+case $2 in auto|cover|blurhash|off|undefined) ;; *) printf '%s\n' 'artMode must be auto, cover, blurhash, off, or undefined.' >&2; exit 2;; esac
+mode=$2
+[[ $mode == undefined ]] || mode=\"$mode\"
+printf 'import QtQuick\n\nQtObject {\n    property var seekStep: %s\n    property var artMode: %s\n}\n' "$1" "$mode"

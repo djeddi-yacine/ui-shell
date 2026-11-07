@@ -8,6 +8,7 @@ import QtQuick
 //   labels: optional { value: text } for choices that should not show their raw value
 //   A component may have any number of options; the settings popup lists them all.
 //   fallback: the explicit default declared in static configuration
+//   available: optional, a function of a choice that says whether to offer it right now
 QtObject {
     readonly property var components: ({
         launcher: [
@@ -40,6 +41,13 @@ QtObject {
         shot: [
             { key: "copyToClipboard", label: qsTr("Clipboard"), name: qsTr("Copy the picture to the clipboard"), kind: "boolean", fallback: Shot.copyToClipboard },
             { key: "saveToFile", label: qsTr("File"), name: qsTr("Save the picture to a file"), kind: "boolean", fallback: Shot.saveToFile }
+        ],
+        mpris: [
+            { key: "seekStep", label: qsTr("Seek step"), name: qsTr("Seek step in seconds"), kind: "choices", choices: [5, 10, 15, 30], fallback: Mpris.seekStepSeconds },
+            { key: "artMode", label: qsTr("Art"), name: qsTr("Art behind the title, for every player"), kind: "choices", choices: ["auto", "cover", "blurhash", "off"],
+              labels: { auto: qsTr("Per player"), cover: qsTr("Cover"), blurhash: qsTr("Blurhash"), off: qsTr("Off") }, fallback: Mpris.artMode,
+              // The blurhash mode is offered only when its tools were found at start.
+              available: value => value !== "blurhash" || Mpris.blurhashAvailable }
         ],
         audio: [
             { key: "volumeStep", label: qsTr("Step"), name: qsTr("Volume step percent"), kind: "choices", choices: [1, 2, 5, 10], fallback: Audio.volumeStepPercent },

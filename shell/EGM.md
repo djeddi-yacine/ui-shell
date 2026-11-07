@@ -29,3 +29,4 @@
 ## System Verification
 - Run: `make test-qml` (defined in `tests/targets.mk`, included by the root `Makefile`).
 - Authentication dialog: `modules/auth` over `adapters/PolkitAuth` and `components/SecretDialog` (design `features/designs/polkit.md`). The polkit agent lives in the shell process, so it needs no daemon of its own.
+- Media control: `modules/mpris` over `adapters/MediaSelection` and `adapters/MprisSource` (design `features/designs/mpris.md`). One selection is read by the bar entry, the panel and the media keys; the one timer runs only while the panel is open and playing.

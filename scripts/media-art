@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# The media control's art steps. One stateless action per call: it takes an input (a web address
+# or a file), writes into the cache directory, and prints exactly ONE line of JSON on stdout:
+#   {"ok":true,"path":"..."}  or  {"ok":false,"error":"<code>","detail":"..."}
+# A handled outcome exits 0 (the shell needs a machine-readable cause, so this differs on purpose
+# from screen-shot and screen-record); a usage error exits 2 with a message on stderr.
+# Error codes: scheme, bad-input (silent) and missing-tool, timeout, too-large, tool-failed.
+#
+#   media-art capabilities --encoder PATH --decoder PATH --shrink-tools vips,ffmpeg
+#   media-art fetch    [--dir D] [--timeout S] --max-bytes N ADDRESS          (uses curl)
+#   media-art shrink   [--dir D] [--timeout S] --tool vips|ffmpeg --size N SRC
+#   media-art blurhash [--dir D] [--timeout S] --encoder PATH --decoder PATH --components X,Y --size N SRC
+#   media-art prune    --dir D --max-bytes N --max-entries N [--keep PATH]
+#
+# `capabilities` answers once at start-up which steps can work here: {"ok":true,"fetch":bool,
+# "shrink":"<first tool found>"|"","blurhash":bool}, so the shell knows whether to offer the
+# blurhash mode. Only curl (to fetch) and vips or ffmpeg (to shrink) are used: curl is on every
+# system that has a network tool worth the name; vips shrinks a huge picture while loading it, and
+# ffmpeg is the common fallback for a machine that plays media but has no vips.
+#
+# Output files are named by a hash of the input and the step, so an existing file is reused and
+# the caller never hashes. The directory is UI_SHELL_MPRIS_DIR, else $XDG_RUNTIME_DIR/ui-shell/mpris.
+set -euo pipefail
+umask 077
+
+usage() { printf '%s\n' "media-art: $*" >&2; exit 2; }
+json_ok() { jq -cn --arg path "$1" '{ok: true, path: $path}'; exit 0; }
+json_fail() { jq -cn --arg error "$1" --arg detail "${2-}" '{ok: false, error: $error, detail: $detail}'; exit 0; }
+number() { [[ ${2-} =~ ^[1-9][0-9]*$ ]] || usage "$1 must be a positive whole number"; }
+
+[[ $# -ge 1 ]] || usage 'usage: media-art STEP [FLAGS] [INPUT]'
+step=$1; shift
+dir=${UI_SHELL_MPRIS_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ui-shell/mpris}
+timeout_seconds=10 tool='' max_bytes='' size='' encoder='' decoder='' components='' max_entries='' keep='' shrink_tools=''
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --dir) dir=${2-}; shift 2 ;;
+    --timeout) number --timeout "${2-}"; timeout_seconds=$2; shift 2 ;;
+    --tool) tool=${2-}; shift 2 ;;
+    --shrink-tools) shrink_tools=${2-}; shift 2 ;;
+    --max-bytes) number --max-bytes "${2-}"; max_bytes=$2; shift 2 ;;
+    --size) number --size "${2-}"; size=$2; shift 2 ;;
+    --encoder) encoder=${2-}; shift 2 ;;
+    --decoder) decoder=${2-}; shift 2 ;;
+    --components) components=${2-}; shift 2 ;;
+    --max-entries) number --max-entries "${2-}"; max_entries=$2; shift 2 ;;
+    --keep) keep=${2-}; shift 2 ;;
+    --*) usage "unknown flag $1" ;;
+    *) break ;;
+  esac
+done
+input=${1-}
+[[ $# -le 1 ]] || usage 'only one input is allowed'
+
+[[ -n $dir && $dir == /* ]] || usage '--dir must be an absolute path'
+mkdir -p -m 700 -- "$dir" 2>/dev/null || true
+[[ -d $dir && ! -L $dir && -O $dir ]] || json_fail bad-input "the cache directory is not usable: $dir"
+
+# `scratch` is the temporary file being written; `base` is its name, kept so its .err and .png
+# companions are removed on every exit, even after the file itself was moved into place.
+scratch='' base=''
+cleanup() {
+  [[ -z $base ]] || rm -f -- "$base" "$base.err" "$base.png"
+}
+trap cleanup EXIT
+new_scratch() { scratch=$(mktemp "$dir/.tmp.XXXXXX"); base=$scratch; }
+name_for() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+is_image() { [[ $(file -b --mime-type -- "$1" 2>/dev/null) == image/* ]]; }
+file_size() { stat -c %s -- "$1"; }
+find_tool() {
+  local wanted=$1
+  [[ -n $wanted ]] || return 1
+  if [[ $wanted == */* ]]; then
+    [[ -x $wanted ]] && { printf '%s' "$wanted"; return 0; }
+    return 1
+  fi
+  command -v -- "$wanted" 2>/dev/null && return 0
+  [[ -x $HOME/.local/bin/$wanted ]] && { printf '%s' "$HOME/.local/bin/$wanted"; return 0; }
+  return 1
+}
+first_line() { head -n 1 -- "$1" 2>/dev/null || true; }
+# Run a command with the step timeout; map its exit code to a JSON failure.
+run_limited() {
+  local code=0 detail
+  timeout --kill-after=2 "$timeout_seconds" "$@" >/dev/null 2>"$scratch.err" || code=$?
+  if [[ $code == 124 || $code == 137 ]]; then json_fail timeout "the step took longer than ${timeout_seconds} s"; fi
+  if [[ $code != 0 ]]; then
+    detail=$(first_line "$scratch.err")
+    json_fail tool-failed "${detail:-exit code $code}"
+  fi
+}
+
+case $step in
+  capabilities)
+    [[ -z $input ]] || usage 'capabilities takes no input'
+    have_fetch=false; command -v curl >/dev/null 2>&1 && have_fetch=true
+    chosen=''
+    IFS=, read -ra wanted_tools <<<"$shrink_tools"
+    for candidate in "${wanted_tools[@]}"; do
+      [[ $candidate == vips || $candidate == ffmpeg ]] || usage "unknown shrink tool: $candidate"
+      if [[ -z $chosen ]] && find_tool "$candidate" >/dev/null; then chosen=$candidate; fi
+    done
+    have_blurhash=false
+    [[ -n $chosen && -n $encoder && -n $decoder ]] && find_tool "$encoder" >/dev/null && find_tool "$decoder" >/dev/null && have_blurhash=true
+    jq -cn --argjson fetch "$have_fetch" --arg shrink "$chosen" --argjson blurhash "$have_blurhash" '{ok: true, fetch: $fetch, shrink: $shrink, blurhash: $blurhash}' ;;
+  fetch)
+    [[ -n $max_bytes ]] || usage '--max-bytes is required'
+    [[ -n $input ]] || json_fail bad-input 'no address'
+    case $input in
+      http://*|https://*)
+        out=$dir/$(name_for "fetch|$input").src
+        [[ -s $out ]] && json_ok "$out"
+        command -v curl >/dev/null 2>&1 || json_fail missing-tool 'curl was not found'
+        new_scratch
+        code=0
+        timeout --kill-after=2 "$timeout_seconds" curl -sS -L --max-redirs 3 --proto '=http,https' --proto-redir '=http,https' \
+          --max-time "$timeout_seconds" --max-filesize "$max_bytes" -o "$scratch" -- "$input" >/dev/null 2>"$scratch.err" || code=$?
+        detail=$(first_line "$scratch.err")
+        case $code in
+          0) ;;
+          28|124|137) json_fail timeout "the download took longer than ${timeout_seconds} s" ;;
+          63) json_fail too-large "the picture is larger than $max_bytes bytes" ;;
+          *) json_fail tool-failed "${detail:-exit code $code}" ;;
+        esac
+        [[ -s $scratch ]] || json_fail tool-failed 'the download was empty'
+        [[ $(file_size "$scratch") -le $max_bytes ]] || json_fail too-large "the picture is larger than $max_bytes bytes"
+        is_image "$scratch" || json_fail bad-input 'the download is not a picture'
+        mv -f -- "$scratch" "$out"; scratch=''
+        json_ok "$out" ;;
+      file://*|/*)
+        local_path=$input
+        if [[ $input == file://* ]]; then
+          local_path=${input#file://}
+          local_path=${local_path#localhost}
+          [[ $local_path == /* ]] || json_fail scheme 'a file address must name an absolute path'
+          if [[ $local_path == *%* ]]; then
+            # Percent-decode, but only valid %XX escapes.
+            if [[ $local_path =~ %[^0-9A-Fa-f] || $local_path =~ %[0-9A-Fa-f]?$ ]]; then json_fail bad-input 'the file address has a bad escape'; fi
+            local_path=$(printf '%b' "${local_path//%/\\x}")
+          fi
+        fi
+        [[ $local_path != *$'\n'* ]] || json_fail bad-input 'the path has a line break'
+        real=$(realpath -e -- "$local_path" 2>/dev/null) || json_fail bad-input "no such file: $local_path"
+        [[ -f $real && -r $real ]] || json_fail bad-input 'not a readable file'
+        [[ $(file_size "$real") -le $max_bytes ]] || json_fail too-large "the picture is larger than $max_bytes bytes"
+        is_image "$real" || json_fail bad-input 'the file is not a picture'
+        json_ok "$real" ;;
+      *) json_fail scheme "this kind of address is not accepted: ${input%%:*}" ;;
+    esac ;;
+  shrink)
+    [[ $tool == vips || $tool == ffmpeg ]] || usage '--tool must be vips or ffmpeg'
+    [[ -n $size ]] || usage '--size is required'
+    [[ -n $input ]] || json_fail bad-input 'no picture'
+    [[ -f $input && -r $input ]] || json_fail bad-input "not a readable file: $input"
+    out=$dir/$(name_for "shrink|$input|$size|$tool").png
+    [[ -s $out ]] && json_ok "$out"
+    bin=$(find_tool "$tool") || json_fail missing-tool "$tool was not found"
+    new_scratch
+    case $tool in
+      vips)
+        run_limited "$bin" thumbnail "$input" "$scratch.png" "$size" --size down
+        [[ -s $scratch.png ]] || json_fail tool-failed "$tool wrote no picture"
+        mv -f -- "$scratch.png" "$scratch" ;;
+      ffmpeg) run_limited "$bin" -loglevel error -y -i "$input" -vf "scale='min($size,iw)':-2" -frames:v 1 -f image2 -c:v png "$scratch" ;;
+    esac
+    { [[ -s $scratch ]] && is_image "$scratch"; } || json_fail tool-failed "$tool wrote no picture"
+    mv -f -- "$scratch" "$out"; scratch=''
+    json_ok "$out" ;;
+  blurhash)
+    [[ $components =~ ^[1-9],[1-9]$ ]] || usage '--components must look like 4,3'
+    [[ -n $size ]] || usage '--size is required'
+    [[ -n $input ]] || json_fail bad-input 'no picture'
+    [[ -f $input && -r $input ]] || json_fail bad-input "not a readable file: $input"
+    out=$dir/$(name_for "blurhash|$input|$components|$size").png
+    [[ -s $out ]] && json_ok "$out"
+    enc=$(find_tool "$encoder") || json_fail missing-tool "$encoder was not found"
+    dec=$(find_tool "$decoder") || json_fail missing-tool "$decoder was not found"
+    new_scratch
+    code=0
+    hash=$(timeout --kill-after=2 "$timeout_seconds" "$enc" "${components%,*}" "${components#*,}" "$input" 2>"$scratch.err" | tail -n 1) || code=$?
+    if [[ $code != 0 || -z $hash ]]; then
+      detail=$(first_line "$scratch.err")
+      [[ $code == 124 || $code == 137 ]] && json_fail timeout "the step took longer than ${timeout_seconds} s"
+      json_fail tool-failed "${detail:-the encoder printed no hash}"
+    fi
+    [[ $hash =~ ^[[:graph:]]{6,100}$ ]] || json_fail tool-failed 'the encoder printed something that is not a hash'
+    run_limited "$dec" "$hash" "$size" "$size" "$scratch.png"
+    { [[ -s $scratch.png ]] && is_image "$scratch.png"; } || json_fail tool-failed 'the decoder wrote no picture'
+    mv -f -- "$scratch.png" "$out"
+    json_ok "$out" ;;
+  prune)
+    [[ -n $max_bytes && -n $max_entries ]] || usage 'prune needs --max-bytes and --max-entries'
+    [[ -z $input ]] || usage 'prune takes no input'
+    removed=0
+    # Leftover temporary files from an interrupted step.
+    find "$dir" -maxdepth 1 -type f -name '.tmp.*' -mmin +60 -delete 2>/dev/null || true
+    mapfile -t files < <(find "$dir" -maxdepth 1 -type f ! -name '.tmp.*' -printf '%T@ %s %p\n' 2>/dev/null | sort -n)
+    count=${#files[@]} total=0
+    for line in "${files[@]}"; do rest=${line#* }; total=$((total + ${rest%% *})); done
+    for line in "${files[@]}"; do
+      (( total > max_bytes || count > max_entries )) || break
+      rest=${line#* }; bytes=${rest%% *}; file=${rest#* }
+      [[ -z $keep || $file != "$keep" ]] || continue
+      if rm -f -- "$file"; then removed=$((removed + 1)); count=$((count - 1)); total=$((total - bytes)); fi
+    done
+    jq -cn --argjson removed "$removed" '{ok: true, removed: $removed}' ;;
+  *) usage "unknown step $step" ;;
+esac

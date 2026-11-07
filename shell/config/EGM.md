@@ -27,3 +27,6 @@ Singleton QML configuration for the shell: feature toggles, key bindings, panel 
 ## Verification
 - Run: `make test-qml`
 - `Auth` (singleton) [Auth.qml]: `namespace`, `inputGuardMs`, `startupGraceMs`, `cardWidth`, `fieldHeight`, `scrimOpacity`, status texts.
+- `Mpris` (singleton) [Mpris.qml]: namespace, shortcut names, panel size, seek step, tick, `panelKeys`, `keyShortcuts`, and the art values used from phase 3.
+- `Config` gains `mprisEnabled` (bar entry, panel, panel key) and `mprisKeysEnabled` (the four media keys).
+- `Mpris` also holds the art limits (sizes, caps, timeouts, cache bounds), the tool names and the provider table; `commands.mediaArt` is `scripts/media-art`; `blurhashAvailable` is set at start from the tool check and hides the mode in the settings.

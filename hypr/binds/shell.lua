@@ -5,6 +5,7 @@ local tuning = profile.shell_shortcuts.control_tuning
 local audio = profile.shell_shortcuts.audio_control
 local record = profile.shell_shortcuts.screen_record
 local shot = profile.shell_shortcuts.screen_shot
+local media = profile.shell_shortcuts.media_panel
 hl.bind(profile.main_mod .. " + " .. launcher.key, hl.dsp.global(launcher.target), {
   description = "Open application launcher",
 })
@@ -27,4 +28,8 @@ hl.bind(profile.main_mod .. " + " .. record.key, hl.dsp.global(record.target), {
 
 hl.bind(profile.main_mod .. " + " .. shot.key, hl.dsp.global(shot.target), {
   description = "Open screenshot",
+})
+
+hl.bind(profile.main_mod .. " + " .. media.key, hl.dsp.global(media.target), {
+  description = "Open media control",
 })

@@ -12,7 +12,9 @@ hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO
 hl.bind("XF86AudioMute", hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"), { locked = true, description = "Toggle output mute" })
 hl.bind("XF86AudioMicMute", hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"), { locked = true, description = "Toggle microphone mute" })
 
-hl.bind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl play-pause"), { locked = true, description = "Play or pause" })
-hl.bind("XF86AudioStop", hl.dsp.exec_cmd("playerctl pause"), { locked = true, description = "Pause" })
-hl.bind("XF86AudioNext", hl.dsp.exec_cmd("playerctl next"), { locked = true, description = "Next track" })
-hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl previous"), { locked = true, description = "Previous track" })
+-- The media keys are handled by the shell (shell/modules/mpris/MprisKeys.qml), so they act on the
+-- player the media panel shows. `locked` keeps them working on the lock screen. If the shell is
+-- down they do nothing.
+for _, media_key in ipairs(profile.media_keys) do
+  hl.bind(media_key.key, hl.dsp.global(media_key.target), { locked = true, description = media_key.description })
+end

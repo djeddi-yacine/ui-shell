@@ -312,7 +312,10 @@ else
   for node in "${render_nodes[@]}"; do args+=(--dev-bind "$node" "$node"); done
 fi
 
-args+=(--setenv PATH /usr/bin:/bin --setenv HOME "$test_home"
+for tool in "${test_host_local_tools[@]}"; do
+  [[ -x $HOME/.local/bin/$tool ]] && args+=(--ro-bind "$HOME/.local/bin/$tool" "$test_home/.local/bin/$tool")
+done
+args+=(--setenv PATH "$test_home/.local/bin:/usr/bin:/bin" --setenv HOME "$test_home"
   --setenv XDG_CONFIG_HOME "$test_home/.config"
   --setenv XDG_CACHE_HOME "$test_home/.cache"
   --setenv XDG_DATA_HOME "$test_home/.local/share"
@@ -327,6 +330,8 @@ args+=(--setenv PATH /usr/bin:/bin --setenv HOME "$test_home"
   --setenv UI_SHELL_OPEN_SHOT "${UI_SHELL_OPEN_SHOT:-0}"
   --setenv UI_SHELL_OPEN_AUTH "${UI_SHELL_OPEN_AUTH:-0}"
   --setenv UI_SHELL_AUTH_AGENT "${UI_SHELL_AUTH_AGENT:-0}"
+  --setenv UI_SHELL_OPEN_MPRIS "${UI_SHELL_OPEN_MPRIS:-0}"
+  --setenv UI_SHELL_MPRIS_SOURCE "${UI_SHELL_MPRIS_SOURCE:-off}"
   --setenv UI_SHELL_SHOT_CONTEXT "${UI_SHELL_SHOT_CONTEXT-}"
   --setenv UI_SHELL_TEST_EXEC "${UI_SHELL_TEST_EXEC-}"
   --setenv UI_SHELL_RECORD_KIND "${UI_SHELL_RECORD_KIND-}"

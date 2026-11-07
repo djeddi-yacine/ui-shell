@@ -233,3 +233,37 @@ The nested session has no polkit daemon, so the real flow is checked on the host
 5. Run `pkexec true` in two terminals: the second dialog appears only after the first ends.
 6. Start `scripts/screen-record`, open the dialog with `pkexec true`, stop, and look at a frame: is the dialog in the recording? Record the answer in `features/designs/polkit.md`.
 7. Way back: `systemctl --user start hyprpolkitagent` after stopping the shell.
+
+## Media control, live (owner, on the host)
+
+The nested session has no players, so the real flow is checked on the host. To look at the panel with fake players: `UI_SHELL_MPRIS_SOURCE=preview UI_SHELL_OPEN_MPRIS=1 make test-env`.
+
+Phase 1 (panel, selection, bar entry):
+
+1. Start mpd (through `mpd-mpris`) and a YouTube tab; press Super+N (or click the bar entry).
+2. The panel shows the player that is playing. Press K to pin the other one; the bar entry shows the pin mark and the panel keeps showing the pinned player when the other one starts.
+3. Close the pinned player: the mark becomes outlined and the panel shows another player. Start it again: it is the shown player again with no new action.
+4. Space, N, P, Left and Right act on the shown player; on a stream with no length there is no seek bar.
+5. Close the panel and leave it closed: nothing ticks (no timer, no process).
+
+Phase 2 (the media keys):
+
+1. After starting the shell, `hyprctl globalshortcuts` lists `ui-shell:media-play-pause`, `ui-shell:media-pause`, `ui-shell:media-next`, `ui-shell:media-previous` and `ui-shell:media-panel`.
+2. With mpd playing and a YouTube tab paused, press the play/pause key: it acts on the player the panel shows (pin each in turn and check).
+3. Press the keys on the lock screen: they should work (`locked`). If they do not, note it here; the keys then work only when unlocked.
+4. Stop the shell and press a media key: nothing happens (accepted; `playerctl` is no longer bound).
+5. The nested session cannot receive the host's media keys; the binds are inert there.
+
+Phase 3 (the art):
+
+1. With mpd playing a track that has a cover (mpd's cover feature must be on for `mpd-mpris` to publish one): open the panel. The cover appears behind the title within a moment; the text stays readable.
+2. Open a YouTube video in the browser, pin the browser player: its panel shows the blurhash colour wash (a soft colour field), not the thumbnail.
+3. Skip tracks quickly (hold N on mpd, or click Next several times): no old cover shows under the new title, and `ls $XDG_RUNTIME_DIR/ui-shell/mpris` stays small (at most `cacheMaxEntries` files).
+4. Use a track with an 8000 px cover: the panel stays responsive and the shell's memory does not jump by hundreds of megabytes.
+5. Temporarily rename `blurhash_encoder` in `~/.local/bin` and restart the shell: Ctrl+E (Art) no longer offers "Blurhash", and the browser player shows its cover instead (no error popup, because the tool check knew). Rename it back and restart.
+5b. Close and reopen the panel on the same track: the cover appears at once and nothing is fetched again (`ls -l --time=atime $XDG_RUNTIME_DIR/ui-shell/mpris` does not change). Change tracks: the new cover fades in over the old one.
+6. `make test-mpris` also runs `check-media-art` (the art script with stand-in tools, no network).
+
+Dim: with a brightly coloured cover the panel never shows it at full brightness; the dim is the same strength with and without a cover. Icons: the previous, play or pause, next and selector icons have clean edges (no soft blur) on a normal and on a 2x display.
+
+Art setting: in Ctrl+E set Art to "Cover" with mpd and a browser player both present: both players show their cover. Set it to "Off": no art. Set it to "Per player": mpd shows its cover and the browser shows the blurhash. The pin is one player only: pin the browser, then pin mpd; the browser's pin is gone and the media keys follow mpd.

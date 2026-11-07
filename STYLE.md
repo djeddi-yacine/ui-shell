@@ -243,6 +243,8 @@ Caelestia's `components/controls/StyledTextField.qml` consumes shared typography
 
 ## Icons
 
+`shell/icons/` also holds the media control's pictures (white, tinted by `SvgIcon`): transport (`media-play`, `media-pause`, `media-previous`, `media-next`), the selector arrows, the pin, the cassette and the bar's `audio-player`.
+
 `shell/icons/` holds the shell's SVG icons. They are filled white on purpose: a component tints one with `layer.effect: MultiEffect { colorization: 1; colorizationColor: <theme token> }`, so it follows the theme. The tint needs a GPU renderer; the offscreen QML tests draw the untinted icon only, so they check the icon's source, not its colour.
 
 ## Folder responsibilities
@@ -265,3 +267,7 @@ Every module (launcher, wallpaper picker, control tuning, audio) has the same pa
 ## The authentication dialog (centred modal)
 
 A centred modal is neither a picker nor a popup. It uses the popup tokens (`popupSurface`, `popupBorder`, `popupRadius`) on a dimmed backdrop (`scrimColor(Config.Auth.scrimOpacity)`), holds the keyboard exclusively, and loads synchronously. The card and the backdrop are separate layers so only the card is kept out of screen capture. A single Esc cancels (there is no unsaved work, so the exit rule's second press does not apply) and the cancel must reach the thing that asked, not only close the window. A secret field shows no characters, no length and no reaction to a key.
+
+## The media control: shared selection and the one timer
+
+Every part of the media control (bar entry, panel, media keys) reads one `MediaSelection`; none computes the current player itself. The panel's position bar is the one place the shell ticks on a timer, once a second, and only while the panel is open and the shown player is playing.

@@ -13,3 +13,4 @@ Feature modules of the shell. Each module is a QML package (`UiShell.*`) with a 
 - tuning: [./tuning/EGM.md](./tuning/EGM.md) - control tuning panel
 - wallpaper: [./wallpaper/EGM.md](./wallpaper/EGM.md) - wallpaper picker
 - `auth/`: the polkit authentication dialog (see `auth/EGM.md`).
+- `mpris/`: the media control (see `mpris/EGM.md`).

@@ -191,6 +191,25 @@ rejects "$save_settings" record default '' absent 3 true false 60 high auto opus
 shot_rev=$("$save_settings" shot default '' absent true false)
 [[ $shot_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'shot save did not return a digest'
 
+# Media control settings: the sixth component.
+render_mpris=$(command_path renderMprisSettings)
+for args in '5 auto' '5 cover' '10 blurhash' '30 off' 'undefined undefined' '15 undefined' 'undefined off'; do
+  read -r a b <<<"$args"
+  "$render_mpris" "$a" "$b" | grep -q '^QtObject {' || fail 'mpris renderer shape'
+done
+"$render_mpris" 15 off | grep -q 'property var seekStep: 15' && "$render_mpris" 15 off | grep -q 'property var artMode: "off"' || fail 'mpris renderer must emit the step bare and quote the mode'
+rejects "$render_mpris" 7 cover
+rejects "$render_mpris" 10 best
+rejects "$render_mpris" 10 default_art
+rejects "$render_mpris" 10
+rejects "$render_mpris" 10 cover extra
+[[ $("$settings_path" mpris default '') == "$XDG_CONFIG_HOME/ui-shell/components/mpris/Default.qml" ]] || fail 'mpris default path'
+mpris_rev=$("$save_settings" mpris default '' absent 15 off)
+[[ $mpris_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'mpris save did not return a digest'
+grep -q 'property var seekStep: 15' "$("$settings_path" mpris default '')" || fail 'mpris values not persisted'
+rejects "$save_settings" mpris default '' "$mpris_rev" 7 cover
+grep -q 'choices: \[5, 10, 15, 30\]' /project/shell/config/ComponentSpec.qml && grep -q 'choices: \["auto", "cover", "blurhash", "off"\]' /project/shell/config/ComponentSpec.qml || fail 'ComponentSpec mpris choices changed without the renderer'
+
 # The record spec and its renderer must agree on every choice the popup offers.
 for q in medium high very_high ultra; do "$render_record" undefined undefined undefined undefined "$q" undefined undefined undefined undefined undefined undefined >/dev/null || fail "spec quality $q is not renderable"; done
 for c in auto h264 hevc av1 vp9; do "$render_record" undefined undefined undefined undefined undefined "$c" undefined undefined undefined undefined undefined >/dev/null || fail "spec codec $c is not renderable"; done

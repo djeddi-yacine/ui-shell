@@ -25,6 +25,17 @@ return {
     audio_control = { key = "M", target = "ui-shell:audio-control" },
     screen_record = { key = "R", target = "ui-shell:screen-record" },
     screen_shot = { key = "P", target = "ui-shell:screen-shot" },
+    media_panel = { key = "N", target = "ui-shell:media-panel" },
+  },
+
+  -- The keyboard media keys, handled by the shell (shell/modules/mpris/MprisKeys.qml). An ordered
+  -- array, one entry per line: tests/scripts/check-mpris reads it. XF86AudioStop keeps its "pause"
+  -- meaning from the old playerctl binds.
+  media_keys = {
+    { action = "playPause", key = "XF86AudioPlay", target = "ui-shell:media-play-pause", description = "Play or pause" },
+    { action = "pause", key = "XF86AudioStop", target = "ui-shell:media-pause", description = "Pause" },
+    { action = "next", key = "XF86AudioNext", target = "ui-shell:media-next", description = "Next track" },
+    { action = "previous", key = "XF86AudioPrev", target = "ui-shell:media-previous", description = "Previous track" },
   },
 
   -- The webcam overlay of a recording: a small floating video window in the bottom-right corner,

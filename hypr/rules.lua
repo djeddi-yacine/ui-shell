@@ -5,7 +5,7 @@ local profile = require("profile")
 
 hl.layer_rule({
   name = "shell-owns-motion",
-  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|auth|auth-scrim)$" },
+  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|mpris|auth|auth-scrim)$" },
   no_anim = true,
 })
 

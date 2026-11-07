@@ -71,6 +71,13 @@ Item {
                 Layout.fillHeight: true
             }
 
+            MprisButton {
+                screenName: root.screenName
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
             AuthChip {
                 style: styleTokens
                 inputState: root.inputState

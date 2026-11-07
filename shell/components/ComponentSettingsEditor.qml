@@ -36,7 +36,7 @@ ColumnLayout {
     function choicesFor(option) {
         const inherited = { label: defaultLabel(option.key, option.fallback), value: undefined }
         if (option.kind === "boolean") return [inherited, { label: qsTr("On"), value: true }, { label: qsTr("Off"), value: false }]
-        if (option.kind === "choices") return [inherited].concat(option.choices.map(value => ({ label: option.labels?.[value] ?? String(value), value: value })))
+        if (option.kind === "choices") return [inherited].concat(option.choices.filter(value => option.available ? option.available(value) : true).map(value => ({ label: option.labels?.[value] ?? String(value), value: value })))
         return [inherited].concat(integers(option.min, option.max))
     }
     function defaultLabel(key, configuredDefault) {

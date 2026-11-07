@@ -21,3 +21,4 @@ Per-output top bar content: launcher button, wallpaper-picker button, Hyprland w
 ## Verification
 - Run: `make test-qml`
 - `AuthChip` [AuthChip.qml]: "No auth agent" entry, visible only when `Config.authEnabled`, the start-up grace has passed and `AuthState.auth.agentActive` is false; click explains why in an inline popup.
+- `MprisButton` [MprisButton.qml]: the media control's bar entry: one fixed icon (`audio-player`), the same in every state; the panel shows the state and the pin; visible by `Config.Mpris.iconVisibility`; click opens the panel.
