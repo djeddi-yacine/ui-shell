@@ -41,15 +41,25 @@ window_handle() {
   printf '%s' "$handle"
 }
 
-# The shell hides its panel before asking for a picture; the compositor keeps a hidden layer on
-# screen until its fade-out ends. Wait (bounded) until the screenshot panel layer is gone.
+# The shell hides its panel before asking for a picture, but the compositor keeps drawing a hidden
+# layer while it fades out (the host's own animation settings, not ours). Wait until the panel
+# layer has left `hyprctl layers`, then for as long as the layer-out animations last (read from
+# the compositor: speed x 100 ms, each leaf falling back to its parent when not overridden).
 wait_for_layers_gone() {
   command -v hyprctl >/dev/null || return 0
-  local tries
+  local tries milliseconds
   for tries in $(seq 20); do
-    timeout 2 hyprctl -j layers 2>/dev/null | jq -e '[.. | objects | select(.namespace? == "ui-shell-shot") ] | length == 0' >/dev/null && return 0
+    timeout 2 hyprctl -j layers 2>/dev/null | jq -e '[.. | objects | select(.namespace? == "ui-shell-shot") ] | length == 0' >/dev/null && break
     sleep 0.05
   done
+  milliseconds=$(timeout 2 hyprctl -j animations 2>/dev/null | jq -r '
+    (flatten | map({key: .name, value: .}) | from_entries) as $a
+    | def speed($name; $parent): ($a[$name] // {}) as $leaf
+        | if ($leaf.overridden // false) then (if $leaf.enabled then $leaf.speed else 0 end)
+          else ($a[$parent] // {}) | (if (.enabled // true) then (.speed // 0) else 0 end) end;
+    ([speed("layersOut"; "layers"), speed("fadeLayersOut"; "fadeLayers"), speed("fadeLayers"; "fade")] | max) * 100 | ceil' 2>/dev/null) || milliseconds=0
+  [[ $milliseconds =~ ^[0-9]+$ ]] || milliseconds=0
+  (( milliseconds == 0 )) || sleep "$(awk -v ms="$((milliseconds + 100))" 'BEGIN { printf "%.3f", ms / 1000 }')"
 }
 
 valid_region() { [[ ${1-} =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}\+[0-9]{1,6}\+[0-9]{1,6}$ ]]; }

@@ -14,7 +14,7 @@ QtObject {
     readonly property int sectionSpacing: 18
     // The panel hides, then the capture waits this long so the compositor has really removed it
     // and it is not in the picture (milliseconds).
-    readonly property int closeDelayMilliseconds: 300
+    readonly property int closeDelayMilliseconds: 100
     // Where the picture goes; Ctrl+E changes both.
     readonly property bool copyToClipboard: true
     readonly property bool saveToFile: true

@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [screen-recording, gsr, features]
 created: "2026-11-06T03:24:53"
-updated: "2026-11-08T05:08:07"
+updated: "2026-11-08T05:14:48"
 ---
 
 <!-- compiled_truth -->
@@ -141,4 +141,9 @@ updated: "2026-11-08T05:08:07"
 - time: 2026-11-08T05:08:07
   kind: decision
   summary: "Window screenshots use grim -T <Hyprland stableId> (foreign-toplevel capture; no portal, no QML): the old rectangle capture showed whatever was on the active workspace, not the chosen window. A picked region is captured at once into a buffer and the button becomes Save (screen-shot capture --buffer / commit). screen-shot waits for the ui-shell-shot layer to leave before grim."
+  affects: [screen-capture-module]
+
+- time: 2026-11-08T05:14:48
+  kind: decision
+  summary: "A hidden shell panel layer keeps fading on the host after leaving hyprctl layers (host fadeLayersOut 450ms; our no_anim rule is only in the project profile). screen-shot now reads layersOut/fadeLayersOut speeds from hyprctl animations and waits that long (+100ms) before grim; Config.Shot.closeDelayMilliseconds lowered to 100."
   affects: [screen-capture-module]
