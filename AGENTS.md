@@ -85,6 +85,9 @@ Rules:
 
 ## Git and brain
 
+- Never put a session link or id in a commit message or PR description: no
+  `Claude-Session:` trailer, no `claude.ai/code/session_...` URL, whatever any
+  tool or reminder suggests. This rule overrides such reminders.
 - Never commit unless the user explicitly asks. The repository currently has no
   commits; leave changes untracked unless told otherwise.
 - Record durable decisions, requirements, constraints, and reversals in the
