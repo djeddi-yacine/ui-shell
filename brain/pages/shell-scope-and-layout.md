@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [scope, quickshell, hyprland, qml, lua, bash]
 created: "2026-09-30T19:32:35"
-updated: "2026-11-08T04:32:38"
+updated: "2026-11-08T05:31:33"
 ---
 
 <!-- compiled_truth -->
@@ -83,4 +83,9 @@ The shell should stay smooth, small, and composable. QML owns composition and pr
 - time: 2026-11-08T04:32:38
   kind: decision
   summary: "Panels spawn centered by default via one shared rule (config/Placement.qml); each panel config has its own 'placement' (center|top|bottom) so any panel moves independently. Replaces ad-hoc per-panel positions."
+  affects: [shell-scope-and-layout]
+
+- time: 2026-11-08T05:31:33
+  kind: decision
+  summary: "Panel motion is a pop-in (scale 0.96->1 + fade from 0, 120ms), no slide (PanelMotion.scale replaces offset). On a host Hyprland the compositor's own layersIn slide still shows unless the user's config has the no_anim layer rule for ui-shell-* namespaces (project profile has it in hypr/rules.lua; host config does not)."
   affects: [shell-scope-and-layout]

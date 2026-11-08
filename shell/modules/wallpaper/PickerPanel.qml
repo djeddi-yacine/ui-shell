@@ -300,7 +300,7 @@ FocusScope {
         radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth
         border.color: styleTokens.pickerBorder
-        transform: Translate { y: panelMotion.offset }
+        scale: panelMotion.scale
 
         MouseArea {
             anchors.fill: parent

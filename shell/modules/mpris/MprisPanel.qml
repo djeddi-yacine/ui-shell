@@ -126,7 +126,7 @@ FocusScope {
         style: styleTokens
         inputState: root.inputState
         active: root.open
-        transform: Translate { y: motion.offset }
+        scale: motion.scale
         MouseArea { anchors.fill: parent; z: -1 }
     }
 }

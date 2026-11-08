@@ -10,7 +10,7 @@ QtObject {
     readonly property int stateDuration: 80
     readonly property int stateEasing: Easing.OutCubic
     readonly property int standardDuration: 140
-    readonly property int enterDuration: 140
+    readonly property int enterDuration: 120
     readonly property int exitDuration: 80
     readonly property int enterEasing: Easing.OutCubic
     readonly property int exitEasing: Easing.OutCubic
@@ -20,9 +20,10 @@ QtObject {
     // built view waits before it shows its real values so they can animate in.
     readonly property int scrollQuietDelay: 280
     readonly property int revealDelay: 40
-    readonly property real panelEnterOffset: 8
-    readonly property real panelExitOffset: 4
-    readonly property real panelEnterOpacity: 0.92
+    // A panel pops in from slightly smaller (no slide) while it fades up, and shrinks a little as it fades out.
+    readonly property real panelEnterScale: 0.96
+    readonly property real panelExitScale: 0.98
+    readonly property real panelEnterOpacity: 0
     readonly property int launchPulseDuration: 360
     readonly property int launchPulseEasing: Easing.InOutSine
     readonly property real launchPulseMinimumOpacity: 0.85
