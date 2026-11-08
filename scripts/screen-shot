@@ -6,9 +6,14 @@
 #   screen-shot capture monitor:NAME | window:ADDRESS | region:WxH+X+Y
 #                       [--copy yes|no] [--save yes|no] [--delay MILLISECONDS] [--output FILE]
 #       prints one JSON object: {file, size, copied}; at least one of copy and save must be yes.
+#   screen-shot capture TARGET --buffer yes [--delay MILLISECONDS]
+#       takes the picture now and keeps it as the buffer; prints {buffer, size}.
+#   screen-shot commit [--copy yes|no] [--save yes|no] [--output FILE]
+#       delivers the buffer like a capture would, then drops it.
 #
-# A window is its rectangle at the moment of capture (the same rule as recording, shared through
-# `screen-record window-region`); a region is the rectangle `slurp` selected.
+# A window is captured through its own toplevel handle (grim -T, the compositor's foreign-toplevel
+# capture), so it is the window's own pixels whichever workspace it is on and whatever covers it;
+# no portal is involved. A region is the rectangle `slurp` selected.
 set -euo pipefail
 
 temporary=
@@ -24,6 +29,29 @@ user_dir() { # XDG_NAME and the plain directory name under $HOME, e.g. user_dir 
   printf '%s' "$value"
 }
 
+buffer_file=${UI_SHELL_SHOT_BUFFER:-${XDG_RUNTIME_DIR:-/tmp}/ui-shell/shot-buffer.png}
+
+# The foreign-toplevel handle of a window (Hyprland's stableId), which grim -T captures.
+window_handle() {
+  local address=$1 handle
+  [[ $address =~ ^0x[0-9a-f]{1,16}$ ]] || fail 'window address must look like 0x55d0c0a1b2c0'
+  command -v hyprctl >/dev/null || fail 'hyprctl is required to capture a window'
+  handle=$(timeout 5 hyprctl -j clients 2>/dev/null | jq -r --arg a "$address" '.[] | select(.address == $a and .mapped) | .stableId // empty') || true
+  [[ $handle =~ ^[0-9]+$ ]] || fail 'that window is gone; choose another target'
+  printf '%s' "$handle"
+}
+
+# The shell hides its panel before asking for a picture; the compositor keeps a hidden layer on
+# screen until its fade-out ends. Wait (bounded) until the screenshot panel layer is gone.
+wait_for_layers_gone() {
+  command -v hyprctl >/dev/null || return 0
+  local tries
+  for tries in $(seq 20); do
+    timeout 2 hyprctl -j layers 2>/dev/null | jq -e '[.. | objects | select(.namespace? == "ui-shell-shot") ] | length == 0' >/dev/null && return 0
+    sleep 0.05
+  done
+}
+
 valid_region() { [[ ${1-} =~ ^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}\+[0-9]{1,6}\+[0-9]{1,6}$ ]]; }
 
 capabilities() {
@@ -34,7 +62,7 @@ capabilities() {
 }
 
 capture() {
-  local target=${1-} copy=yes save=yes delay=0 output=
+  local target=${1-} copy=yes save=yes delay=0 output= buffer=no
   [[ -n $target ]] || fail 'a target is required'
   shift
   while (( $# )); do
@@ -43,12 +71,14 @@ capture() {
       --save) save=${2-}; shift 2 ;;
       --delay) delay=${2-}; shift 2 ;;
       --output) output=${2-}; shift 2 ;;
+      --buffer) buffer=${2-}; shift 2 ;;
       *) fail "unknown option: $1" ;;
     esac
   done
+  [[ $buffer == yes ]] && { copy=no; save=no; }
   [[ $copy == yes || $copy == no ]] || fail '--copy takes yes or no'
   [[ $save == yes || $save == no ]] || fail '--save takes yes or no'
-  [[ $copy == yes || $save == yes ]] || fail 'a screenshot needs a destination: copy or save'
+  [[ $buffer == yes || $copy == yes || $save == yes ]] || fail 'a screenshot needs a destination: copy or save'
   [[ $delay =~ ^[0-9]{1,4}$ ]] || fail '--delay takes 0 to 9999 milliseconds'
   command -v grim >/dev/null || fail 'grim is required'
   [[ $copy == no ]] || command -v wl-copy >/dev/null || fail 'wl-copy is required to copy'
@@ -59,9 +89,7 @@ capture() {
       [[ $target =~ ^monitor:[A-Za-z0-9._:+-]{1,64}$ ]] || fail 'unsafe monitor name'
       args=(-o "${target#monitor:}") ;;
     window:*)
-      local rectangle
-      rectangle=$("$here/screen-record" window-region "${target#window:}") || exit 1
-      args=(-g "$(region_for_grim "$rectangle")") ;;
+      args=(-T "$(window_handle "${target#window:}")") ;;
     region:*)
       valid_region "${target#region:}" || fail 'region must look like WxH+X+Y'
       args=(-g "$(region_for_grim "${target#region:}")") ;;
@@ -69,7 +97,10 @@ capture() {
   esac
 
   local file
-  if [[ $save == yes ]]; then
+  if [[ $buffer == yes ]]; then
+    mkdir -p -- "${buffer_file%/*}"
+    file=$buffer_file
+  elif [[ $save == yes ]]; then
     if [[ -z $output ]]; then
       output=${UI_SHELL_SHOT_DIR:-$(user_dir PICTURES Pictures)/screenshots}/screenshot-$(date +%Y%m%d-%H%M%S).png
     fi
@@ -81,10 +112,20 @@ capture() {
     trap 'rm -f -- "${temporary-}"' EXIT
     file=$temporary
   fi
+  wait_for_layers_gone
   (( delay == 0 )) || sleep "$(awk -v ms="$delay" 'BEGIN { printf "%.3f", ms / 1000 }')"
   grim "${args[@]}" "$file" || fail 'grim could not capture the screen'
   [[ -s $file ]] || fail 'the screenshot is empty'
-  local copied=false
+  if [[ $buffer == yes ]]; then
+    jq -cn --arg buffer "$file" --argjson size "$(stat -c %s -- "$file")" '{buffer: $buffer, size: $size}'
+    return
+  fi
+  deliver "$file" "$copy" "$save"
+}
+
+# Hand a finished picture to the clipboard and/or report where it is saved.
+deliver() {
+  local file=$1 copy=$2 save=$3 copied=false
   if [[ $copy == yes ]]; then
     # wl-copy stays alive to serve the clipboard. Left holding the caller's pipes it would keep
     # them open forever, and the caller (the shell reads our output until it closes) would hang.
@@ -102,8 +143,40 @@ region_for_grim() {
   printf '%s,%s %s' "${offset%%+*}" "${offset#*+}" "$size"
 }
 
+# Deliver the buffered picture: save it to a file and/or copy it, then drop the buffer.
+commit() {
+  local copy=yes save=yes output=
+  while (( $# )); do
+    case $1 in
+      --copy) copy=${2-}; shift 2 ;;
+      --save) save=${2-}; shift 2 ;;
+      --output) output=${2-}; shift 2 ;;
+      *) fail "unknown option: $1" ;;
+    esac
+  done
+  [[ $copy == yes || $copy == no ]] || fail '--copy takes yes or no'
+  [[ $save == yes || $save == no ]] || fail '--save takes yes or no'
+  [[ $copy == yes || $save == yes ]] || fail 'a screenshot needs a destination: copy or save'
+  [[ -s $buffer_file ]] || fail 'there is no buffered screenshot'
+  [[ $copy == no ]] || command -v wl-copy >/dev/null || fail 'wl-copy is required to copy'
+  local file=$buffer_file
+  if [[ $save == yes ]]; then
+    if [[ -z $output ]]; then
+      output=${UI_SHELL_SHOT_DIR:-$(user_dir PICTURES Pictures)/screenshots}/screenshot-$(date +%Y%m%d-%H%M%S).png
+    fi
+    [[ $output == /* && $output =~ ^[A-Za-z0-9._/@+:\ -]+$ && $output != *..* ]] || fail 'unsafe output path'
+    mkdir -p -- "${output%/*}"
+    cp -- "$buffer_file" "$output"
+    file=$output
+  fi
+  deliver "$file" "$copy" "$save"
+  rm -f -- "$buffer_file"
+}
+
 case ${1-} in
   capabilities) capabilities ;;
   capture) shift; capture "$@" ;;
+  commit) shift; commit "$@" ;;
+  discard) rm -f -- "$buffer_file" ;;
   *) printf '%s\n' 'Usage: screen-shot capabilities|capture TARGET [--copy yes|no] [--save yes|no] [--delay MS] [--output FILE]' >&2; exit 2 ;;
 esac

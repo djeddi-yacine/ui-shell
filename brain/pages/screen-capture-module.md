@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [screen-recording, gsr, features]
 created: "2026-11-06T03:24:53"
-updated: "2026-11-08T04:43:17"
+updated: "2026-11-08T05:08:07"
 ---
 
 <!-- compiled_truth -->
@@ -136,4 +136,9 @@ updated: "2026-11-08T04:43:17"
 - time: 2026-11-08T04:43:17
   kind: decision
   summary: "Black recordings under make test-env-host are expected: bwrap sets no-new-privileges so gsr-kms-server loses cap_sys_admin and KMS capture fails (drmfb handle is NULL); audio still works. Verified with setpriv --no-new-privs. Decision: keep the sandbox, document the limit; test recording on a normal session."
+  affects: [screen-capture-module]
+
+- time: 2026-11-08T05:08:07
+  kind: decision
+  summary: "Window screenshots use grim -T <Hyprland stableId> (foreign-toplevel capture; no portal, no QML): the old rectangle capture showed whatever was on the active workspace, not the chosen window. A picked region is captured at once into a buffer and the button becomes Save (screen-shot capture --buffer / commit). screen-shot waits for the ui-shell-shot layer to leave before grim."
   affects: [screen-capture-module]

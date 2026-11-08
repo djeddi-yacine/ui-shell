@@ -6,7 +6,7 @@ import "../../components" as Controls
 import "../../config" as Config
 import "../../theme" as Theme
 
-// Screenshot: pick what to capture, pick where the picture goes, press Capture. The panel's window
+// Screenshot: pick what to capture, pick where the picture goes, press Capture (a region is taken as soon as it is picked and the button then says Save). The panel's window
 // is hidden while the picture is taken and comes back showing what was saved. The lists of
 // screens, windows and the region selection are shared with the recording panel.
 FocusScope {
@@ -21,6 +21,8 @@ FocusScope {
     readonly property bool copy: copyChoice === undefined ? options.option("copyToClipboard") : copyChoice
     readonly property bool save: saveChoice === undefined ? options.option("saveToFile") : saveChoice
     readonly property bool available: Adapters.ShotRunner.capabilities.available === true
+    // A region already picked and taken: the button saves it instead of capturing again.
+    readonly property bool hasBuffer: Adapters.ShotRunner.buffer !== null && Adapters.ShotRunner.buffer.target === picker.target
     readonly property bool canCapture: available && picker.target.length > 0 && (copy || save) && !Adapters.ShotRunner.busy
     // The picture that was just taken, only while it is news (announced once) and while its file exists.
     readonly property var savedHint: {
@@ -36,6 +38,7 @@ FocusScope {
         Adapters.ShotRunner.verifyLast()
         failures.close()
         context.close()
+        Adapters.ShotRunner.discardBuffer()
         options.refresh()
         copyChoice = undefined
         saveChoice = undefined
@@ -66,9 +69,18 @@ FocusScope {
         }
         context.show(kind, root.Window.window ? root.Window.window.activeFocusItem : null)
     }
-    function requestClose() { motion.leave() }
+    function requestClose() { Adapters.ShotRunner.discardBuffer(); motion.leave() }
+    // The region is taken the moment it is picked, with the panel hidden, and kept until Save.
+    function takeRegion() {
+        ShotPanelState.capturing = true
+        Adapters.ShotRunner.capture(picker.target, { buffer: true, delay: Config.Shot.closeDelayMilliseconds })
+    }
     function capture() {
         if (!canCapture) return
+        if (hasBuffer) {
+            Adapters.ShotRunner.commit({ copy: copy, save: save })
+            return
+        }
         ShotPanelState.capturing = true
         Adapters.ShotRunner.capture(picker.target, { copy: copy, save: save, delay: Config.Shot.closeDelayMilliseconds })
     }
@@ -102,6 +114,7 @@ FocusScope {
     Connections {
         target: Adapters.ShotRunner
         function onCaptured() { ShotPanelState.capturing = false; Qt.callLater(root.focusFirst) }
+        function onBuffered() { ShotPanelState.capturing = false; Qt.callLater(root.focusFirst) }
         function onFailed(failure) {
             ShotPanelState.capturing = false
             failures.present(failure, root.Window.window ? root.Window.window.activeFocusItem : null)
@@ -109,7 +122,7 @@ FocusScope {
     }
     Connections {
         target: Adapters.RecordState
-        function onRegionPicked(region) { if (root.open) { picker.note = ""; picker.region = region; picker.kind = "region"; Qt.callLater(root.focusFirst) } }
+        function onRegionPicked(region) { if (root.open) { picker.note = ""; picker.region = region; picker.kind = "region"; root.takeRegion() } }
         function onRegionCancelled() { if (root.open) { picker.note = qsTr("No region was selected (cancelled, or a click without a drag). Drag a rectangle, or type one below."); Qt.callLater(root.focusFirst) } }
     }
     Controls.PanelContext {
@@ -224,7 +237,7 @@ FocusScope {
                 Item { Layout.fillWidth: true }
                 Controls.ShellButton {
                     id: captureButton
-                    text: qsTr("Capture")
+                    text: root.hasBuffer ? qsTr("Save") : qsTr("Capture")
                     enabled: root.canCapture
                     style: styleTokens
                     inputState: root.inputState

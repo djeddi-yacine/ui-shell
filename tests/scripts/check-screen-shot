@@ -25,7 +25,8 @@ SHIM
 cat >"$scratch/bin/hyprctl" <<'SHIM'
 #!/usr/bin/env bash
 case "$*" in
-  *clients*) echo '[{"address":"0xabc1","title":"editor","class":"code","at":[100,200],"size":[800,600],"mapped":true,"hidden":false}]' ;;
+  *clients*) echo '[{"address":"0xabc1","title":"editor","class":"code","at":[100,200],"size":[800,600],"mapped":true,"hidden":false,"stableId":"4242"}]' ;;
+  *layers*) echo '{}' ;;
   *monitors*) echo '[{"name":"M","x":0,"y":0,"width":1920,"height":1080,"scale":1}]' ;;
 esac
 SHIM
@@ -45,7 +46,7 @@ grep -q 'grim -o M ' "$FAKE_LOG" || fail "monitor: $(cat "$FAKE_LOG")"; ok
 "$script" capture region:300x200+10+20 --copy no >/dev/null
 grep -q 'grim -g 10,20 300x200 ' "$FAKE_LOG" || fail "region: $(cat "$FAKE_LOG")"; ok
 "$script" capture window:0xabc1 --copy no >/dev/null
-grep -q 'grim -g 100,200 800x600 ' "$FAKE_LOG" || fail "window: $(cat "$FAKE_LOG")"; ok
+grep -q 'grim -T 4242 ' "$FAKE_LOG" || fail "window: $(cat "$FAKE_LOG")"; ok
 
 echo '== destinations'
 : >"$FAKE_LOG"
@@ -68,6 +69,16 @@ echo '== where screenshots go by default'
 result=$(env -u UI_SHELL_SHOT_DIR XDG_PICTURES_DIR=$scratch/xdg-pictures "$script" capture monitor:M --copy no)
 [[ $(jq -r .file <<<"$result") == "$scratch/xdg-pictures/screenshots/screenshot-"*.png ]] || fail "default folder: $result"; ok
 [[ -s $(jq -r .file <<<"$result") ]] || fail 'the file is not in the screenshots folder'; ok
+
+echo '== a buffered region is taken now and delivered later'
+: >"$FAKE_LOG"
+out=$("$script" capture region:300x200+10+20 --buffer yes)
+jq -e '.buffer != null' <<<"$out" >/dev/null || fail "buffer: $out"
+grep -q 'wl-copy' "$FAKE_LOG" && fail 'a buffered capture copied'; ok
+out=$("$script" commit --copy yes --save yes)
+jq -e '.copied and (.file | startswith("'"$scratch"'/shots/"))' <<<"$out" >/dev/null || fail "commit: $out"
+[[ ! -e $scratch/ui-shell/shot-buffer.png ]] || fail 'the buffer was kept after commit'; ok
+"$script" commit 2>/dev/null && fail 'commit without a buffer'; ok
 
 echo '== refusals'
 for bad in 'screen' 'monitor:a;b' 'region:0x5+1+1' 'region:5x5+-1+1' 'window:../x'; do

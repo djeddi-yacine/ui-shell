@@ -17,6 +17,9 @@ The screenshot panel: choose a screen, a window or a region (the shared `Control
 - Saved defaults come from `ComponentSettings{component:"shot"}` (copyToClipboard, saveToFile).
 
 ## Side Effects
+- A window is captured through its own foreign-toplevel handle (`grim -T <Hyprland stableId>`), not a screen rectangle: right whatever workspace it is on or what covers it; no portal. [scripts/screen-shot:window_handle]
+- A picked region is taken at once (panel hidden) into a buffer (`capture --buffer yes`); the button then says Save and `commit` delivers it. `ShotRunner.buffer` holds it; leaving or reopening the panel discards it. [ShotPanel.qml:takeRegion]
+- Before grim runs, `screen-shot` waits (bounded) for the `ui-shell-shot` layer to leave `hyprctl layers`, then the configured delay, so the panel is not in the picture.
 - `Adapters.ShotRunner.capture` runs `scripts/screen-shot capture` once: grim writes the picture (to `<XDG Pictures>/screenshots` or a temporary file) and `wl-copy` copies it. No state file, no process outlives the call.
 
 ## Verification
