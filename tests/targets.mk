@@ -2,13 +2,14 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
+.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
 
 test-help:
 	@printf '%s\n' \
 		'Test environment (private HOME and XDG state):' \
 		'  test-env          THE interactive session: nested Hyprland with every feature on (wallpaper picker, launcher, tuning, audio on the HOST PipeWire, recording, Phantomat when built); private saved state. UI_SHELL_HOST_PIPEWIRE=0 keeps audio private.' \
 		'  test-import-themes Regenerate reference definitions in private themes; no profile/window' \
+		'  test-env-host     Run the shell on the REAL session (screen, audio, MPRIS, recorder) with all writes kept in .test-state/host; stop your own shell first.' \
 		'  test-env-snapshot Restart saved test state, capture diagnostics, then close' \
 		'  test-env-clean    Reset private choices/cache; keep all Theme definitions' \
 		'' \
@@ -61,6 +62,10 @@ test-env:
 
 test-import-themes:
 	@bash "$(TEST_RUNNER)" import-themes persistent
+
+# Real screen, audio, MPRIS and gpu-screen-recorder; only the files are private.
+test-env-host:
+	@bash "$(ROOT)/tests/scripts/host-session"
 
 test-env-snapshot:
 	@bash "$(TEST_RUNNER)" snapshot persistent

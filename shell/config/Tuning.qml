@@ -3,6 +3,8 @@ import QtQuick
 
 // The control-colour tuning panel: its own surface, like the launcher and the picker.
 QtObject {
+    // Spawn position: "center", "top" (under the bar) or "bottom".
+    readonly property string placement: Placement.defaultMode
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "control-tuning"
     readonly property bool asynchronousPanelLoad: true

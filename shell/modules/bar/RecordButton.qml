@@ -22,7 +22,7 @@ Controls.ShellButton {
     // While the pointer selection runs, every screen is covered by it: say what to do, here, where
     // the user is looking for a way out.
     text: Adapters.RecordState.picking ? qsTr("Drag a region · Esc cancels")
-        : !recording ? qsTr("Rec")
+        : !recording ? qsTr("Record")
         : Adapters.RecordState.state === "starting" ? (Adapters.RecordState.remaining > 0 ? "● " + Adapters.RecordState.remaining : "● …")
         : "● " + Adapters.RecordState.clock(Adapters.RecordState.elapsed)
     selected: recording || (Record.RecordPanelState.open && Record.RecordPanelState.screenName === screenName)

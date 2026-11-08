@@ -1,10 +1,11 @@
 # bar
 
 ## Overview
-Per-output top bar content: launcher button, wallpaper-picker button, Hyprland workspace buttons and the output name. No qmldir; imported by relative path.
+Per-output top bar content: a labelled button for every panel (Launcher, Wallpaper, Tuning, Audio, Screenshot, Record, Media; development scaffolding until the bar is designed), Hyprland workspace buttons and the output name. No qmldir; imported by relative path.
 
 ## Interface
 - `Bar`: `Item` with `screenName`, `inputState` [bar/Bar.qml:Bar]
+- `PanelButton`: labelled toggle for one panel (`panelState` with `open`, `screenName`, `show(output)`); used for Tuning, Audio and Screenshot [bar/PanelButton.qml]
 - `RecordButton`: bar entry for recording; idle opens the panel, while recording shows the elapsed time and a `PopupWindow` with the target and Stop [bar/RecordButton.qml]
 - `WorkspaceNumbers`: `RowLayout` with `screenName`, `style`, `inputState`, `monitor` (`HyprlandMonitor`) [bar/WorkspaceNumbers.qml:WorkspaceNumbers]
 

@@ -118,7 +118,7 @@ FocusScope {
         id: card
         width: Math.min(root.width - Config.Mpris.outerMargin * 2, Config.Mpris.panelSize)
         height: width
-        y: styleTokens.barHeight + Config.Mpris.outerMargin
+        y: Config.Placement.y(Config.Mpris.placement, root.height, card.height, styleTokens.barHeight, Config.Mpris.outerMargin)
         anchors.horizontalCenter: parent.horizontalCenter
         selection: MprisState.selection
         art: MprisState.art

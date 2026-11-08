@@ -148,7 +148,7 @@ FocusScope {
     Rectangle {
         id: card
         width: Math.min(root.width - Config.Shot.outerMargin * 2, Config.Shot.maximumWidth)
-        y: styleTokens.barHeight + Config.Shot.outerMargin
+        y: Config.Placement.y(Config.Shot.placement, root.height, card.height, styleTokens.barHeight, Config.Shot.outerMargin)
         height: layout.implicitHeight + Config.Shot.padding * 2
         anchors.horizontalCenter: parent.horizontalCenter
         color: styleTokens.pickerSurface

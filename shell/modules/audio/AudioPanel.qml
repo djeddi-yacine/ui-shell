@@ -176,9 +176,9 @@ FocusScope {
     Rectangle {
         id: card
         width: Math.min(root.width - Config.Audio.outerMargin * 2, Config.Audio.maximumWidth)
-        // Below the bar, never over it.
-        y: styleTokens.barHeight + Config.Audio.outerMargin
-        height: Math.min(root.height - y - Config.Audio.outerMargin, Config.Audio.maximumHeight)
+        y: Config.Placement.y(Config.Audio.placement, root.height, height, styleTokens.barHeight, Config.Audio.outerMargin)
+        // Fits under the bar whatever the placement.
+        height: Math.min(root.height - styleTokens.barHeight - Config.Audio.outerMargin * 2, Config.Audio.maximumHeight)
         anchors.horizontalCenter: parent.horizontalCenter
         color: styleTokens.pickerSurface
         radius: styleTokens.pickerRadius

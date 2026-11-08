@@ -3,6 +3,8 @@ import QtQuick
 
 // The audio control module: its own surface, like the launcher, picker and tuning panel.
 QtObject {
+    // Spawn position: "center", "top" (under the bar) or "bottom".
+    readonly property string placement: Placement.defaultMode
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "audio-control"
     // Popups are created with the panel; loading it after the first frame keeps the window layout stable.

@@ -157,13 +157,14 @@ FocusScope {
     }
     Rectangle {
         anchors.fill: parent
-        color: styleTokens.scrimColor(Config.AppLauncher.scrimOpacity)
+        color: styleTokens.scrimColor(Config.ContextPanels.scrimOpacity)
         MouseArea { anchors.fill: parent; onClicked: root.requestClose() }
     }
     Rectangle {
         id: card
         objectName: "appPanelCard"
-        anchors.centerIn: parent
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: Config.Placement.y(Config.AppLauncher.placement, parent.height, height, styleTokens.barHeight, Config.AppLauncher.outerMargin)
         width: Math.min(parent.width - Config.AppLauncher.outerMargin * 2, Config.AppLauncher.maximumWidth)
         height: Math.min(parent.height - Config.AppLauncher.outerMargin * 2,
             Config.AppLauncher.maximumHeight, panelLayout.implicitHeight + Config.AppLauncher.panelPadding * 2)

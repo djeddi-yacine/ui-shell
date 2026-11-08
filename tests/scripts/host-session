@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Runs the shell on the real session (real screen, audio, MPRIS, recorder) with every file it can
+# write kept in .test-state/host. The home directory is read-only inside the sandbox; the
+# desktop, its sockets, devices and processes are the real ones. Stop with Ctrl+C.
+# Limit: bwrap sets no-new-privileges, so gsr-kms-server loses its file capability and screen
+# recording comes out black (audio still works). Test recording on a normal session.
+set -euo pipefail
+umask 077
+project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+for dependency in bwrap qs jq; do
+  command -v "$dependency" >/dev/null || { printf 'Required dependency: %s\n' "$dependency" >&2; exit 1; }
+done
+[[ -n ${WAYLAND_DISPLAY-} && -n ${XDG_RUNTIME_DIR-} ]] || { printf '%s\n' 'Run this from the desktop session.' >&2; exit 1; }
+
+# Two shells would fight over the same layers, global shortcuts and notification name.
+if running=$(pgrep -af '^(qs|quickshell) ' | rg -i 'ui-shell|--path' | head -n 1) && [[ -n $running ]]; then
+  printf 'A shell is already running; stop it first:\n  %s\n' "$running" >&2
+  exit 1
+fi
+
+state=$project_root/.test-state/host
+mkdir -p -m 0700 -- "$state"/{config,cache,data,state,videos,pictures}
+config=$state/config
+# Recordings and screenshots follow the user directories; point them at the private state.
+printf 'XDG_VIDEOS_DIR="%s"\nXDG_PICTURES_DIR="%s"\n' "$state/videos" "$state/pictures" >"$config/user-dirs.dirs"
+
+args=(--bind / / --dev-bind /dev /dev --ro-bind "$HOME" "$HOME" --bind "$state" "$state"
+  --setenv XDG_CONFIG_HOME "$config" --setenv XDG_CACHE_HOME "$state/cache"
+  --setenv XDG_DATA_HOME "$state/data" --setenv XDG_STATE_HOME "$state/state"
+  --setenv UI_SHELL_ROOT "$project_root"
+  # The real polkit agent keeps the desktop; set UI_SHELL_AUTH_AGENT=1 to test the dialog for real.
+  --setenv UI_SHELL_AUTH_AGENT "${UI_SHELL_AUTH_AGENT:-0}"
+  --die-with-parent --chdir "$project_root")
+for name in $(compgen -e | rg '^UI_SHELL_(OPEN|RECORD|AUDIO|SHOT|MPRIS)_'); do
+  args+=(--setenv "$name" "${!name}")
+done
+
+# Fresh code every run; saved choices in the private config survive.
+bwrap "${args[@]}" -- bash -c '
+  set -euo pipefail
+  root=$UI_SHELL_ROOT
+  dest=$XDG_CONFIG_HOME/ui-shell
+  bash "$root/tools/scripts/stage-config" "$root" "$dest"
+  resolved=$(mktemp "$XDG_CACHE_HOME/.ui-shell-paths.XXXXXX")
+  bash "$dest/scripts/read-shell-config" "$dest/config.ini" "$dest/scripts/read-ini" >"$resolved"
+  export UI_SHELL_RUNTIME
+  UI_SHELL_RUNTIME=$(bash "$dest/scripts/prepare-runtime" "$resolved")
+  rm -f -- "$resolved"
+  printf "Host session. Private state: %s\n" "${XDG_CONFIG_HOME%/config}"
+  exec qs --no-duplicate --path "$(jq -er ".paths.quickshell" "$UI_SHELL_RUNTIME")"
+'

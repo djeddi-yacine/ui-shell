@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [screen-recording, gsr, features]
 created: "2026-11-06T03:24:53"
-updated: "2026-11-06T12:08:33"
+updated: "2026-11-08T04:43:17"
 ---
 
 <!-- compiled_truth -->
@@ -131,4 +131,9 @@ updated: "2026-11-06T12:08:33"
   kind: decision
   summary: "Committed and pushed: all five phases (recording targets, audio/mic/webcam pickers, codec/bitrate/container options, countdown, webcam overlay, screenshots) plus the shared work done along the way (settings popup for N options, unified hover rules, no-literals token rule, exit dialog, picker/popup surface tokens). Defaults: mkv, opus, <XDG Videos>/records, <XDG Pictures>/screenshots. Known gaps: real camera untested (none on the dev machine), gsr cannot record the nested test session, device picks are per session (the settings file holds no device ids), free-form bitrate and save-folder options not offered."
   source: user 2026-11-06
+  affects: [screen-capture-module]
+
+- time: 2026-11-08T04:43:17
+  kind: decision
+  summary: "Black recordings under make test-env-host are expected: bwrap sets no-new-privileges so gsr-kms-server loses cap_sys_admin and KMS capture fails (drmfb handle is NULL); audio still works. Verified with setpriv --no-new-privs. Decision: keep the sandbox, document the limit; test recording on a normal session."
   affects: [screen-capture-module]

@@ -5,8 +5,7 @@ import "../../components" as Controls
 import "../../config" as Config
 import "../../theme" as Theme
 
-// The control-colour tuning panel: a card docked at the bottom edge so the bar
-// and everything above it stay visible while sliders and modes preview live.
+// The control-colour tuning panel: a card on a dimmed backdrop, placed by Config.Placement.
 FocusScope {
     id: root
     required property string screenName
@@ -80,12 +79,17 @@ FocusScope {
     }
 
     Rectangle {
+        anchors.fill: parent
+        color: styleTokens.scrimColor(Config.ContextPanels.scrimOpacity)
+        // Same rule as Esc: unsaved tuning asks first.
+        MouseArea { anchors.fill: parent; onClicked: exit.request(editor.dirty, null) }
+    }
+    Rectangle {
         id: card
         width: Math.min(root.width - Config.Tuning.outerMargin * 2, Config.Tuning.maximumWidth)
         height: editor.implicitHeight + Config.ContextPanels.padding * 2
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: Config.Tuning.outerMargin
+        y: Config.Placement.y(Config.Tuning.placement, root.height, card.height, styleTokens.barHeight, Config.Tuning.outerMargin)
         color: styleTokens.pickerSurface
         radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth

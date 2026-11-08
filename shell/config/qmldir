@@ -5,6 +5,7 @@ singleton Keyboard 1.0 Keyboard.qml
 singleton ContextPanels 1.0 ContextPanels.qml
 singleton ErrorPanels 1.0 ErrorPanels.qml
 singleton Tuning 1.0 Tuning.qml
+singleton Placement 1.0 Placement.qml
 singleton Audio 1.0 Audio.qml
 singleton Record 1.0 Record.qml
 singleton Shot 1.0 Shot.qml

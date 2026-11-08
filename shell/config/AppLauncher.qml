@@ -2,6 +2,8 @@ pragma Singleton
 import QtQuick
 
 QtObject {
+    // Spawn position: "center", "top" (under the bar) or "bottom".
+    readonly property string placement: Placement.defaultMode
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "app-launcher"
     readonly property string runnerExecutable: "app2unit"
@@ -27,7 +29,6 @@ QtObject {
     readonly property int rowContentSpacing: 8
     readonly property int iconSize: 24
     readonly property int launchIndicatorSize: 8
-    readonly property real scrimOpacity: 0.40
     readonly property int previousKey: Qt.Key_Up
     readonly property int nextKey: Qt.Key_Down
     readonly property int previousPageKey: Qt.Key_PageUp

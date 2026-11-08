@@ -6,7 +6,7 @@ Bottom-docked overlay card for live-previewing control colour/behaviour modes an
 ## Interface
 - `TuningState` singleton: `open`, `screenName`, `show(output)` [tuning/TuningState.qml:TuningState]
 - `TuningShortcut`: `GlobalShortcut` (`Config.Tuning.shortcutAppId`/`shortcutName`) that toggles `TuningState.open` [tuning/TuningShortcut.qml:onPressed]
-- `TuningSurface`: per-screen `PanelWindow`; `mask` restricts input to `panel.cardItem` [tuning/TuningSurface.qml:mask]
+- `TuningSurface`: per-screen `PanelWindow`; full-output, no input mask; a click on the backdrop leaves like Esc (asks first when dirty) [tuning/TuningPanel.qml:TuningPanel]
 - `TuningPanel`: `cardItem`, `closed()`, `activate()`, `requestClose()`, `showContext(kind)` [tuning/TuningPanel.qml:TuningPanel]
 
 ## Invariants

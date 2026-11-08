@@ -278,7 +278,7 @@ FocusScope {
 
     Rectangle {
         anchors.fill: parent
-        color: styleTokens.scrimColor(ShellConfig.WallpaperPicker.scrimOpacity)
+        color: styleTokens.scrimColor(ShellConfig.ContextPanels.scrimOpacity)
 
         MouseArea {
             anchors.fill: parent
@@ -294,7 +294,8 @@ FocusScope {
         height: Math.min(parent.height - styleTokens.spacing * ShellConfig.WallpaperPicker.outerSpacingUnits,
             ShellConfig.WallpaperPicker.maximumHeight,
             panelLayout.implicitHeight + styleTokens.spacing * ShellConfig.WallpaperPicker.innerSpacingUnits * 2)
-        anchors.centerIn: parent
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: ShellConfig.Placement.y(ShellConfig.WallpaperPicker.placement, parent.height, height, styleTokens.barHeight, styleTokens.spacing * ShellConfig.WallpaperPicker.outerSpacingUnits / 2)
         color: styleTokens.pickerSurface
         radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth

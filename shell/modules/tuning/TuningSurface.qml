@@ -5,9 +5,8 @@ import Quickshell.Wayland
 import "../../components" as Controls
 import "../../config" as Config
 
-// Full-output overlay that only the panel card occupies: the mask lets every
-// pointer event outside the card reach the shell underneath, so the live
-// preview of bar, picker and launcher stays visible and usable.
+// Full-output overlay like the other pickers: the dimmed backdrop takes the
+// pointer, and a click on it leaves the same way Esc does.
 PanelWindow {
     id: root
     required property var modelData
@@ -19,7 +18,6 @@ PanelWindow {
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     anchors { top: true; bottom: true; left: true; right: true }
-    mask: Region { item: root.panel ? root.panel.cardItem : null }
     WlrLayershell.namespace: "ui-shell-control-tuning"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None

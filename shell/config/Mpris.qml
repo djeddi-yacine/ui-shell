@@ -4,12 +4,14 @@ import QtQuick
 // The media control: a bar icon, a panel and the media keys. Every value the module uses is
 // here; components hold no literals.
 QtObject {
+    // Spawn position: "center", "top" (under the bar) or "bottom".
+    readonly property string placement: Placement.defaultMode
     readonly property string namespace: "ui-shell-mpris"
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "media-panel"
     readonly property bool asynchronousPanelLoad: true
     // The bar icon: always, whenPlayer (at least one player exists) or never.
-    readonly property string iconVisibility: "whenPlayer"
+    readonly property string iconVisibility: "always"
 
     // Panel
     // The panel is a square: its width and height are both this many pixels (less on a narrow screen).

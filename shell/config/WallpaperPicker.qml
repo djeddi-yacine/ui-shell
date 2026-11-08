@@ -2,6 +2,8 @@ pragma Singleton
 import QtQuick
 
 QtObject {
+    // Spawn position: "center", "top" (under the bar) or "bottom".
+    readonly property string placement: Placement.defaultMode
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "wallpaper-picker"
     // Lazy first load; retain the existing controls/previews for instant reopens.
@@ -32,5 +34,4 @@ QtObject {
     readonly property int tileLabelGap: 4
     readonly property int statusMarkerSize: 4
     readonly property int actionWidth: 160
-    readonly property real scrimOpacity: 0.64
 }

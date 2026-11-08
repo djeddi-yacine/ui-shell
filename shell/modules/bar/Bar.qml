@@ -6,6 +6,9 @@ import "../../theme" as Theme
 import "../wallpaper" as Wallpaper
 import "../../components" as Controls
 import "../apps" as Apps
+import "../tuning" as Tuning
+import "../audio" as Audio
+import "../shot" as Shot
 
 Item {
     id: root
@@ -44,7 +47,7 @@ Item {
                 inputState: root.inputState
                 emphasis: Theme.Interaction.barEntryEmphasis
                 Layout.fillHeight: true
-                text: qsTr("Apps")
+                text: qsTr("Launcher")
                 selected: Apps.AppState.open && Apps.AppState.screenName === root.screenName
                 onClicked: Apps.AppState.show(root.screenName)
             }
@@ -53,7 +56,7 @@ Item {
                 inputState: root.inputState
                 emphasis: Theme.Interaction.barEntryEmphasis
                 Layout.fillHeight: true
-                text: ShellConfig.Config.barLabel
+                text: qsTr("Wallpaper")
                 selected: Wallpaper.PickerState.open && Wallpaper.PickerState.screenName === root.screenName
                 Accessible.name: qsTr("Open wallpaper picker")
                 onClicked: {
@@ -61,6 +64,36 @@ Item {
                     Wallpaper.PickerState.targetOutput = root.screenName
                     Wallpaper.PickerState.open = true
                 }
+            }
+
+            PanelButton {
+                visible: ShellConfig.Config.controlTuningEnabled
+                text: qsTr("Tuning")
+                panelState: Tuning.TuningState
+                screenName: root.screenName
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
+            PanelButton {
+                visible: ShellConfig.Config.audioControlEnabled
+                text: qsTr("Audio")
+                panelState: Audio.AudioState
+                screenName: root.screenName
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
+            PanelButton {
+                visible: ShellConfig.Config.screenShotEnabled
+                text: qsTr("Screenshot")
+                panelState: Shot.ShotPanelState
+                screenName: root.screenName
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
             }
 
             RecordButton {

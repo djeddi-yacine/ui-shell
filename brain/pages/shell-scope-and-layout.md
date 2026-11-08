@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [scope, quickshell, hyprland, qml, lua, bash]
 created: "2026-09-30T19:32:35"
-updated: "2026-11-08T03:42:11"
+updated: "2026-11-08T04:32:38"
 ---
 
 <!-- compiled_truth -->
@@ -72,4 +72,15 @@ The shell should stay smooth, small, and composable. QML owns composition and pr
   kind: decision
   summary: "Panel mutual exclusion is one owner: shell/modules/panels PanelGroup lists the panel states that may not be open together (shell.qml). It replaced seven hand-written Connections blocks that had drifted (tuning and audio did not close the picker or launcher). Coexistence is a separate group, not a per-panel flag. Tuning's exit dialog asks on editor.dirty (differs from what the panel opened with), not on differing from the mode preset."
   source: chat
+  affects: [shell-scope-and-layout]
+
+- time: 2026-11-08T04:27:08
+  kind: decision
+  summary: "Bar design is deferred to last. Until then the bar is development scaffolding: one labelled text button per panel (Launcher, Wallpaper, Tuning, Audio, Screenshot, Record, Media), then the workspace numbers, so every panel can be opened by mouse on the host. Mpris bar entry is always visible."
+  source: chat
+  affects: [shell-scope-and-layout]
+
+- time: 2026-11-08T04:32:38
+  kind: decision
+  summary: "Panels spawn centered by default via one shared rule (config/Placement.qml); each panel config has its own 'placement' (center|top|bottom) so any panel moves independently. Replaces ad-hoc per-panel positions."
   affects: [shell-scope-and-layout]

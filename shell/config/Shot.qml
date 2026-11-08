@@ -3,6 +3,8 @@ import QtQuick
 
 // The screenshot module: its own surface, like the recording panel.
 QtObject {
+    // Spawn position: "center", "top" (under the bar) or "bottom".
+    readonly property string placement: Placement.defaultMode
     readonly property string shortcutAppId: "ui-shell"
     readonly property string shortcutName: "screen-shot"
     readonly property bool asynchronousPanelLoad: true
