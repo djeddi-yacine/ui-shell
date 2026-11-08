@@ -1,0 +1,2 @@
+module UiShell.Panels
+PanelGroup 1.0 PanelGroup.qml

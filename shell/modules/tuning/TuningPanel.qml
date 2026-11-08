@@ -17,6 +17,8 @@ FocusScope {
     function activate() {
         editor.begin()
         motion.enter()
+        // The window is not yet active here, so focus the first control once it is.
+        Qt.callLater(editor.focusFirst)
     }
     function requestClose() {
         editor.discard()
@@ -45,7 +47,7 @@ FocusScope {
             return
         }
         // Esc leaves; with unsaved tuning it asks first, and a second Esc confirms.
-        if (event.key === Config.Keyboard.cancelKey) { exit.request(editor.modified, root.Window.window ? root.Window.window.activeFocusItem : null); event.accepted = true }
+        if (event.key === Config.Keyboard.cancelKey) { exit.request(editor.dirty, root.Window.window ? root.Window.window.activeFocusItem : null); event.accepted = true }
     }
     Component.onCompleted: { if (visible) activate() }
     Theme.MonitorStyle { id: styleTokens; palette: Theme.ActivePalettes.forOutput(root.screenName) }

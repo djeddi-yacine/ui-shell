@@ -2,6 +2,7 @@
 -- framework: edit named values here when your hardware or preferred apps change.
 return {
   main_mod = "SUPER",
+  mouse_mod = "SUPER", -- Mouse binds need a real modifier, never a key.
   layout_mod = "SUPER",
   -- Complete modifier families/chords, never suffixes appended to main_mod.
   action_mod = "SUPER + SHIFT",
@@ -52,7 +53,7 @@ return {
   keyboard = {
     layouts = "us,ara",
     variants = ",qwerty",
-    options = "grp:alt_shift_toggle,compose:menu",
+    options = "grp:alt_caps_toggle,compose:menu",
   },
 
   -- Opt-in native plugin. Canvas replaces workspace/layout/group controls;

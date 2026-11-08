@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [scope, quickshell, hyprland, qml, lua, bash]
 created: "2026-09-30T19:32:35"
-updated: "2026-11-05T06:41:24"
+updated: "2026-11-08T03:42:11"
 ---
 
 <!-- compiled_truth -->
@@ -66,4 +66,10 @@ The shell should stay smooth, small, and composable. QML owns composition and pr
   kind: decision
   summary: "Tuning is the third shell module beside launcher and wallpaper picker (modules/tuning, SUPER+T, layer ui-shell-control-tuning, click-through mask). scripts/control-model/ holds the model data inside scripts/ because stage-config installs scripts/ whole and the renderer runs from the installed copy; a top-level model/ dir is the cleaner future home. Verification runs foreground, one target at a time."
   source: session decisions 2026-11-05
+  affects: [shell-scope-and-layout]
+
+- time: 2026-11-08T03:42:11
+  kind: decision
+  summary: "Panel mutual exclusion is one owner: shell/modules/panels PanelGroup lists the panel states that may not be open together (shell.qml). It replaced seven hand-written Connections blocks that had drifted (tuning and audio did not close the picker or launcher). Coexistence is a separate group, not a per-panel flag. Tuning's exit dialog asks on editor.dirty (differs from what the panel opened with), not on differing from the mode preset."
+  source: chat
   affects: [shell-scope-and-layout]

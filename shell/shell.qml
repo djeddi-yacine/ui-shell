@@ -15,6 +15,7 @@ import "modules/record" as Record
 import "modules/shot" as Shot
 import "modules/auth" as Auth
 import "modules/mpris" as Mpris
+import "modules/panels" as Panels
 import "adapters" as Adapters
 import "config" as Config
 
@@ -60,33 +61,12 @@ ShellRoot {
     // The authentication dialog is modal: it appears over whatever is open and is not part of
     // the panel mutual exclusion below.
     Auth.AuthSurface {}
-    Connections {
-        target: Record.RecordPanelState
-        function onOpenChanged() { if (Record.RecordPanelState.open) { Wallpaper.PickerState.open = false; Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Shot.ShotPanelState.open = false; Mpris.MprisState.open = false } }
-    }
-    Connections {
-        target: Shot.ShotPanelState
-        function onOpenChanged() { if (Shot.ShotPanelState.open) { Wallpaper.PickerState.open = false; Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false; Mpris.MprisState.open = false } }
-    }
-    Connections {
-        target: Tuning.TuningState
-        function onOpenChanged() { if (Tuning.TuningState.open) { Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false; Mpris.MprisState.open = false } }
-    }
-    Connections {
-        target: Audio.AudioState
-        function onOpenChanged() { if (Audio.AudioState.open) { Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false; Mpris.MprisState.open = false } }
-    }
-    Connections {
-        target: Apps.AppState
-        function onOpenChanged() { if (Apps.AppState.open) { Wallpaper.PickerState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false; Mpris.MprisState.open = false } }
-    }
-    Connections {
-        target: Wallpaper.PickerState
-        function onOpenChanged() { if (Wallpaper.PickerState.open) { Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false; Mpris.MprisState.open = false } }
-    }
-    Connections {
-        target: Mpris.MprisState
-        function onOpenChanged() { if (Mpris.MprisState.open) { Wallpaper.PickerState.open = false; Apps.AppState.open = false; Tuning.TuningState.open = false; Audio.AudioState.open = false; Record.RecordPanelState.open = false; Shot.ShotPanelState.open = false } }
+    // Only one of these panels is open at a time; opening one closes the others.
+    Panels.PanelGroup {
+        panels: [
+            Record.RecordPanelState, Shot.ShotPanelState, Tuning.TuningState, Audio.AudioState,
+            Apps.AppState, Wallpaper.PickerState, Mpris.MprisState
+        ]
     }
 
     Variants {

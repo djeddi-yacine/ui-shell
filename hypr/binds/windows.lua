@@ -6,8 +6,8 @@ hl.bind(mod .. " + L", hl.dsp.exec_cmd(profile.commands.lock), { description = "
 
 hl.bind(profile.action_mod .. " + X", hl.dsp.window.close(), { description = "Close window" })
 hl.bind(mod .. " + F", hl.dsp.window.fullscreen({ mode = "fullscreen" }), { description = "Toggle fullscreen" })
-hl.bind(mod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true, description = "Move window" })
-hl.bind(mod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true, description = "Resize window" })
+hl.bind(profile.mouse_mod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true, description = "Move window" })
+hl.bind(profile.mouse_mod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true, description = "Resize window" })
 
 -- Persistent canvas owns positioning, focus, fill and pinning. Do not also
 -- register normal floating/tiling actions on the same keys.

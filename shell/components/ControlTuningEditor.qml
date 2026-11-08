@@ -39,6 +39,12 @@ ColumnLayout {
     }
     readonly property var preset: Theme.ControlTuning.presetValues(draftMode)
     readonly property bool modified: schema.some(knob => draft[knob.key] !== undefined && draft[knob.key] !== preset[knob.key])
+    // What the panel opened with. Leaving asks only when the draft differs from this: a
+    // slider or a mode change is unsaved work, even when the result matches a preset.
+    property string startMode: ""
+    property var startDraft: ({})
+    readonly property bool dirty: draftMode !== startMode
+        || schema.some(knob => draft[knob.key] !== startDraft[knob.key])
     readonly property ShellButton primaryAction: saveButton
     signal saved()
     signal dismissed()
@@ -49,8 +55,10 @@ ColumnLayout {
         Theme.ControlTuning.draftMode = ""
         draft = Object.assign({}, Theme.ControlTuning.defaults, Theme.ControlTuning.overrides)
         Theme.ControlTuning.draft = ({})
-        firstSlider.forceActiveFocus()
+        startMode = draftMode
+        startDraft = draft
     }
+    function focusFirst() { firstSlider.forceActiveFocus() }
     function setValue(knob, value) {
         const rounded = Math.round(value / knob.step) * knob.step
         const next = Object.assign({}, draft)

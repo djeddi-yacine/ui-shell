@@ -100,6 +100,22 @@ Item {
             compare(Object.keys(Theme.ControlTuning.draft).length, 0, "closing drops the unsaved draft")
         }
 
+        function test_leavingAsksWhenASliderOrModeChanged() {
+            const editor = createTemporaryObject(editorComponent, root)
+            editor.begin()
+            verify(!editor.dirty, "nothing changed yet")
+            const knob = Theme.ControlTuning.schema.find(entry => entry.key === "hoverLayer")
+            editor.setValue(knob, 0.2)
+            verify(editor.dirty, "a moved slider is unsaved work")
+            editor.setValue(knob, Theme.ControlTuning.defaults.hoverLayer)
+            verify(!editor.dirty, "back to the start is not unsaved work")
+            const other = Theme.ControlTuning.modes.find(entry => entry.key !== editor.draftMode)
+            editor.applyMode(other.key)
+            verify(editor.dirty, "a mode change is unsaved work even though it matches a preset")
+            verify(!editor.modified, "the preset comparison alone would not have asked")
+            editor.discard()
+        }
+
         function test_savesEditorPicture() {
             const editor = createTemporaryObject(editorComponent, root, { x: 10, y: 10 })
             editor.begin()
