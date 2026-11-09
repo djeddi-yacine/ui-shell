@@ -24,6 +24,10 @@ QtObject {
     readonly property real panelEnterScale: 0.96
     readonly property real panelExitScale: 0.98
     readonly property real panelEnterOpacity: 0
+    // A filtered list: rows that stay slide to their new place, new rows fade in, dropped rows fade out.
+    readonly property int listMoveDuration: 200
+    readonly property int listFadeDuration: 100
+    readonly property int listMoveEasing: Easing.OutCubic
     readonly property int launchPulseDuration: 360
     readonly property int launchPulseEasing: Easing.InOutSine
     readonly property real launchPulseMinimumOpacity: 0.85

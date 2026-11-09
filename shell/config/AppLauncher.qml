@@ -24,7 +24,7 @@ QtObject {
     readonly property int sectionSpacing: 8
     readonly property int visibleRows: 12
     readonly property int rowHeight: 32
-    readonly property int rowSpacing: 6
+    readonly property int rowSpacing: 0
     readonly property int rowPaddingY: 4
     readonly property int rowContentSpacing: 8
     readonly property int iconSize: 24

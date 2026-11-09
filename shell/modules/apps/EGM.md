@@ -30,3 +30,5 @@ Overlay application launcher: a per-output layer-shell surface hosting a searcha
 
 ## Verification
 - Run: `make test-qml`
+
+- Search results animate: the list model is a `ScriptModel` over `AppCatalog.results(query)`, which diffs by identity so rows that stay slide to their new place and new or dropped rows fade (technique from refs/nixnew launcher). Rows are not pooled (`reuseItems: false`); durations are `Theme.Motion.list*`.

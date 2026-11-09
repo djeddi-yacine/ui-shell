@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [shell, launcher, devices]
 created: "2026-10-05T01:31:52"
-updated: "2026-10-27T03:30:58"
+updated: "2026-11-09T02:30:20"
 ---
 
 <!-- compiled_truth -->
@@ -77,3 +77,8 @@ make test-app-launch has passed a real nested GUI launch through the unchanged p
   summary: Resolve app2unit from PATH and keep hardware output defaults empty
   source: "Implemented default seed and staging migration, 2026-10-27"
   affects: [application-launcher-boundary, shipped-default-seed]
+
+- time: 2026-11-09T02:30:20
+  kind: decision
+  summary: "App search results animate via ScriptModel (identity diff) plus add/move/displaced/remove transitions (Theme.Motion.list*), as in refs/nixnew; rows are not pooled."
+  affects: [application-launcher-boundary]

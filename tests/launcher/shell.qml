@@ -40,6 +40,11 @@ ShellRoot {
     property var runnerInterruptedFocus: null
     property string settingsReader: ""
     property bool tickRunning: false
+    property bool filterMotionDone: false
+    property int filterStep: 0
+    property int filterTicks: 0
+    property double filterLastChange: 0
+    readonly property var filterQueries: ["e", "ei", "e", "", "zq", "", "a", "ab", "a", ""]
     function nextPhase(name) {
         phase = name
         deadline = Date.now() + 30000
@@ -147,7 +152,7 @@ ShellRoot {
                 }
                 const panel = surface.panel
                 if (!panel || panel.width <= 0
-                    || (panel.matches.length === 0 && root.phase !== "search-empty")) return
+                    || (panel.matches.length === 0 && root.phase !== "search-empty" && root.phase !== "filter-motion")) return
                 if (root.phase === "ready") {
                     if (!panel.componentSettings.ready || panel.componentSettings.loading) return
                     const search = root.find(panel, "appSearchInput")
@@ -156,6 +161,7 @@ ShellRoot {
                     root.check(panel.componentSettings.showIcons === true && panel.componentSettings.visibleRows === 12,
                         "initial launcher settings did not retain static icons-on/12-row defaults")
                     root.check(panel.pageSize >= 10, "launcher still shows too few complete rows: " + panel.pageSize)
+                    if (!root.filterMotionDone) { root.nextPhase("filter-motion"); return }
                     if (!root.searchCandidateChecked) {
                         search.text = "ui-shell-no-matching-app"
                         root.nextPhase("search-empty")
@@ -276,6 +282,39 @@ ShellRoot {
                         root.nextPhase("capture")
                         poll.interval = 200
                     }
+                    return
+                }
+                if (root.phase === "filter-motion") {
+                    // Change the query faster than the 200 ms row transitions finish, then let it settle.
+                    const search = root.find(panel, "appSearchInput")
+                    const list = panel.applicationView
+                    root.check(search.activeFocus && !list.activeFocus, "filtering mid-transition moved focus away from search")
+                    root.check(panel.selectedIndex === (panel.matches.length ? 0 : -1), "filtering mid-transition left a stale candidate")
+                    if (root.filterStep < root.filterQueries.length) {
+                        if (++root.filterTicks < 3) return
+                        root.filterTicks = 0
+                        search.text = root.filterQueries[root.filterStep++]
+                        root.filterLastChange = Date.now()
+                        return
+                    }
+                    if (Date.now() - root.filterLastChange < 700) return
+                    root.check(list.count === panel.matches.length, "list count differs from the matches after settling")
+                    let rows = 0
+                    for (let index = 0; index < list.count; index++) {
+                        const row = list.itemAtIndex(index)
+                        if (!row) continue
+                        root.check(row.index === index && row.entry === panel.matches[index], "row " + index + " shows the wrong entry after settling")
+                        root.check(Math.abs(row.y - index * (row.height + list.spacing)) < 0.5, "row " + index + " did not settle in place: y=" + row.y)
+                        root.check(row.opacity === 1, "row " + index + " stayed faded: " + row.opacity)
+                        rows++
+                    }
+                    // Off-screen delegates may linger in the view's cache; stale means a duplicate or out-of-range row.
+                    const children = list.contentItem.children.filter(child => child.objectName === "appEntryRow")
+                    const seen = children.map(child => child.index)
+                    root.check(seen.every((value, at) => value >= 0 && value < list.count && seen.indexOf(value) === at), "stale rows left in the list: " + JSON.stringify(seen))
+                    root.check(panel.selectedIndex === (panel.matches.length ? 0 : -1) && panel.query === "", "settled list lost its candidate or query")
+                    root.filterMotionDone = true
+                    root.nextPhase("ready")
                     return
                 }
                 if (root.phase === "search-empty") {

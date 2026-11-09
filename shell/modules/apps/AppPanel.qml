@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
+import Quickshell
 import "../../components" as Controls
 import "../../theme" as Theme
 import "../../config" as Config
@@ -205,15 +206,29 @@ FocusScope {
                     - Config.AppLauncher.rowSpacing
                 clip: true
                 spacing: Config.AppLauncher.rowSpacing
-                model: root.matches
+                // ScriptModel diffs the new results against the old by identity, so the view
+                // animates what changed (rows slide, fade in or out) instead of being rebuilt.
+                model: ScriptModel { values: root.matches }
                 enabled: !root.busy
                 activeFocusOnTab: true
-                currentIndex: root.selectedIndex
                 keyNavigationEnabled: false
                 KeyNavigation.priority: KeyNavigation.AfterItem
                 KeyNavigation.tab: search
                 KeyNavigation.backtab: search
-                reuseItems: true
+                // Pooled rows would jump instead of animating, so rows are not reused.
+                reuseItems: false
+                add: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.Motion.active ? Theme.Motion.listFadeDuration : 0 } }
+                displaced: Transition {
+                    NumberAnimation { property: "y"; duration: Theme.Motion.active ? Theme.Motion.listMoveDuration : 0; easing.type: Theme.Motion.listMoveEasing }
+                    NumberAnimation { property: "opacity"; to: 1; duration: Theme.Motion.active ? Theme.Motion.listFadeDuration : 0 }
+                }
+                move: Transition {
+                    NumberAnimation { property: "y"; duration: Theme.Motion.active ? Theme.Motion.listMoveDuration : 0; easing.type: Theme.Motion.listMoveEasing }
+                    NumberAnimation { property: "opacity"; to: 1; duration: Theme.Motion.active ? Theme.Motion.listFadeDuration : 0 }
+                }
+                remove: Transition {
+                    NumberAnimation { property: "opacity"; to: 0; duration: Theme.Motion.active ? Theme.Motion.listFadeDuration : 0 }
+                }
                 highlightMoveDuration: 0
                 Keys.priority: Keys.BeforeItem
                 Keys.onPressed: event => root.handleKey(event)
