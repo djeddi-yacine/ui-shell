@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [theme, profiles, qml, composition]
 created: "2026-10-07T19:20:31"
-updated: "2026-11-05T02:25:46"
+updated: "2026-11-09T01:50:10"
 ---
 
 <!-- compiled_truth -->
@@ -248,3 +248,8 @@ The old latest-wiki single-gradient-plus-focus assumption was insufficient on 0.
   summary: "Theme editor failure contract: a Source that fails to load keeps the combo highlighted on that candidate (failedCandidateId) so keyboard navigation moves on instead of snapping back; the draft colours, name and source label stay the last valid ones; Save is disabled until a source loads (sourceUnavailable). The failure popup now names the theme definition that failed (Theme definition: <path>), not just the output. Root cause of the reported error: the persistent nested state kept a schema-1 single-section themes/default/config.ini because stage-defaults never rewrites and test-env-clean deliberately preserves every definition; it was backed up and re-seeded from default/theme.ini through stage-defaults, and all 501 saved definitions now pass normalize-custom-colors."
   source: "keyboard arrow error report, 2026-11-05"
   affects: [theme-profile-bundles, isolated-nested-test-environment]
+
+- time: 2026-11-09T01:50:10
+  kind: decision
+  summary: "The 500 100-themes palettes are bundled in-repo (bundled-themes/, credited to bjarneo in CREDITS.md) and seeded by stage-defaults when absent; import-reference-themes/dev-bundle-themes are maintainer automation only, not run at test time."
+  affects: [theme-profile-bundles]

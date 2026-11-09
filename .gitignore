@@ -17,6 +17,8 @@
 
 !/brain/
 !/brain/**
+!/bundled-themes/
+!/bundled-themes/**
 !/default/
 !/default/**
 !/docs/

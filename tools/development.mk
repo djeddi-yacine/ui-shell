@@ -13,7 +13,7 @@ REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: refs-pull dev-help dev-stage dev-configure dev-import-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: refs-pull dev-help dev-stage dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
 
 dev-help:
 	@printf '%s\n' \
@@ -22,6 +22,7 @@ dev-help:
 		'  dev-stage             Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
 		'  dev-import-themes     Regenerate reference definitions; explicit POSITIVE/WARNING/NEGATIVE required' \
+		'  dev-bundle-themes     Maintainers: import, then refresh the checked-in bundled-themes/ (credit in CREDITS.md)' \
 		'  dev-lint              Check source QML (override QMLLINT explicitly)' \
 		'  dev-verify-hypr       Validate the staged production Hyprland config' \
 		'  dev-build-phantomat   Build the reference plugin' \
@@ -52,6 +53,9 @@ dev-configure: dev-stage
 	"$(RUNTIME_PREPARER)" "$$resolved" >"$(RUNTIME_FILE)"
 
 # Terminal slots are not automatically semantic status colors.
+dev-bundle-themes: dev-import-themes
+	@bash "$(ROOT)/tools/scripts/bundle-reference-themes" "$(CONFIG_ROOT)/themes" "$(ROOT)/refs/100-themes" "$(ROOT)/bundled-themes"
+
 dev-import-themes: dev-stage
 	@test -n "$(POSITIVE)" -a -n "$(WARNING)" -a -n "$(NEGATIVE)" || { printf '%s\n' 'Set POSITIVE, WARNING and NEGATIVE explicitly.' >&2; exit 2; }
 	@mkdir -p "$(ROOT)/.build"

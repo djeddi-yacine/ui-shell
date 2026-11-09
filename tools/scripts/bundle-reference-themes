@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Maintainer automation only: copy the generated reference Themes into the checked-in
+# bundled-themes/ store. The bundle is part of the shell; runtime never calls this.
+set -euo pipefail
+(( $# == 3 )) || { printf '%s\n' 'Usage: bundle-reference-themes GENERATED_THEMES REFERENCE_ROOT BUNDLE_DIRECTORY' >&2; exit 2; }
+generated=$(realpath -e -- "$1") reference=$(realpath -e -- "$2") bundle=$(realpath -m -- "$3")
+count=0
+for variant in "$reference"/*/*/colors.toml; do
+  [[ -e $variant ]] || continue
+  directory=${variant%/colors.toml}
+  id=$(basename -- "$(dirname -- "$directory")")-$(basename -- "$directory")
+  [[ -f $generated/$id/config.ini ]] || { printf 'Bundle: %s was not generated\n' "$id" >&2; exit 1; }
+  mkdir -p -- "$bundle/$id"
+  cp -- "$generated/$id/config.ini" "$bundle/$id/config.ini"
+  count=$((count + 1))
+done
+(( count > 0 )) || { printf '%s\n' 'Bundle: no reference themes found' >&2; exit 1; }
+printf 'Bundled %d reference themes into %s\n' "$count" "$bundle"

@@ -34,3 +34,12 @@ if [[ ! -e $profile ]]; then
   mkdir -p -- "${profile%/*}"
   cp -- "$source_default/profile.ini" "$profile"
 fi
+# Bundled reference Themes ship with the shell; add the missing ones, never touch existing ones.
+if [[ -d $source_root/bundled-themes ]]; then
+  while IFS= read -r -d '' bundled; do
+    id=${bundled%/config.ini}; id=${id##*/}
+    [[ -e $destination/themes/$id/config.ini ]] && continue
+    mkdir -p -- "$destination/themes/$id"
+    cp -- "$bundled" "$destination/themes/$id/config.ini"
+  done < <(find "$source_root/bundled-themes" -mindepth 2 -maxdepth 2 -name config.ini -print0)
+fi
