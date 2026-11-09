@@ -31,7 +31,12 @@ ColumnLayout {
         : kind === "window" ? (windowAddress && windows.some(entry => entry.address === windowAddress) ? "window:" + windowAddress : "")
         : (regionValid ? "region:" + region : "")
     readonly property var kindLabels: ({ monitor: qsTr("Screen"), window: qsTr("Window"), region: qsTr("Region") })
+    // Offer a "Pick" button that selects a window by clicking it on the screen.
+    property bool pointerWindowPick: false
     signal pickRegionRequested()
+    signal pickWindowRequested()
+    // The user chose a screen or a window from a list (or the last region): the panel takes it at once.
+    signal chosen()
     // Nothing is chosen until the user chooses: a choice that no longer exists is cleared, never
     // replaced, so Start cannot record something that was not picked.
     onMonitorsChanged: if (!monitors.some(entry => entry.name === monitor)) monitor = ""
@@ -40,7 +45,7 @@ ColumnLayout {
     spacing: style.spacingTight
 
     function focusFirst() {
-        const first = kind === "monitor" ? monitorList.itemAt(0) : kind === "window" ? windowList.itemAt(0) : selectButton
+        const first = kind === "monitor" ? monitorList.itemAt(0) : kind === "window" ? (pickWindowButton.visible ? pickWindowButton : windowList.itemAt(0)) : selectButton
         if (first) first.forceActiveFocus()
         else kindRow.itemAt(Math.max(0, kinds.indexOf(kind)))?.forceActiveFocus()
     }
@@ -92,7 +97,7 @@ ColumnLayout {
                 Accessible.name: qsTr("Record screen %1").arg(modelData.name)
                 Keys.onUpPressed: event => { const previous = monitorList.itemAt(index - 1); if (previous) previous.forceActiveFocus(); else kindRow.itemAt(0)?.forceActiveFocus(); event.accepted = true }
                 Keys.onDownPressed: event => { const next = monitorList.itemAt(index + 1); if (next) next.forceActiveFocus(); event.accepted = next !== null }
-                onClicked: root.monitor = modelData.name
+                onClicked: { root.monitor = modelData.name; root.chosen() }
             }
         }
         Text {
@@ -107,6 +112,19 @@ ColumnLayout {
     }
 
     // ---- windows ----
+    ShellButton {
+        id: pickWindowButton
+        visible: root.kind === "window" && root.pointerWindowPick
+        Layout.fillWidth: true
+        text: qsTr("Pick")
+        Accessible.name: qsTr("Pick a window with the pointer")
+        style: root.style
+        inputState: root.inputState
+        emphasis: Theme.Interaction.buttonEmphasis
+        Keys.onDownPressed: event => { windowList.itemAt(0)?.forceActiveFocus(); event.accepted = true }
+        Keys.onUpPressed: event => { kindRow.itemAt(1)?.forceActiveFocus(); event.accepted = true }
+        onClicked: root.pickWindowRequested()
+    }
     Flickable {
         id: windowFlick
         visible: root.kind === "window"
@@ -141,9 +159,9 @@ ColumnLayout {
                     selected: modelData.address === root.windowAddress
                     Accessible.name: qsTr("Record window %1").arg(modelData.title || modelData.class)
                     onActiveFocusChanged: if (activeFocus) windowFlick.reveal(windowRow)
-                    Keys.onUpPressed: event => { const previous = windowList.itemAt(index - 1); if (previous) previous.forceActiveFocus(); else kindRow.itemAt(1)?.forceActiveFocus(); event.accepted = true }
+                    Keys.onUpPressed: event => { const previous = windowList.itemAt(index - 1); if (previous) previous.forceActiveFocus(); else if (pickWindowButton.visible) pickWindowButton.forceActiveFocus(); else kindRow.itemAt(1)?.forceActiveFocus(); event.accepted = true }
                     Keys.onDownPressed: event => { const next = windowList.itemAt(index + 1); if (next) next.forceActiveFocus(); event.accepted = next !== null }
-                    onClicked: root.windowAddress = modelData.address
+                    onClicked: { root.windowAddress = modelData.address; root.chosen() }
                 }
             }
             Text {
@@ -204,7 +222,7 @@ ColumnLayout {
                 inputState: root.inputState
                 emphasis: Theme.Interaction.buttonEmphasis
                 Accessible.name: qsTr("Use the last region %1").arg(root.lastRegion)
-                onClicked: root.region = root.lastRegion
+                onClicked: { root.region = root.lastRegion; root.chosen() }
             }
         }
         Text {

@@ -101,6 +101,14 @@ ShellRoot {
         Shot.ShotSurface { inputState: shellInput }
     }
     Variants {
+        model: Config.Config.screenShotEnabled ? Quickshell.screens : []
+        Shot.WindowPickSurface {}
+    }
+    Variants {
+        model: Config.Config.screenShotEnabled || Config.Config.screenRecordEnabled ? Quickshell.screens : []
+        Shot.RegionPickSurface {}
+    }
+    Variants {
         model: Config.Config.mprisEnabled ? Quickshell.screens : []
         Mpris.MprisSurface { inputState: shellInput }
     }

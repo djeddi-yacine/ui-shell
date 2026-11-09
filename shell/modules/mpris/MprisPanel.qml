@@ -126,7 +126,7 @@ FocusScope {
         style: styleTokens
         inputState: root.inputState
         active: root.open
-        scale: motion.scale
+        scale: motion.cardScale
         MouseArea { anchors.fill: parent; z: -1 }
     }
 }

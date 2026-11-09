@@ -37,7 +37,7 @@ window_handle() {
   [[ $address =~ ^0x[0-9a-f]{1,16}$ ]] || fail 'window address must look like 0x55d0c0a1b2c0'
   command -v hyprctl >/dev/null || fail 'hyprctl is required to capture a window'
   handle=$(timeout 5 hyprctl -j clients 2>/dev/null | jq -r --arg a "$address" '.[] | select(.address == $a and .mapped) | .stableId // empty') || true
-  [[ $handle =~ ^[0-9]+$ ]] || fail 'that window is gone; choose another target'
+  [[ $handle =~ ^[0-9a-f]+$ ]] || fail 'that window is gone; choose another target'
   printf '%s' "$handle"
 }
 

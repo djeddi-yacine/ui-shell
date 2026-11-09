@@ -25,7 +25,7 @@ Singleton {
     property var audioSources: ({ desktop: [], mic: [] })
     property string lastRegion: ""
     // True while the pointer selection (slurp) runs; the panel hides itself meanwhile.
-    readonly property bool picking: picker.running
+    readonly property bool picking: picker.running || windowPicking || regionPicking
     readonly property string state: recorded.state ?? "idle"
     readonly property bool active: state === "starting" || state === "recording"
     // Seconds since the recording began. It ticks once a second while a recording is starting or
@@ -53,6 +53,41 @@ Singleton {
     // The user finished selecting a region ("WxH+X+Y"); a cancelled selection emits nothing.
     signal regionPicked(string region)
     signal regionCancelled()
+    // The user clicked a window (its address); a cancelled pick emits windowCancelled.
+    signal windowPicked(string address)
+    signal windowCancelled()
+    // The shell's own window picker: open while the overlay shows, following the windows live.
+    property bool windowPicking: false
+    // The shell's own region picker (RegionPickSurface). The drag lives in the layout coordinates of
+    // `regionScreen`; a rectangle is reported as "WxH+X+Y" through regionPicked.
+    property bool regionPicking: false
+    property string regionScreen: ""
+    property bool regionDragging: false
+    property point regionFrom: Qt.point(0, 0)
+    property point regionTo: Qt.point(0, 0)
+    function finishRegionPick(region) {
+        regionPicking = false
+        regionDragging = false
+        if (region) {
+            lastRegion = region
+            remembering.command = [command, "remember-region", region]
+            remembering.running = true
+            regionPicked(region)
+        } else regionCancelled()
+    }
+    property var pickableWindows: []
+    // The window under the pointer, or chosen with the keyboard.
+    property string hoveredWindow: ""
+    function stepHovered(step) {
+        const list = pickableWindows
+        if (list.length === 0) return
+        const at = list.findIndex(entry => entry.address === hoveredWindow)
+        hoveredWindow = list[(at < 0 ? (step > 0 ? 0 : list.length - 1) : (at + step + list.length) % list.length)].address
+    }
+    function finishWindowPick(address) {
+        windowPicking = false
+        if (address) windowPicked(address); else windowCancelled()
+    }
 
     function refresh() { if (command && !reader.running) reader.running = true }
     function loadCapabilities() { if (command && !probe.running) probe.running = true }
@@ -61,7 +96,8 @@ Singleton {
     function loadCameras() { if (command && !cameraLister.running) cameraLister.running = true }
     function loadWindows() { if (command && !windowLister.running) windowLister.running = true }
     function loadLastRegion() { if (command && !regionReader.running) regionReader.running = true }
-    function pickRegion() { if (command && !picker.running) picker.running = true }
+    function pickWindow() { if (command) { loadWindows(); hoveredWindow = ""; pickableWindows = []; windowPicking = true; windowPoller.running = true } }
+    function pickRegion() { if (command) { regionScreen = ""; regionDragging = false; regionPicking = true } }
     // target "window:ADDRESS" etc.; `settings` carries the panel's choices and the saved options:
     // { desktopAudio ("no", "default", "device:ID" or "app:NAME"), microphone ("no", "default" or "device:ID"), countdown, fps, quality, codec, audioCodec, bitrate, container, cursor, webcam }
     // where webcam is a camera path or "".
@@ -167,6 +203,22 @@ Singleton {
                 root.present(qsTr("Could not select a region"), pickerError.text.trim(), qsTr("Select a region"), "", pickerError.text.trim())
         }
     }
+    // Re-read the windows on screen while the picker is open, so a workspace switch or a new window shows at once.
+    Timer {
+        interval: 250; repeat: true; running: root.windowPicking; triggeredOnStart: true
+        onTriggered: if (!windowPoller.running) windowPoller.running = true
+    }
+    Process {
+        id: windowPoller
+        command: [root.command, "visible-windows"]
+        stdout: StdioCollector { id: windowPollOutput }
+        onExited: function(code) {
+            if (code !== 0 || !root.windowPicking) return
+            try { root.pickableWindows = JSON.parse(windowPollOutput.text) } catch (error) { return }
+            if (root.hoveredWindow && !root.pickableWindows.some(entry => entry.address === root.hoveredWindow)) root.hoveredWindow = ""
+        }
+    }
+    Process { id: remembering }
     Process {
         id: actor
         property string operation: ""

@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [screen-recording, gsr, features]
 created: "2026-11-06T03:24:53"
-updated: "2026-11-08T05:14:48"
+updated: "2026-11-09T02:21:58"
 ---
 
 <!-- compiled_truth -->
@@ -146,4 +146,24 @@ updated: "2026-11-08T05:14:48"
 - time: 2026-11-08T05:14:48
   kind: decision
   summary: "A hidden shell panel layer keeps fading on the host after leaving hyprctl layers (host fadeLayersOut 450ms; our no_anim rule is only in the project profile). screen-shot now reads layersOut/fadeLayersOut speeds from hyprctl animations and waits that long (+100ms) before grim; Config.Shot.closeDelayMilliseconds lowered to 100."
+  affects: [screen-capture-module]
+
+- time: 2026-11-09T02:01:11
+  kind: decision
+  summary: "Window screenshots can also be chosen by clicking: screen-record pick-window (slurp -r over visible window boxes, label = address), enabled in the shot picker via TargetPicker.pointerWindowPick; pointer-only because slurp has no keyboard selection, the list remains the keyboard path."
+  affects: [screen-capture-module]
+
+- time: 2026-11-09T02:07:53
+  kind: reversal
+  summary: "Window pick no longer uses slurp (frozen snapshot, no keyboard, wrong workspaces): a native overlay (WindowPickSurface) polls screen-record visible-windows (windows on each screen's active/special workspace; hyprctl 'visible' is always true) every 250 ms; click/Enter picks, Tab/arrows move, Esc cancels."
+  affects: [screen-capture-module]
+
+- time: 2026-11-09T02:16:02
+  kind: decision
+  summary: "Every screenshot choice (screen, window, region, window pick, last region) is buffered the moment it is chosen; the button then says Save and only delivers. Window handle (Hyprland stableId) is hex, not decimal."
+  affects: [screen-capture-module]
+
+- time: 2026-11-09T02:21:58
+  kind: decision
+  summary: "Region selection is a native overlay (RegionPickSurface + Cords, tunables in config/RegionPick.qml) modelled on refs/zephyr windows/Geom.qml: dimmed screen, clear selection, accent border, round handles, verlet cords from screen corners. slurp pick-region stays in screen-record but the shell no longer uses it; remember-region keeps the last region."
   affects: [screen-capture-module]

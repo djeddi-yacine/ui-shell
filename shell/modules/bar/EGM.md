@@ -17,7 +17,7 @@ Per-output top bar content: a labelled button for every panel (Launcher, Wallpap
 ## Side Effects
 - Clicking Apps calls `Apps.AppState.show(screenName)` [bar/Bar.qml].
 - Clicking the label sets `Wallpaper.PickerState.screenName/targetOutput/open` [bar/Bar.qml].
-- Workspace click runs `Hyprland.dispatch('hl.dsp.focus({ workspace = "N" })')` [bar/WorkspaceNumbers.qml:onClicked].
+- Workspace click runs `Hyprland.dispatch('hl.dsp.focus({ workspace = "N" })')`, or `workspace N` when `UI_SHELL_HYPR_SYNTAX=legacy` (hyprlang host) [bar/WorkspaceNumbers.qml:onClicked].
 
 ## Verification
 - Run: `make test-qml`

@@ -24,3 +24,7 @@ The screenshot panel: choose a screen, a window or a region (the shared `Control
 
 ## Verification
 - Run: `make test-qml`, `make test-shot` (stand-ins) and `make test-shot-live` (real grim and wl-copy on this desktop).
+
+- Window target "Pick": `RecordState.pickWindow()` opens `shot/WindowPickSurface.qml` (an overlay per screen, namespace `ui-shell-window-pick`) that polls `screen-record visible-windows` every 250 ms, so workspace switches and new windows show live. Pointer hover highlights the front-most window; click or Enter picks, Tab and the arrows move, Esc or a right click cancels. The panel hides meanwhile (`RecordState.picking`) and the pick becomes the target [shot/ShotPanel.qml:onWindowPicked].
+
+- Region target: `RecordState.pickRegion()` opens `shot/RegionPickSurface.qml` (an overlay per screen, namespace `ui-shell-region-pick`, shared with the recording panel). Drag draws the rectangle (dimmed surroundings, accent border, round corner handles, a size label) and `shot/Cords.qml` hangs a swinging cord from each screen corner to the selection's matching corner (look from refs/zephyr). Release reports `WxH+X+Y` through `regionPicked` and `screen-record remember-region`; Esc, a right click or a click without a drag cancels. Tunables: `config/RegionPick.qml`.

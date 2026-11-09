@@ -172,7 +172,7 @@ FocusScope {
         radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth
         border.color: styleTokens.pickerBorder
-        scale: motion.scale
+        scale: motion.cardScale
         MouseArea { anchors.fill: parent; onClicked: function() {} }
         ColumnLayout {
             id: panelLayout

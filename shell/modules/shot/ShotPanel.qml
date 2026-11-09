@@ -6,7 +6,7 @@ import "../../components" as Controls
 import "../../config" as Config
 import "../../theme" as Theme
 
-// Screenshot: pick what to capture, pick where the picture goes, press Capture (a region is taken as soon as it is picked and the button then says Save). The panel's window
+// Screenshot: pick what to capture, pick where the picture goes, press Capture (whatever you choose is taken as soon as you choose it and the button then says Save). The panel's window
 // is hidden while the picture is taken and comes back showing what was saved. The lists of
 // screens, windows and the region selection are shared with the recording panel.
 FocusScope {
@@ -70,8 +70,8 @@ FocusScope {
         context.show(kind, root.Window.window ? root.Window.window.activeFocusItem : null)
     }
     function requestClose() { Adapters.ShotRunner.discardBuffer(); motion.leave() }
-    // The region is taken the moment it is picked, with the panel hidden, and kept until Save.
-    function takeRegion() {
+    // Whatever is chosen (screen, window or region) is taken the moment it is chosen, with the panel hidden, and kept until Save.
+    function takeBuffer() {
         ShotPanelState.capturing = true
         Adapters.ShotRunner.capture(picker.target, { buffer: true, delay: Config.Shot.closeDelayMilliseconds })
     }
@@ -122,7 +122,9 @@ FocusScope {
     }
     Connections {
         target: Adapters.RecordState
-        function onRegionPicked(region) { if (root.open) { picker.note = ""; picker.region = region; picker.kind = "region"; root.takeRegion() } }
+        function onWindowPicked(address) { if (root.open) { picker.note = ""; picker.windowAddress = address; picker.kind = "window"; root.takeBuffer() } }
+        function onWindowCancelled() { if (root.open) Qt.callLater(root.focusFirst) }
+        function onRegionPicked(region) { if (root.open) { picker.note = ""; picker.region = region; picker.kind = "region"; root.takeBuffer() } }
         function onRegionCancelled() { if (root.open) { picker.note = qsTr("No region was selected (cancelled, or a click without a drag). Drag a rectangle, or type one below."); Qt.callLater(root.focusFirst) } }
     }
     Controls.PanelContext {
@@ -168,7 +170,7 @@ FocusScope {
         radius: styleTokens.pickerRadius
         border.width: Theme.Shape.borderWidth
         border.color: styleTokens.pickerBorder
-        scale: motion.scale
+        scale: motion.cardScale
         MouseArea { anchors.fill: parent }
 
         ColumnLayout {
@@ -187,6 +189,9 @@ FocusScope {
                 windows: Adapters.RecordState.windows
                 kinds: Adapters.ShotRunner.capabilities.targets ?? ["monitor"]
                 lastRegion: Adapters.RecordState.lastRegion
+                pointerWindowPick: true
+                onChosen: root.takeBuffer()
+                onPickWindowRequested: Adapters.RecordState.pickWindow()
                 onPickRegionRequested: { picker.note = qsTr("Drag a rectangle on the screen. Esc or a right click cancels."); Adapters.RecordState.pickRegion() }
             }
             RowLayout {

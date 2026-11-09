@@ -25,7 +25,7 @@ SHIM
 cat >"$scratch/bin/hyprctl" <<'SHIM'
 #!/usr/bin/env bash
 case "$*" in
-  *clients*) echo '[{"address":"0xabc1","title":"editor","class":"code","at":[100,200],"size":[800,600],"mapped":true,"hidden":false,"stableId":"4242"}]' ;;
+  *clients*) echo '[{"address":"0xabc1","title":"editor","class":"code","at":[100,200],"size":[800,600],"mapped":true,"hidden":false,"stableId":"1800019f"}]' ;;
   *layers*) echo '{}' ;;
   *monitors*) echo '[{"name":"M","x":0,"y":0,"width":1920,"height":1080,"scale":1}]' ;;
 esac
@@ -46,7 +46,7 @@ grep -q 'grim -o M ' "$FAKE_LOG" || fail "monitor: $(cat "$FAKE_LOG")"; ok
 "$script" capture region:300x200+10+20 --copy no >/dev/null
 grep -q 'grim -g 10,20 300x200 ' "$FAKE_LOG" || fail "region: $(cat "$FAKE_LOG")"; ok
 "$script" capture window:0xabc1 --copy no >/dev/null
-grep -q 'grim -T 4242 ' "$FAKE_LOG" || fail "window: $(cat "$FAKE_LOG")"; ok
+grep -q 'grim -T 1800019f ' "$FAKE_LOG" || fail "window: $(cat "$FAKE_LOG")"; ok
 
 echo '== destinations'
 : >"$FAKE_LOG"

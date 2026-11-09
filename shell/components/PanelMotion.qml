@@ -4,15 +4,15 @@ import "../theme" as Theme
 Item {
     id: root
     required property Item surface
-    // The card's scale; panels bind `scale: motion.scale` on their card.
-    property real scale: 1
+    // The card's scale; panels bind `scale: motion.cardScale` on their card.
+    property real cardScale: 1
     property bool closing: false
     signal closed()
 
     function reset() {
         entry.stop()
         exit.stop()
-        scale = 1
+        cardScale = 1
         surface.opacity = 1
         closing = false
     }
@@ -36,7 +36,7 @@ Item {
     ParallelAnimation {
         id: entry
         NumberAnimation {
-            target: root; property: "scale"
+            target: root; property: "cardScale"
             from: Theme.Motion.panelEnterScale; to: 1
             duration: Theme.Motion.enterDuration
             easing.type: Theme.Motion.enterEasing
@@ -51,7 +51,7 @@ Item {
     ParallelAnimation {
         id: exit
         NumberAnimation {
-            target: root; property: "scale"; to: Theme.Motion.panelExitScale
+            target: root; property: "cardScale"; to: Theme.Motion.panelExitScale
             duration: Theme.Motion.exitDuration
             easing.type: Theme.Motion.exitEasing
         }

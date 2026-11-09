@@ -10,6 +10,8 @@
 #   screen-record cameras          JSON: [{path, name}] (V4L2 cameras that can be shown on screen)
 #   screen-record windows          JSON: [{address, title, class, x, y, width, height}] (Hyprland)
 #   screen-record pick-region      slurp selection as WxH+X+Y on stdout; exit 1 if cancelled
+#   screen-record visible-windows  JSON: windows on the workspaces shown right now, most recently focused first
+#   screen-record remember-region WxH+X+Y   keep a region the shell picked itself as the last one
 #   screen-record last-region      the last selected region (this session), or nothing
 #   screen-record start monitor:NAME | window:ADDRESS | region:WxH+X+Y
 #                                    [--desktop-audio no|default|device:ID|app:NAME]
@@ -69,7 +71,7 @@ user_dir() { # XDG_NAME and the plain directory name under $HOME, e.g. user_dir 
   printf '%s' "$value"
 }
 
-usage() { printf '%s\n' 'Usage: screen-record capabilities|monitors|windows|cameras|audio-sources|pick-region|last-region|start TARGET [options]|stop|status' >&2; exit 2; }
+usage() { printf '%s\n' 'Usage: screen-record capabilities|monitors|windows|cameras|audio-sources|visible-windows|pick-region|remember-region|last-region|start TARGET [options]|stop|status' >&2; exit 2; }
 
 # Process start time (clock ticks since boot), field 22 of /proc/PID/stat. The command name
 # can contain spaces and parentheses, so cut at the LAST ')'. A zombie (exited, not yet
@@ -266,6 +268,23 @@ pick_region() {
   mkdir -p -- "$state_dir"
   printf '%s' "$region" >"$state_dir/last-region"
   printf '%s' "$region"
+}
+# Windows on the workspaces that are on screen right now (the active one of each screen, or its
+# open special workspace), most recently focused first. The shell's window picker polls this so it
+# follows workspace changes and new windows. (Hyprland's own "visible" flag is true for all windows.)
+visible_windows() {
+  command -v hyprctl >/dev/null || { printf '[]'; return; }
+  jq -cn --argjson clients "$(timeout 5 hyprctl -j clients 2>/dev/null || echo '[]')" --argjson monitors "$(timeout 5 hyprctl -j monitors 2>/dev/null || echo '[]')" '
+    [$monitors[] | (if (.specialWorkspace.id // 0) != 0 then .specialWorkspace.id else .activeWorkspace.id end)] as $shown
+    | [$clients[] | select(.mapped and (.hidden | not) and .size[0] > 0 and .size[1] > 0 and (.workspace.id as $w | $shown | index($w)))]
+    | sort_by(.focusHistoryID)
+    | map({address, title, class, x: .at[0], y: .at[1], width: .size[0], height: .size[1]})' 2>/dev/null || printf '[]'
+}
+# The shell's own region picker reports the rectangle it drew; remember it like pick-region does.
+remember_region() {
+  valid_region "${1-}" || fail 'region must look like 300x200+10+20'
+  mkdir -p -- "$state_dir"
+  printf '%s' "$1" >"$state_dir/last-region"
 }
 last_region() {
   local region=
@@ -514,6 +533,8 @@ case ${1-} in
   audio-sources) audio_catalog ;;
   window-region) window_region_command "${2-}" ;;
   pick-region) pick_region ;;
+  visible-windows) visible_windows ;;
+  remember-region) remember_region "${2-}" ;;
   last-region) last_region ;;
   start) shift; start "$@" ;;
   stop) stop ;;

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Layouts
+import Quickshell
 import Quickshell.Hyprland
 
 import "../../config" as ShellConfig
@@ -16,6 +17,8 @@ RowLayout {
     required property Controls.InputState inputState
 
     readonly property HyprlandMonitor monitor: Hyprland.monitors.values.find(output => output.name === root.screenName) ?? null
+    // Dispatcher syntax of the running compositor: "legacy" (hyprlang host config) or Lua when unset.
+    readonly property bool legacySyntax: Quickshell.env("UI_SHELL_HYPR_SYNTAX") === "legacy"
     spacing: root.style.controlPaddingY
 
     Repeater {
@@ -34,7 +37,9 @@ RowLayout {
             current: root.monitor?.activeWorkspace?.name === workspaceButton.text
             enabled: root.monitor !== null
             Accessible.name: qsTr("Switch to workspace %1").arg(workspaceButton.modelData)
-            onClicked: Hyprland.dispatch('hl.dsp.focus({ workspace = "' + workspaceButton.modelData + '" })')
+            onClicked: Hyprland.dispatch(root.legacySyntax
+                ? "workspace " + workspaceButton.modelData
+                : 'hl.dsp.focus({ workspace = "' + workspaceButton.modelData + '" })')
         }
     }
 }

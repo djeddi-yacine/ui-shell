@@ -28,6 +28,8 @@ args=(--bind / / --dev-bind /dev /dev --ro-bind "$HOME" "$HOME" --bind "$state" 
   --setenv XDG_CONFIG_HOME "$config" --setenv XDG_CACHE_HOME "$state/cache"
   --setenv XDG_DATA_HOME "$state/data" --setenv XDG_STATE_HOME "$state/state"
   --setenv UI_SHELL_ROOT "$project_root"
+  # The host usually runs a hyprlang config; the shell then needs legacy dispatcher syntax.
+  --setenv UI_SHELL_HYPR_SYNTAX "$([[ -e ${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua ]] && echo lua || echo legacy)"
   # The real polkit agent keeps the desktop; set UI_SHELL_AUTH_AGENT=1 to test the dialog for real.
   --setenv UI_SHELL_AUTH_AGENT "${UI_SHELL_AUTH_AGENT:-0}"
   --die-with-parent --chdir "$project_root")
