@@ -359,6 +359,11 @@ start() {
   # what the recorder is given; `labels` say what they are, for the state. A chosen device or
   # application that has disappeared is dropped with a warning, like a missing default.
   local catalog sources=() labels=() warnings=() desktop_name=null mic_name=null found
+  # gsr-kms-server reads the screen through a file capability; a process under no-new-privileges
+  # (a sandbox) loses it, and the recording is then black with no error. Say so up front.
+  if grep -qx 'NoNewPrivs:[[:space:]]*1' /proc/self/status; then
+    warnings+=("This process cannot give the recorder screen access (no-new-privileges, as in a sandbox), so the recording will be black.")
+  fi
   catalog=$(audio_catalog)
   if [[ $desktop != no ]]; then
     found=$(jq -r --arg id "$desktop" '.desktop[] | select(.id == $id) | .label' <<<"$catalog" | head -n 1)

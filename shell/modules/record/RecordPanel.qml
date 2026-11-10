@@ -91,7 +91,7 @@ FocusScope {
         if (failures.visible) return
         if (kind === "info") {
             context.infoTitle = qsTr("Screen recording")
-            context.infoDescription = qsTr("Choose a screen, a window or a region, then Start. The recording keeps running when this panel closes: the bar shows it and stops it, and so does the same key that opened this panel.")
+            context.infoDescription = qsTr("Choose a screen, a window or a region (Pick selects a window by clicking it, Select a region by dragging), then Start. The recording keeps running when this panel closes: the bar shows it and stops it, and so does the same key that opened this panel.")
             context.infoDetails = [
                 { label: qsTr("Recorder"), value: Adapters.RecordState.capabilities.backend ?? qsTr("not found") },
                 { label: qsTr("State"), value: Adapters.RecordState.state },
@@ -153,6 +153,8 @@ FocusScope {
         function onStateChanged() {
             if (root.open && Adapters.RecordState.state === "recording") root.requestClose()
         }
+        function onWindowPicked(address) { if (!root.open) return; picker.note = ""; picker.windowAddress = address; picker.kind = "window"; Qt.callLater(root.focusFirst) }
+        function onWindowCancelled() { if (root.open) Qt.callLater(root.focusFirst) }
         function onRegionPicked(region) { if (!root.open) return; picker.note = ""; picker.region = region; picker.kind = "region"; Qt.callLater(root.focusFirst) }
         function onRegionCancelled() { if (!root.open) return; picker.note = qsTr("No region was selected (cancelled, or a click without a drag). Drag a rectangle, or type one below."); Qt.callLater(root.focusFirst) }
         function onFailed(failure) { failures.present(failure, root.Window.window ? root.Window.window.activeFocusItem : null) }
@@ -271,6 +273,8 @@ FocusScope {
                     windows: Adapters.RecordState.windows
                     kinds: (Adapters.RecordState.capabilities.targets ?? ["monitor"])
                     lastRegion: Adapters.RecordState.lastRegion
+                    pointerWindowPick: true
+                    onPickWindowRequested: Adapters.RecordState.pickWindow()
                     onPickRegionRequested: { picker.note = qsTr("Drag a rectangle on the screen. Esc or a right click cancels."); Adapters.RecordState.pickRegion() }
                 }
 

@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [screen-recording, gsr, features]
 created: "2026-11-06T03:24:53"
-updated: "2026-11-09T02:21:58"
+updated: "2026-11-10T16:32:16"
 ---
 
 <!-- compiled_truth -->
@@ -166,4 +166,10 @@ updated: "2026-11-09T02:21:58"
 - time: 2026-11-09T02:21:58
   kind: decision
   summary: "Region selection is a native overlay (RegionPickSurface + Cords, tunables in config/RegionPick.qml) modelled on refs/zephyr windows/Geom.qml: dimmed screen, clear selection, accent border, round handles, verlet cords from screen corners. slurp pick-region stays in screen-record but the shell no longer uses it; remember-region keeps the last region."
+  affects: [screen-capture-module]
+
+- time: 2026-11-10T16:32:16
+  kind: decision
+  summary: "The recording panel offers Pick for windows like the screenshot panel (shared TargetPicker with a rule under the button). A recording started under no-new-privileges (bwrap, so make test-env-host) is black because gsr-kms-server loses its file capability; screen-record now warns about it. Record on a normal session."
+  source: "owner request in chat; scripts/screen-record, tests/scripts/host-session"
   affects: [screen-capture-module]

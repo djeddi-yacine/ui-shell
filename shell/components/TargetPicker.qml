@@ -125,6 +125,16 @@ ColumnLayout {
         Keys.onUpPressed: event => { kindRow.itemAt(1)?.forceActiveFocus(); event.accepted = true }
         onClicked: root.pickWindowRequested()
     }
+    // A thin rule between the Pick button and the list of windows.
+    Rectangle {
+        visible: root.kind === "window" && root.pointerWindowPick
+        Layout.fillWidth: true
+        Layout.preferredHeight: 1
+        // Extra room on both sides of the rule, on top of the layout's own spacing.
+        Layout.topMargin: root.style.spacingTight
+        Layout.bottomMargin: root.style.spacingTight
+        color: root.style.rule
+    }
     Flickable {
         id: windowFlick
         visible: root.kind === "window"
