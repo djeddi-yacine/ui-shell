@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [phantomat, git, fork, workflow]
 created: "2026-10-27T02:14:31"
-updated: "2026-11-05T01:46:53"
+updated: "2026-11-10T17:07:36"
 ---
 
 <!-- compiled_truth -->
@@ -143,4 +143,16 @@ The exact failure this page warns about happened. A second agent ("freebuff") ra
   kind: decision
   summary: "Correct the port commit count: 21 commits on top of 4099f30 (main is 22 ahead of upstream a1e8a08 because that includes the canvas commit itself)"
   source: "self-correction, 2026-11-05"
+  affects: [phantomat-patch-provenance]
+
+- time: 2026-11-10T16:53:43
+  kind: decision
+  summary: "Uncommitted patch in refs/phantomat scrollOverview.cpp navigatorPassesThrough: bind lookup also tries the lower-case keysym, because Shift+O reports O but binds are stored as o, so the HUD toggle chord (nested Alt+Multi_key+Shift+O) closes the HUD instead of typing into the search. Not yet committed to the fork."
+  source: "user request, 2026-11-10"
+  affects: [phantomat-patch-provenance]
+
+- time: 2026-11-10T17:07:36
+  kind: decision
+  summary: "The navigator pass-through fix is committed and pushed to the fork as 8f29d10 (debug log removed); verified by the owner in the nested session"
+  source: "user request, 2026-11-10"
   affects: [phantomat-patch-provenance]

@@ -33,7 +33,7 @@ Popups and panels
 - `ContextHelp` [ContextHelp.qml:ContextHelp] `style`, `bindings` required; lists shortcuts via `Config.Keyboard.shortcut`.
 - `ContextDetails` [ContextDetails.qml:ContextDetails] `style`, `title`, `description`, `details` required.
 
-- `TargetPicker` [TargetPicker.qml:TargetPicker] what to capture (screen, window or region); `monitors`, `windows`, `kinds`, `lastRegion`, `target`; `pickRegionRequested()`.
+- `TargetPicker` [TargetPicker.qml:TargetPicker] what to capture (screen, window or region); `monitors`, `windows`, `kinds`, `lastRegion`, `target`, `pointerWindowPick`; `pickRegionRequested()`, `pickWindowRequested()`, `chosen()`. With `pointerWindowPick` set and kind `window`, a Pick button and a 1px rule (`style.rule`) sit above the window list.
 
 - `SecretDialog` [SecretDialog.qml:SecretDialog] generic secret prompt; `message`, `accounts`, `selectedIndex`, `prompt`, `visibleEcho`, `info`, `error`, `checking`, `failed`, `refused`, `succeeded`, `guardMs`; `submitted(secret)`, `cancelled()`, `accountChosen(index)`, `keyAfterFailure()`, `reset()`.
 
