@@ -59,9 +59,10 @@ test-scripts:
 
 # The one interactive session: everything enabled, private saved state. Audio uses the host
 # PipeWire socket (changes are real; set UI_SHELL_HOST_PIPEWIRE=0 to keep audio private).
-# Phantomat is built if needed and loaded when the build works.
+# Phantomat is built if needed and loaded when the build works; set UI_SHELL_PHANTOMAT=0 to
+# start without it (and skip the build), 1 (the default) to load it.
 test-env:
-	@$(MAKE) --no-print-directory dev-build-phantomat || printf '%s\n' 'Phantomat build failed; starting without it.' >&2
+	@[ "$${UI_SHELL_PHANTOMAT:-1}" = 0 ] || $(MAKE) --no-print-directory dev-build-phantomat || printf '%s\n' 'Phantomat build failed; starting without it.' >&2
 	@UI_SHELL_HOST_PIPEWIRE=$${UI_SHELL_HOST_PIPEWIRE:-1} bash "$(TEST_RUNNER)" run persistent
 
 test-import-themes:

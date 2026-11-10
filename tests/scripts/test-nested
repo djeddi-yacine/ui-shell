@@ -294,8 +294,11 @@ if [[ $mode == check || $mode == qml || $mode == theme-config || $mode == theme 
   done
 fi
 # The interactive session loads Phantomat when it is built; its dedicated mode requires it.
+# UI_SHELL_PHANTOMAT=0 starts the interactive session without the plugin (A/B checks); 1 is the default.
+phantomat_switch=${UI_SHELL_PHANTOMAT-1}
+[[ $phantomat_switch == 0 || $phantomat_switch == 1 ]] || { printf 'UI_SHELL_PHANTOMAT must be 0 or 1, got "%s".\n' "$phantomat_switch" >&2; exit 1; }
 phantomat_loaded=0
-[[ $mode != run || ! -s $project_root/$test_phantomat_plugin ]] || phantomat_loaded=1
+[[ $mode != run || $phantomat_switch == 0 || ! -s $project_root/$test_phantomat_plugin ]] || phantomat_loaded=1
 [[ $mode != phantomat ]] || phantomat_loaded=1
 if (( phantomat_loaded )); then
   [[ -s $project_root/$test_phantomat_plugin ]] || { printf '%s\n' 'Build Phantomat before its isolated test.' >&2; exit 1; }
