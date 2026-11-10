@@ -25,6 +25,12 @@ return {
     phantomat_navigator_toggle_bind = shifted .. " + O",
     layout_cycle_key = "B",
   },
+  -- action_mod equals layout_mod here, so B (layout cycle) and D collide with the notification
+  -- drawer and do-not-disturb chords; F6 and F7 are free.
+  shell_shortcut_keys = {
+    notifications = "F6",
+    notifications_dnd = "F7",
+  },
   terminal = {
     bind = main .. " + Q",
     command = "foot",

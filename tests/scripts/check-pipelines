@@ -6,5 +6,7 @@ bash "$(jq -er '.commands.renderWallpaperCatalog' "$UI_SHELL_RUNTIME")" \
   "$UI_SHELL_RUNTIME" "$(jq -er '.bootstrap.wallpaperCatalog' "$UI_SHELL_RUNTIME")"
 bash "$test_project/tests/scripts/check-wallpaper-pipeline"
 bash "$test_project/tests/scripts/check-component-settings"
+# Generated icons match shell/svg.
+"$test_project/scripts/generate-icons" --check
 bash "$test_project/tests/scripts/check-audio-graph" "$(jq -er '.commands.audioGraph' "$UI_SHELL_RUNTIME")" "$test_project/tests/audio/pw-dump.json"
 printf '%s\n' 'Wallpaper and component pipelines passed.'

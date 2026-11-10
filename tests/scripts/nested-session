@@ -53,10 +53,10 @@ mv -- "$test_project/shell" "$test_project/source-shell"
 ln -s -- "$test_config_root/quickshell" "$test_project/shell"
 
 case $mode in
-  run|smoke|snapshot|theme|profiles|motion|launcher|apps|app-launch|app-close|phantomat|borders) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/run-session" "$mode" ;;
+  run|smoke|snapshot|theme|profiles|motion|launcher|notifications|apps|app-launch|app-close|phantomat|borders) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/run-session" "$mode" ;;
   check) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-sandbox" ;;
   qml) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-qml" ;;
   theme-config) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-theme-config" ;;
   pipelines) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/check-pipelines" ;;
-  *) printf '%s\n' 'Mode must be run, smoke, snapshot, theme, import-themes, profiles, motion, launcher, apps, app-launch, app-close, phantomat, borders, check, qml, theme-config or pipelines.' >&2; exit 1 ;;
+  *) printf '%s\n' 'Mode must be run, smoke, snapshot, theme, import-themes, profiles, motion, launcher, notifications, apps, app-launch, app-close, phantomat, borders, check, qml, theme-config or pipelines.' >&2; exit 1 ;;
 esac

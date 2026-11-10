@@ -52,14 +52,43 @@ QtObject {
         audio: [
             { key: "volumeStep", label: qsTr("Step"), name: qsTr("Volume step percent"), kind: "choices", choices: [1, 2, 5, 10], fallback: Audio.volumeStepPercent },
             { key: "maximumVolume", label: qsTr("Maximum volume"), name: qsTr("Maximum volume percent"), kind: "choices", choices: [100, 125, 150], fallback: Audio.maximumVolumePercent }
+        ],
+        // Hand-written rules, never edited in the Ctrl+E popup; see features/designs/notifications.md.
+        notifications: [
+            { key: "rules", label: qsTr("Rules"), name: qsTr("Notification rules"), kind: "rules", fallback: [] }
         ]
     })
 
     // Whether a value read from a settings file is allowed for this option.
     function valid(option, value) {
         if (value === undefined) return true
+        if (option.kind === "rules") return validRules(value) === ""
         if (option.kind === "boolean") return typeof value === "boolean"
         if (option.kind === "choices") return option.choices.includes(value)
         return Number.isInteger(value) && value >= option.min && value <= option.max
+    }
+
+    // "" when the rules are valid, else the first problem as a fixed string.
+    function validRules(value) {
+        if (value === undefined) return ""
+        if (!Array.isArray(value)) return "rules is not an array"
+        const allowed = ["name", "app", "appId", "appMatch", "match", "mute", "hide", "reveal", "sound"]
+        for (let i = 0; i < value.length; i++) {
+            const n = i + 1
+            const rule = value[i]
+            if (rule === null || typeof rule !== "object" || Array.isArray(rule)) return "rule " + n + " is not an object"
+            for (const key of Object.keys(rule)) if (!allowed.includes(key)) return "rule " + n + ": unknown key \"" + key + "\""
+            if (typeof rule.name !== "string" || rule.name === "") return "rule " + n + ": name is required"
+            for (const key of ["app", "appId", "appMatch", "match", "sound"])
+                if (rule[key] !== undefined && typeof rule[key] !== "string") return "rule " + n + ": " + key + " must be a string"
+            for (const key of ["mute", "hide", "reveal"])
+                if (rule[key] !== undefined && typeof rule[key] !== "boolean") return "rule " + n + ": " + key + " must be true or false"
+            if (rule.sound && !/^\/.*\.(wav|ogg|oga)$/.test(rule.sound)) return "rule " + n + ": sound must be an absolute .wav, .ogg or .oga path"
+            for (const key of ["appMatch", "match"]) {
+                if (!rule[key]) continue
+                try { new RegExp(rule[key], "i") } catch (e) { return "rule " + n + ": " + key + " is not a valid regular expression" }
+            }
+        }
+        return ""
     }
 }

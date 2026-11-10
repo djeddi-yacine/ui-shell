@@ -22,6 +22,9 @@ if [[ $mode == launcher ]]; then
   mkdir -p "$XDG_DATA_HOME/applications"
   cp "$test_project/tests/launcher/entries/"*.desktop "$XDG_DATA_HOME/applications/"
 fi
+if [[ $mode == notifications ]]; then
+  cp "$test_project/tests/notifications/shell.qml" "$shell_directory/notifications-test.qml"
+fi
 # nested-session prepared the complete private bundle before launching Hyprland.
 "${test_compositor_command[@]}" --config "$hypr_directory/${config#hypr/}" &
 compositor_pid=$!
@@ -43,6 +46,7 @@ cleanup() {
   [[ $mode != motion ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/picker-motion-test.qml" kill --any-display 2>/dev/null || true
   [[ $mode != profiles ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/theme-editor-test.qml" kill --any-display 2>/dev/null || true
   [[ $mode != launcher ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/launcher-test.qml" kill --any-display 2>/dev/null || true
+  [[ $mode != notifications ]] || timeout --kill-after=1 "$test_cleanup_seconds" qs --path "$shell_directory/notifications-test.qml" kill --any-display 2>/dev/null || true
   pkill -TERM -x hyprpaper || true
   kill -TERM "$compositor_pid" 2>/dev/null || true
   if ! timeout --kill-after=1 "$test_cleanup_seconds" tail --pid="$compositor_pid" -s "$test_poll_seconds" -f /dev/null; then
@@ -70,6 +74,6 @@ if [[ -n ${UI_SHELL_TEST_EXEC-} ]]; then
   bash -c "$UI_SHELL_TEST_EXEC" >/artifacts/exec.log 2>&1 || printf 'exit status %s\n' "$?" >>/artifacts/exec.log
 fi
 # Interactive modes stay up until the compositor is closed by hand.
-if [[ $mode != smoke && $mode != snapshot && $mode != theme && $mode != profiles && $mode != motion && $mode != launcher && $mode != app-launch && $mode != borders ]]; then
+if [[ $mode != smoke && $mode != snapshot && $mode != theme && $mode != profiles && $mode != motion && $mode != launcher && $mode != notifications && $mode != app-launch && $mode != borders ]]; then
   wait "$compositor_pid"
 fi

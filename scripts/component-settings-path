@@ -5,8 +5,8 @@ component=${1-}
 scope=${2-}
 output=${3-}
 [[ $# == 3 ]] || { printf '%s\n' 'Usage: component-settings-path COMPONENT SCOPE OUTPUT' >&2; exit 2; }
-[[ $component == launcher || $component == wallpaper || $component == audio || $component == record || $component == shot || $component == mpris || $component == controls ]] || { printf '%s\n' 'Unknown component.' >&2; exit 2; }
-[[ $scope == default || ($scope == output && $component != controls) ]] || { printf '%s\n' 'Unknown scope.' >&2; exit 2; }
+[[ $component == launcher || $component == wallpaper || $component == audio || $component == record || $component == shot || $component == mpris || $component == controls || $component == notifications ]] || { printf '%s\n' 'Unknown component.' >&2; exit 2; }
+[[ $scope == default || ($scope == output && $component != controls && $component != notifications) ]] || { printf '%s\n' 'Unknown scope.' >&2; exit 2; }
 if [[ $scope == default ]]; then
   [[ -z $output ]] || { printf '%s\n' 'Default scope requires an empty output.' >&2; exit 2; }
   filename=Default.qml

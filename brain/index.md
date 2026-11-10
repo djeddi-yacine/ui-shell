@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-09T01:30:20.048Z._
+_Auto-generated. Last updated 2026-11-10T02:23:56.002Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
@@ -9,6 +9,7 @@ _Auto-generated. Last updated 2026-11-09T01:30:20.048Z._
 - [hyprland-native-composition](pages/hyprland-native-composition.md) — category: decision | tags: [hyprland, lua, workspaces, groups] | # Decision
 - [isolated-nested-test-environment](pages/isolated-nested-test-environment.md) — category: decision | tags: [tests, isolation, xdg] | # Decision
 - [mpris-media-control](pages/mpris-media-control.md) — category: project | tags: [mpris, media, panel, keys] | The media control shows and controls the current MPRIS player. It is built (design: features/designs/mpris.md; contract: shell/modules/mpris
+- [notification-center](pages/notification-center.md) — category: decision | tags: [notifications, shell] | The shell replaces dunst as the only notification daemon (Quickshell NotificationServer).
 - [phantomat-canvas-geometry](pages/phantomat-canvas-geometry.md) — category: decision | tags: [hyprland, phantomat, canvas, geometry] | ## Scope
 - [phantomat-overview-boundary](pages/phantomat-overview-boundary.md) — category: decision | tags: [hyprland, phantomat, plugin, monitors] | # Decision
 - [phantomat-patch-provenance](pages/phantomat-patch-provenance.md) — category: decision | tags: [phantomat, git, fork, workflow] | # Decision

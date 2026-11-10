@@ -3,7 +3,7 @@ set -euo pipefail
 (( $# >= 1 && $# <= 3 )) || { printf '%s\n' 'Usage: test-nested mode [ephemeral|persistent] [state-profile]' >&2; exit 2; }
 
 mode=${1:?test mode required}
-[[ $mode == run || $mode == smoke || $mode == snapshot || $mode == theme || $mode == import-themes || $mode == profiles || $mode == motion || $mode == launcher || $mode == apps || $mode == app-launch || $mode == app-close || $mode == phantomat || $mode == borders || $mode == check || $mode == qml || $mode == theme-config || $mode == pipelines ]] || { printf '%s\n' 'Mode must be run, smoke, snapshot, theme, import-themes, profiles, motion, launcher, apps, app-launch, app-close, phantomat, borders, check, qml, theme-config or pipelines.' >&2; exit 1; }
+[[ $mode == run || $mode == smoke || $mode == snapshot || $mode == theme || $mode == import-themes || $mode == profiles || $mode == motion || $mode == launcher || $mode == notifications || $mode == apps || $mode == app-launch || $mode == app-close || $mode == phantomat || $mode == borders || $mode == check || $mode == qml || $mode == theme-config || $mode == pipelines ]] || { printf '%s\n' 'Mode must be run, smoke, snapshot, theme, import-themes, profiles, motion, launcher, notifications, apps, app-launch, app-close, phantomat, borders, check, qml, theme-config or pipelines.' >&2; exit 1; }
 project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 # The project wallpapers are not tracked files: fetch what is missing or wrong.
 bash "$project_root/tools/scripts/fetch-wallpapers"
@@ -18,6 +18,7 @@ state_mode=${2:-$test_state_mode}
 for dependency in bwrap dbus-run-session Hyprland hyprctl hyprpaper qs matugen jq grim magick rg lua pkill pgrep timeout tail; do
   command -v "$dependency" >/dev/null || { printf 'Required test dependency: %s\n' "$dependency" >&2; exit 1; }
 done
+[[ $mode != notifications ]] || command -v notify-send >/dev/null || { printf '%s\n' 'notify-send is required for notification tests.' >&2; exit 1; }
 [[ $mode != motion ]] || command -v qmlprofiler >/dev/null || { printf '%s\n' 'qmlprofiler is required for motion diagnostics.' >&2; exit 1; }
 [[ $mode != launcher && $mode != apps ]] || command -v app2unit >/dev/null || { printf '%s\n' 'app2unit is required for launcher tests.' >&2; exit 1; }
 command -v "${test_compositor_command[0]}" >/dev/null || { printf '%s\n' 'Configured compositor launcher is unavailable.' >&2; exit 1; }

@@ -8,7 +8,7 @@ QtObject {
     // Optional ControlColors amount overrides (see ControlColors.knobNames).
     property var controlTuning: ({})
     property string controlMode: ""
-    readonly property ControlColors controls: ControlColors { palette: LocalTheme.Palette; tuning: root.controlTuning; mode: root.controlMode }
+    readonly property LocalTheme.ControlColors controls: LocalTheme.ControlColors { palette: LocalTheme.Palette; tuning: root.controlTuning; mode: root.controlMode }
     readonly property color background: LocalTheme.Palette.background
     readonly property color surface: LocalTheme.Palette.surface
     readonly property color surfaceVariant: LocalTheme.Palette.surfaceVariant

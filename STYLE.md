@@ -243,9 +243,12 @@ Caelestia's `components/controls/StyledTextField.qml` consumes shared typography
 
 ## Icons
 
-`shell/icons/` also holds the media control's pictures (white, tinted by `SvgIcon`): transport (`media-play`, `media-pause`, `media-previous`, `media-next`), the selector arrows, the pin, the cassette and the bar's `audio-player`.
+Icons are QML, not images. The sources are the SVGs in `shell/svg/` (white on purpose, `viewBox` 24 where possible); `scripts/generate-icons` converts each with Qt's `svgtoqml -c` (the anti-aliased curve renderer) into `shell/icons/<PascalName>.qml`, an `Item` with a `color` property. The SVG's white becomes `color`; a translucent white (the `fill-opacity .16` of the notification icons) becomes `color` at that alpha. An SVG with any other colour, a gradient, an image or text is refused.
 
-`shell/icons/` holds the shell's SVG icons. They are filled white on purpose: a component tints one with `layer.effect: MultiEffect { colorization: 1; colorizationColor: <theme token> }`, so it follows the theme. The tint needs a GPU renderer; the offscreen QML tests draw the untinted icon only, so they check the icon's source, not its colour.
+- Never edit `shell/icons/*.qml`; edit the SVG and run `scripts/generate-icons`. `scripts/generate-icons --check` (part of `make test-pipelines`) fails when a file is stale or missing. A file records a hash of its SVG and of the script, so unchanged icons are skipped (about 20 ms for all).
+- `components/Icon.qml` loads one by name (`name: "media-play"`) and draws it in `color`, at `size`, on whole pixels when `centered`. It needs no GPU effect, so the offscreen tests render it too and check `name`.
+- An icon-only control uses `components/ShellIconButton.qml`: the picture is the button, with no box. Idle it is the full `text` colour; hover or keyboard selection lifts it to the control `focus` role; pressed or selected is the `accent`; a theme-focus outline shows only when the keyboard drives; it shrinks to `Motion.pressScale` while pressed.
+- Used by the media control (transport, selector arrows, pin, cassette, the bar's `audio-player`), the secret dialog's lock marks and the notification centre (`check`, `close`, `remove`, `clear-all`, `do-not-disturb`, `expand-more`).
 
 ## Folder responsibilities
 

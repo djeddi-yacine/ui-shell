@@ -203,6 +203,8 @@ rejects "$render_mpris" 10 best
 rejects "$render_mpris" 10 default_art
 rejects "$render_mpris" 10
 rejects "$render_mpris" 10 cover extra
+[[ $("$settings_path" notifications default '') == "$XDG_CONFIG_HOME/ui-shell/components/notifications/Default.qml" ]] || fail 'notifications default path'
+rejects "$settings_path" notifications output eDP-1
 [[ $("$settings_path" mpris default '') == "$XDG_CONFIG_HOME/ui-shell/components/mpris/Default.qml" ]] || fail 'mpris default path'
 mpris_rev=$("$save_settings" mpris default '' absent 15 off)
 [[ $mpris_rev =~ ^[[:xdigit:]]{64}$ ]] || fail 'mpris save did not return a digest'

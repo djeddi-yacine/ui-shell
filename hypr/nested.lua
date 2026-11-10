@@ -15,6 +15,12 @@ for key, value in pairs(settings.profile_overrides) do
   profile[key] = value
 end
 
+-- Per-shortcut key replacements, for shell shortcuts whose production key collides here.
+for name, key in pairs(settings.shell_shortcut_keys or {}) do
+  assert(profile.shell_shortcuts[name] ~= nil, "Nested profile: unknown shell shortcut " .. tostring(name))
+  profile.shell_shortcuts[name].key = key
+end
+
 require("hyprland")
 
 hl.monitor(settings.output)

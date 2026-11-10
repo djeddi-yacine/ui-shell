@@ -2,7 +2,7 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders
+.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders test-notify test-notifications
 
 test-help:
 	@printf '%s\n' \
@@ -22,6 +22,8 @@ test-help:
 		'  test-theme-config Check theme definitions, references and config contracts' \
 		'  test-pipelines    Check generated wallpaper and component pipelines' \
 		'  test-wallpaper    Check picker/UI and real wallpaper application' \
+		'  test-notify       Send notification cases to the shell in this session: a menu on a terminal, or CASES='3 5-7'' \
+		'  test-notifications Nested session: real D-Bus server and popups, asserts ordering, in-place progress, burst, DND, unread, clear, no focus change' \
 		'  test-launcher     Check launcher and app2unit dry-run without starting an app' \
 		'  test-audio        Stress the audio helper on a PRIVATE PipeWire+WirePlumber session (generated tones; host audio untouched)' \
 		'  test-record       Check the screen-record state machine with a fake recorder (no screen, no GPU)' \
@@ -40,7 +42,7 @@ test-help:
 		'  test-borders      Verify native output-scoped borders in a disposable session' \
 		''
 
-test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot test-auth test-mpris
+test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot test-auth test-mpris test-notifications
 	@printf '%s\n' 'Checks passed.'
 
 test-scripts:
@@ -75,6 +77,13 @@ test-env-clean:
 
 test-wallpaper:
 	@bash "$(TEST_RUNNER)" smoke ephemeral
+
+# Sends every notification case to the running shell's session bus (run it inside test-env / test-env-host).
+test-notify:
+	@bash "$(ROOT)/tests/notifications/send-cases" $(CASES)
+
+test-notifications:
+	@bash "$(TEST_RUNNER)" notifications ephemeral
 
 test-launcher:
 	@bash "$(TEST_RUNNER)" launcher ephemeral

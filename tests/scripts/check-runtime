@@ -145,6 +145,9 @@ fi
   if [[ $mode == launcher ]]; then
     bash "$test_project/tests/scripts/check-launcher"
   fi
+  if [[ $mode == notifications ]]; then
+    bash "$test_project/tests/scripts/check-notifications"
+  fi
   if [[ $mode == app-launch || $mode == app-close ]]; then
     bash "$test_project/tests/scripts/check-app-launch" "$output"
     [[ $mode != app-close ]] || printf '%s\n' ready >/artifacts/app-close-ready.log

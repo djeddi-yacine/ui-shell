@@ -50,8 +50,14 @@ Item {
         }
         const options = Config.ComponentSpec.components[component]
         if (!options) { finish(qsTr("Unknown component settings: %1").arg(component)); return }
-        if (!options.every(option => Config.ComponentSpec.valid(option, item[option.key]))) {
-            finish(qsTr("Invalid QML settings values: %1").arg(path)); return
+        const bad = options.find(option => !Config.ComponentSpec.valid(option, item[option.key]))
+        if (bad) {
+            if (bad.kind === "rules") {
+                finish(qsTr("Invalid QML settings values: %1 (%2)").arg(path).arg(Config.ComponentSpec.validRules(item[bad.key])))
+            } else {
+                finish(qsTr("Invalid QML settings values: %1").arg(path))
+            }
+            return
         }
         const next = {}
         for (const option of options) next[option.key] = item[option.key]

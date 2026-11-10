@@ -13,3 +13,4 @@ singleton MprisSource 1.0 MprisSource.qml
 MediaSelection 1.0 MediaSelection.qml
 MediaArt 1.0 MediaArt.qml
 MediaArtRunner 1.0 MediaArtRunner.qml
+singleton NotifSource 1.0 NotifSource.qml

@@ -8,6 +8,7 @@ QtObject {
     readonly property bool watchSourceFiles: false
     readonly property bool barEnabled: true
     readonly property bool appLauncherEnabled: true
+    readonly property bool notificationsEnabled: Notifications.enabled
     readonly property bool controlTuningEnabled: true
     readonly property bool audioControlEnabled: true
     readonly property bool screenRecordEnabled: true

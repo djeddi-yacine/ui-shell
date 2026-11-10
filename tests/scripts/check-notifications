@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Nested notification check: real D-Bus server, real popup windows, no host session touched.
+set -euo pipefail
+[[ ${UI_SHELL_ROOT-} == /project && ${HOME-} == /home/test && ${XDG_RUNTIME_DIR-} == /run/test ]]
+quickshell_directory=$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")
+command -v notify-send >/dev/null || { printf '%s\n' 'notify-send is required for notification tests.' >&2; exit 1; }
+qs --path "$quickshell_directory" kill --any-display
+timeout --kill-after=2 60 qs --path "$quickshell_directory/notifications-test.qml" >/artifacts/notifications-test.log 2>&1 &
+shell_pid=$!
+layer_seen=false
+focus_before=$(hyprctl -j activewindow | jq -r '.address // ""')
+while kill -0 "$shell_pid" 2>/dev/null; do
+  if hyprctl -j layers | jq -e '[.. | objects | .namespace? // empty] | any(startswith("ui-shell-notif"))' >/dev/null; then
+    layer_seen=true
+    [[ $(hyprctl -j activewindow | jq -r '.address // ""') == "$focus_before" ]] || { printf '%s\n' 'A notification popup changed the active window.' >&2; kill "$shell_pid"; exit 1; }
+  fi
+  sleep 0.2
+done
+wait "$shell_pid" || true
+rg -F 'NOTIF_PASS' /artifacts/notifications-test.log
+[[ $layer_seen == true ]] || { printf '%s\n' 'No ui-shell-notif layer was ever mapped.' >&2; exit 1; }
+if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:|NOTIF_FAIL' /artifacts/notifications-test.log; then
+  printf '%s\n' 'Notifications produced a QML warning/error.' >&2
+  exit 1
+fi
+printf '%s\n' 'Notifications passed: urgency/ordering, in-place progress update, burst newest-wins, DND, unread, clear; popup layer mapped without changing focus.'

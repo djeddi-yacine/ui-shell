@@ -13,11 +13,12 @@ REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: refs-pull dev-help dev-stage dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: dev-shaders refs-pull dev-help dev-stage dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
 
 dev-help:
 	@printf '%s\n' \
 		'Development (not the sandbox):' \
+		'  dev-shaders          Rebuild the notification spoiler shader (needs qsb from qt6-shadertools)' \
 		'  refs-pull             Pull reference repos; merges allowed, dirty repos skipped' \
 		'  dev-stage             Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
@@ -78,3 +79,10 @@ dev-verify-phantomat: dev-build-phantomat
 
 dev-run: dev-configure
 	@runtime=$$(<"$(RUNTIME_FILE)"); env UI_SHELL_RUNTIME="$$runtime" qs --no-duplicate --path "$$(jq -r '.paths.quickshell' "$$runtime")"
+
+SPOILER_DIR := $(ROOT)/shell/modules/notifications/shaders
+dev-shaders:
+	@QSB=$$(command -v qsb || ls /usr/lib/qt6/bin/qsb 2>/dev/null); \
+	[ -n "$$QSB" ] || { echo 'qsb not found: install qt6-shadertools' >&2; exit 1; }; \
+	cd $(SPOILER_DIR) && "$$QSB" --qt6 --glsl "100es,120,150" --hlsl 50 --msl 12 -o spoiler.frag.qsb spoiler.frag && \
+	sha256sum spoiler.frag | cut -d" " -f1 > spoiler.frag.sha256

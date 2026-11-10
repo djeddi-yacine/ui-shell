@@ -111,6 +111,12 @@ Item {
                 Layout.fillHeight: true
             }
 
+            NotifChip {
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
             AuthChip {
                 style: styleTokens
                 inputState: root.inputState

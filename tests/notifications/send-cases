@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Sends every notification test case to the session bus the shell owns.
+# Run inside the test session (make test-notify prints how). Visual cases need a person;
+# the final check asserts that the notification layer exists via hyprctl when available.
+set -euo pipefail
+command -v notify-send >/dev/null || { printf '%s\n' 'notify-send is required.' >&2; exit 1; }
+# The cases are only meaningful when the shell under test owns the notification name.
+owner_pid=$(busctl --user status org.freedesktop.Notifications 2>/dev/null | sed -n 's/^PID=//p' || true)
+owner=$(tr '\0' ' ' </proc/"${owner_pid:-0}"/cmdline 2>/dev/null || true)
+if [[ -z $owner_pid || $owner != *quickshell* && $owner != *"qs "* && $owner != qs* ]]; then
+  printf 'The notification name is %s, not the shell under test.\nStop that daemon and start the shell under test first (make test-env or make test-env-host).\n' "${owner:-unowned}" >&2
+  exit 1
+fi
+pause=${NOTIFY_CASE_PAUSE:-1}
+step() { printf 'case: %s\n' "$1"; }
+wait_a_bit() { sleep "$pause"; }
+
+interactive=false; [[ -t 0 ]] && interactive=true
+# Embedded image and sound hints. The image is generated here (a 64x64 two-colour PNG).
+work=$(mktemp -d)
+fake_pid=
+rules_file=
+record_file=${UI_SHELL_RECORD_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ui-shell/record}/state.json
+record_backup=
+cleanup() {
+  # Restore the state file first: a stand-in that dies under a "recording" file would be reported as a failed recording.
+  if [[ -n $record_backup ]]; then printf '%s' "$record_backup" >"$record_file.tmp" && mv -f "$record_file.tmp" "$record_file"
+  elif [[ -n $fake_pid ]]; then rm -f -- "$record_file"; fi
+  [[ -z $fake_pid ]] || kill "$fake_pid" 2>/dev/null || true
+  [[ -z $rules_file ]] || rm -f -- "$rules_file"
+  rm -rf "${work:?}"
+}
+trap cleanup EXIT
+python3 -I - "$work/pic.png" <<'PY'
+import struct, sys, zlib
+w = h = 64
+raw = b"".join(b"\x00" + b"".join((b"\xe0\x40\x40" if (x // 8 + y // 8) % 2 else b"\x40\x80\xe0") for x in range(w)) for y in range(h))
+def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+PY
+# Redaction: while a recording runs the shell replaces notification text with the spoiler shader.
+# These stand in for a real recording: they write the recorder's state file with a live stand-in
+# process (the shell only believes a recorder whose pid and start time exist), then restore it.
+# They never touch a real recording: they refuse to start when one is running.
+start_fake_recording() {
+  [[ ! -f $record_file ]] || record_backup=$(cat "$record_file")
+  mkdir -p -- "$(dirname "$record_file")"
+  sleep 600 & fake_pid=$!
+  local began
+  began=$(sed 's/^.*) //' "/proc/$fake_pid/stat" | cut -d' ' -f20)
+  jq -nc --argjson pid "$fake_pid" --arg began "$began" --argjson now "$(date +%s)" \
+    '{state:"recording", started:$now, recorderPid:$pid, recorderStart:$began}' >"$record_file.tmp" && mv -f "$record_file.tmp" "$record_file"
+  sleep 1
+}
+stop_fake_recording() { # restore the state file first, then stop the stand-in (see cleanup)
+  if [[ -n $record_backup ]]; then printf '%s' "$record_backup" >"$record_file.tmp" && mv -f "$record_file.tmp" "$record_file"; else rm -f -- "$record_file"; fi
+  record_backup=
+  kill "$fake_pid" 2>/dev/null || true; wait "$fake_pid" 2>/dev/null || true; fake_pid=
+  sleep 1
+}
+# Each case is a function case_<name>; `cases` lists them in menu order. The recording cases fake a
+# screen recording (and the rules ones need a shell restart), so they only run when picked by number.
+cases=(low normal critical timeout actions progress replace long rule_mute burst image_path image_data sound_name sound_file suppress_sound
+       redaction redaction_held blur_only_app blur_only_app_regexp reveal_by_app reveal_by_app_regexp reveal_by_text layers)
+# What the menu says about a case that fakes a recording.
+declare -A note=(
+  [redaction]='fakes a recording: blurs every notification'
+  [redaction_held]='fakes a recording: blurs every notification until Enter'
+  [blur_only_app]='rules, needs a shell restart: blurs only notif-secret'
+  [blur_only_app_regexp]='rules, needs a shell restart: blurs only apps named secret-*'
+  [reveal_by_app]='rules, needs a shell restart: blurs all but notif-reveal'
+  [reveal_by_app_regexp]='rules, needs a shell restart: blurs all but notif-a and notif-b'
+  [reveal_by_text]='rules, needs a shell restart: blurs all but summaries starting READABLE'
+)
+recording_cases=" redaction redaction_held blur_only_app blur_only_app_regexp reveal_by_app reveal_by_app_regexp reveal_by_text "
+case_low()      { notify-send -u low -a notif-test 'Low' 'Low urgency body'; }
+case_normal()   { notify-send -u normal -a notif-test 'Normal' 'Normal urgency body'; }
+case_critical() { notify-send -u critical -a notif-test 'Critical' 'Critical body'; }
+case_timeout()  { notify-send -t 1500 -a notif-test 'Timeout' 'Gone after 1.5 s'; }
+case_actions()  { notify-send -a notif-test -A default=Open -A other=Other 'Actions' 'Open the drawer and press 1 or 2' >/dev/null & }
+case_progress() { local id v; id=$(notify-send -p -a notif-test -h int:value:10 'Progress' '10 %'); for v in 40 70 100; do sleep 0.3; notify-send -r "$id" -a notif-test -h "int:value:$v" 'Progress' "$v %"; done; }
+case_replace()  { local id; id=$(notify-send -p -a notif-test 'Replace' 'first'); sleep 0.3; notify-send -r "$id" -a notif-test 'Replace' 'second'; }
+case_long()     { notify-send -a notif-test 'Long' "$(printf 'word %.0s' $(seq 1 120))"; }
+case_rule_mute() { notify-send -a notify-send 'Rule target' 'Muted when the rules example is installed'; }
+case_burst()    { seq 1 100 | xargs -P 16 -I{} notify-send -a notif-burst "Burst {}" "body {}"; }
+case_image_path() { notify-send -a notif-test -h "string:image-path:$work/pic.png" 'Image path' 'Open the drawer and press Load image'; }
+case_image_data() { # width, height, rowstride, has_alpha, bits, channels, bytes (a 2x2 RGBA square, 16 bytes)
+  busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications Notify 'susssasa{sv}i' notif-test 0 '' 'Image data' 'Embedded 2x2 pixels' 0 1 image-data '(iiibiiay)' 2 2 8 true 8 4 16 255 0 0 255 0 255 0 255 0 0 255 255 255 255 0 255 5000 >/dev/null; }
+case_sound_name() { notify-send -a notif-test -h string:sound-name:message-new-instant 'Sound name' 'You should hear the theme sound'; }
+case_sound_file() { notify-send -a notif-test -h "string:sound-file:/usr/share/sounds/freedesktop/stereo/complete.oga" 'Sound file' 'You should hear complete.oga'; }
+case_suppress_sound() { notify-send -a notif-test -h boolean:suppress-sound:true -h string:sound-name:message-new-instant 'Silent' 'You should hear nothing'; }
+case_layers() {
+  command -v hyprctl >/dev/null && hyprctl layers -j >/dev/null 2>&1 || { printf '%s\n' 'skipped: hyprctl is not available'; return; }
+  hyprctl layers -j | grep -o 'ui-shell-notif[a-z-]*' | sort -u || printf '%s\n' 'no notification layer open (expected once popups expire)'
+}
+
+# The recording cases refuse to start over a real recording and need jq.
+recording_ready() {
+  command -v jq >/dev/null || { printf '%s\n' 'skipped: jq is required'; return 1; }
+  if [[ -f $record_file ]] && jq -e '.state == "starting" or .state == "recording"' "$record_file" >/dev/null 2>&1; then
+    printf '%s\n' 'skipped: a recording is running'; return 1
+  fi
+}
+case_redaction() {
+  recording_ready || return 0
+  start_fake_recording
+  notify-send -a notif-test 'Hidden summary' 'Hidden body text: both must be blurred bars'; wait_a_bit
+  printf '%s\n' 'redaction: the popup shows blur bars now; stopping the stand-in recorder'
+  stop_fake_recording
+  notify-send -a notif-test 'Visible again' 'Text is back after the recording'
+}
+# Held: redaction stays on and the notifications do not expire, so the shader can be judged at
+# leisure (popup and drawer). Enter ends it; without a terminal it ends after NOTIFY_HOLD s.
+case_redaction_held() {
+  recording_ready || return 0
+  start_fake_recording
+  notify-send -t 0 -a notif-redact 'Never expires' 'A body long enough to take two lines so the second spoiler bar shows as well as the first one.'
+  notify-send -t 0 -a notif-redact -u critical 'Critical, held' 'Critical body'
+  notify-send -t 0 -a notif-redact-b 'Another app' 'Second stack, same bars'
+  printf '%s\n' 'redaction held: judge the shader on the popup and in the drawer (Super+Shift+B).'
+  if $interactive; then read -r -p 'Press Enter to stop the stand-in recording. ' _; else sleep "${NOTIFY_HOLD:-30}"; fi
+  stop_fake_recording
+  printf '%s\n' 'redaction held: ended; the drawer cards show their text again.'
+}
+# Rules decide what a recording blurs: the first matching rule wins, `reveal: true` exempts a
+# notification, and a notification no rule matches is blurred. These cases install a temporary rules
+# file (only where none exists, never over yours), fake a recording, and send one notification per
+# app: the shell must blur exactly the apps named blurred and show the ones named readable.
+# The shell reads its rules once, at start, so a case works in two runs: the first installs the
+# rules file and asks for a restart of the shell under test; the second (the file is there, with this
+# case's rules) sends the notifications and removes the file again.
+# $1 = the rules list (QML), $2 = apps that must be blurred, $3 = apps that must stay readable.
+rules_case() {
+  recording_ready || return 0
+  # The rules file belongs where the shell under test reads it (sandbox or host), so the runtime
+  # file comes from that shell's own environment, not from this terminal's.
+  local runtime candidate app wanted
+  runtime=$(tr '\0' '\n' <"/proc/$owner_pid/environ" 2>/dev/null | sed -n 's/^UI_SHELL_RUNTIME=//p')
+  [[ -n $runtime ]] || { printf '%s\n' 'skipped: the shell under test does not expose UI_SHELL_RUNTIME'; return 0; }
+  candidate=$(UI_SHELL_RUNTIME=$runtime "$(dirname "$0")/../../scripts/component-settings-path" notifications default '') \
+    || { printf '%s\n' 'skipped: no settings path'; return 0; }
+  wanted=$(printf '%s\n' '// send-cases test rules: remove with make test-notify (run the same case again)' 'import QtQuick' 'QtObject {' "    property var rules: $1" '}')
+  if [[ ! -e $candidate ]]; then
+    mkdir -p -- "$(dirname "$candidate")"
+    printf '%s\n' "$wanted" >"$candidate"
+    printf 'rules: %s\ninstalled %s\nRestart the shell under test now (it reads rules only at start), then run this case again.\n' "$1" "$candidate"
+    return 0
+  fi
+  if [[ $(<"$candidate") != "$wanted" ]]; then
+    if [[ $(head -n1 "$candidate") == '// send-cases test rules'* ]]; then
+      printf '%s\n' "$wanted" >"$candidate"
+      printf 'rules: %s\nreplaced the rules of an earlier case in %s\nRestart the shell under test now, then run this case again.\n' "$1" "$candidate"
+    else
+      printf 'skipped: %s is yours (not a test file); move it away first\n' "$candidate"
+    fi
+    return 0
+  fi
+  start_fake_recording
+  for app in $2; do notify-send -t 0 -a "$app" "BLURRED: $app" 'Must be blurred bars while recording'; done
+  for app in $3; do notify-send -t 0 -a "$app" "READABLE: $app" 'Must stay readable while recording'; done
+  printf 'rules: %s\nblurred: %s\nreadable: %s\n(check the popups, then the drawer)\n' "$1" "$2" "$3"
+  if $interactive; then read -r -p 'Press Enter to stop the stand-in recording and remove the test rules. ' _; else sleep "${NOTIFY_HOLD:-30}"; fi
+  stop_fake_recording
+  rm -f -- "$candidate"
+  printf '%s\n' 'test rules removed; restart the shell under test to drop them from memory.'
+}
+# Only the named app is blurred; a last rule that matches every app reveals the rest.
+case_blur_only_app() {
+  rules_case '[{ name: "blur one", app: "notif-secret" }, { name: "rest readable", appMatch: ".", reveal: true }]' \
+    notif-secret 'notif-open notif-other'; }
+# Only apps whose name matches the regexp are blurred.
+case_blur_only_app_regexp() {
+  rules_case '[{ name: "blur secret-*", appMatch: "^secret-" }, { name: "rest readable", appMatch: ".", reveal: true }]' \
+    'secret-mail secret-chat' 'public-news notif-open'; }
+# The opposite: everything is blurred (the default while recording) except what a reveal rule names.
+case_reveal_by_app() {
+  rules_case '[{ name: "reveal one", app: "notif-reveal", reveal: true }]' notif-blur notif-reveal; }
+case_reveal_by_app_regexp() {
+  rules_case '[{ name: "reveal notif-*", appMatch: "^notif-(a|b)$", reveal: true }]' notif-c 'notif-a notif-b'; }
+# match is a case-insensitive regexp over summary and body, so here the summaries tell them apart.
+case_reveal_by_text() {
+  rules_case '[{ name: "reveal by text", match: "^READABLE", reveal: true }]' notif-text-b notif-text-a; }
+
+# Which cases to run: numbers and ranges as arguments ("3 5-7"), "all" for every plain case, or a
+# menu on a terminal. With neither (no terminal), the plain cases run; recording cases never run unasked.
+selected=()
+add_selection() {
+  local tok lo hi n
+  for tok in "$@"; do
+    case $tok in
+      all) for n in "${!cases[@]}"; do [[ $recording_cases == *" ${cases[n]} "* ]] || selected+=("$n"); done ;;
+      everything) for n in "${!cases[@]}"; do selected+=("$n"); done ;;
+      *-*) lo=${tok%-*}; hi=${tok#*-}; for ((n = lo; n <= hi; n++)); do selected+=("$((n - 1))"); done ;;
+      *) selected+=("$((tok - 1))") ;;
+    esac
+  done
+}
+if (($# > 0)); then add_selection "$@"
+elif $interactive; then
+  for n in "${!cases[@]}"; do
+    mark=; [[ -z ${note[${cases[n]}]:-} ]] || mark="  (${note[${cases[n]}]})"
+    printf '%3d) %s%s\n' "$((n + 1))" "${cases[n]//_/ }" "$mark"
+  done
+  read -r -p 'Cases to run (numbers, ranges like 3-5, "all" = every plain case, "everything"): ' answer
+  # shellcheck disable=SC2086
+  add_selection $answer
+else add_selection all; fi
+((${#selected[@]} > 0)) || { printf '%s\n' 'Nothing selected.' >&2; exit 1; }
+for n in "${selected[@]}"; do
+  [[ $n =~ ^[0-9]+$ && -n ${cases[n]:-} ]] || { printf 'No such case: %s\n' "$((n + 1))" >&2; exit 1; }
+done
+for n in "${selected[@]}"; do
+  step "${cases[n]//_/ }"
+  "case_${cases[n]}"
+  wait_a_bit
+done
+printf '%s\n' 'done: check popups, the drawer (Super+Shift+B / F6 nested), unread badge and DND (D in the drawer).'

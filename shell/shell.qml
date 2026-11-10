@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 
 import "surfaces" as Surfaces
 import "modules/wallpaper" as Wallpaper
@@ -15,6 +16,7 @@ import "modules/record" as Record
 import "modules/shot" as Shot
 import "modules/auth" as Auth
 import "modules/mpris" as Mpris
+import "modules/notifications" as Notif
 import "modules/panels" as Panels
 import "adapters" as Adapters
 import "config" as Config
@@ -24,7 +26,33 @@ ShellRoot {
         Quickshell.watchFiles = Config.Config.watchSourceFiles
         // Apply the saved control-colour tuning before the first surface renders.
         Adapters.ControlTuningStore.reload()
+        Notif.NotifCenter.source = Adapters.NotifSource
     }
+    Adapters.QmlSettingsFile {
+        id: notifRulesFile
+        component: "notifications"
+        scope: "default"
+        outputName: ""
+    }
+    // The rules are read once, when the shell starts: a saved edit applies at the next start.
+    Notif.NotifRules { id: notifRules; file: notifRulesFile }
+    Notif.NotifSound { id: notifSound; command: Config.GeneratedRuntime.commands.notifySound ?? "" }
+    Connections {
+        target: Notif.NotifCenter
+        function onSoundRequested(path) { notifSound.play(path) }
+    }
+    Notif.NotifFeeds {
+        center: Notif.NotifCenter
+        shotRunner: Adapters.ShotRunner
+        recordState: Adapters.RecordState
+    }
+    Binding { target: Notif.NotifCenter; property: "redact"; value: Adapters.RecordState.active }
+    Binding {
+        target: Notif.NotifCenter
+        property: "fullscreen"
+        value: Hyprland.focusedMonitor?.activeWorkspace?.hasFullscreen ?? false
+    }
+    Binding { target: Notif.NotifCenter; property: "rules"; value: notifRules }
     Controls.InputState {
         id: shellInput
         pointerActive: false
@@ -61,11 +89,23 @@ ShellRoot {
     // The authentication dialog is modal: it appears over whatever is open and is not part of
     // the panel mutual exclusion below.
     Auth.AuthSurface {}
+    Loader {
+        active: Config.Config.notificationsEnabled
+        sourceComponent: Notif.NotifShortcut {}
+    }
+    Variants {
+        model: Config.Config.notificationsEnabled ? Quickshell.screens : []
+        Notif.NotifPopupSurface {}
+    }
+    Variants {
+        model: Config.Config.notificationsEnabled ? Quickshell.screens : []
+        Notif.NotifSurface { inputState: shellInput }
+    }
     // Only one of these panels is open at a time; opening one closes the others.
     Panels.PanelGroup {
         panels: [
             Record.RecordPanelState, Shot.ShotPanelState, Tuning.TuningState, Audio.AudioState,
-            Apps.AppState, Wallpaper.PickerState, Mpris.MprisState
+            Apps.AppState, Wallpaper.PickerState, Mpris.MprisState, Notif.NotifState
         ]
     }
 

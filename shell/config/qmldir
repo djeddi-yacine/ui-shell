@@ -19,3 +19,4 @@ singleton ThemeEditor 1.0 ThemeEditor.qml
 singleton Auth 1.0 Auth.qml
 singleton Mpris 1.0 Mpris.qml
 singleton RegionPick 1.0 RegionPick.qml
+singleton Notifications 1.0 Notifications.qml

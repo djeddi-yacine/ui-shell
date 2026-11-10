@@ -27,6 +27,9 @@ return {
     screen_record = { key = "R", target = "ui-shell:screen-record" },
     screen_shot = { key = "P", target = "ui-shell:screen-shot" },
     media_panel = { key = "N", target = "ui-shell:media-panel" },
+    notifications = { key = "B", target = "ui-shell:notifications" },
+    notifications_dnd = { key = "D", target = "ui-shell:notifications-dnd" },
+    notifications_dismiss = { key = "BACKSPACE", target = "ui-shell:notifications-dismiss" },
   },
 
   -- The keyboard media keys, handled by the shell (shell/modules/mpris/MprisKeys.qml). An ordered

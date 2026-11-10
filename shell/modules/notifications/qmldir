@@ -1,0 +1,13 @@
+module UiShell.Notifications
+singleton NotifCenter 1.0 NotifCenter.qml
+NotifShortcut 1.0 NotifShortcut.qml
+NotifPopupSurface 1.0 NotifPopupSurface.qml
+singleton NotifState 1.0 NotifState.qml
+NotifCard 1.0 NotifCard.qml
+NotifDrawer 1.0 NotifDrawer.qml
+NotifSurface 1.0 NotifSurface.qml
+NotifRules 1.0 NotifRules.qml
+NotifSound 1.0 NotifSound.qml
+NotifFeeds 1.0 NotifFeeds.qml
+NotifSpoiler 1.0 NotifSpoiler.qml
+NotifStack 1.0 NotifStack.qml
