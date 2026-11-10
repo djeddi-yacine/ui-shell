@@ -28,7 +28,7 @@ hl.bind(profile.window_maximize_bind,
   canvas_or_native(hl.plugin.spatialoverview.canvas("fill"), hl.dsp.window.fullscreen({ mode = "maximized" })), {
   description = "Toggle maximized or Canvas fill",
 })
-hl.bind(mod .. " + V",
+hl.bind(mod .. " + Z",
   canvas_or_native(hl.plugin.spatialoverview.canvas("pin"), hl.dsp.window.float()), {
   description = "Toggle floating or Canvas pin",
 })

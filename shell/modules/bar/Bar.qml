@@ -9,6 +9,7 @@ import "../apps" as Apps
 import "../tuning" as Tuning
 import "../audio" as Audio
 import "../shot" as Shot
+import "../clipboard" as Clipboard
 
 Item {
     id: root
@@ -90,6 +91,16 @@ Item {
                 visible: ShellConfig.Config.screenShotEnabled
                 text: qsTr("Screenshot")
                 panelState: Shot.ShotPanelState
+                screenName: root.screenName
+                style: styleTokens
+                inputState: root.inputState
+                Layout.fillHeight: true
+            }
+
+            PanelButton {
+                visible: ShellConfig.Config.clipboardEnabled
+                text: qsTr("Clipboard")
+                panelState: Clipboard.ClipboardState
                 screenName: root.screenName
                 style: styleTokens
                 inputState: root.inputState

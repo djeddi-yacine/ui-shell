@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Seed the cliphist config the shell's clipboard history needs, only when it is absent: an
+# existing file is the user's and always wins. The stock cliphist.service reads the default path
+# ($CONFIG_HOME/cliphist/config), so no unit drop-in is needed.
+set -euo pipefail
+(( $# == 2 )) || { printf '%s\n' 'Usage: seed-cliphist-config SOURCE_ROOT CONFIG_HOME (reads XDG_RUNTIME_DIR)' >&2; exit 2; }
+source_root=$(realpath -e -- "$1")
+config_home=$(realpath -m -- "$2")
+runtime=${XDG_RUNTIME_DIR-}
+template=$source_root/tools/cliphist-config
+fail() { printf 'Seed cliphist config: %s\n' "$*" >&2; exit 1; }
+[[ -f $template && ! -L $template ]] || fail 'tools/cliphist-config must be a regular file'
+[[ $runtime == /* && -d $runtime ]] || fail 'XDG_RUNTIME_DIR must be an existing absolute directory'
+[[ $runtime != *[[:space:]]* ]] || fail 'XDG_RUNTIME_DIR must not contain whitespace (cliphist config values end at a space)'
+[[ ! -L $config_home/cliphist ]] || fail 'the cliphist config directory must not be a symlink'
+target=$config_home/cliphist/config
+[[ ! -e $target && ! -L $target ]] || exit 0
+mkdir -p -- "${config_home}/cliphist"
+temporary=$(mktemp "$config_home/cliphist/.config.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+while IFS= read -r line || [[ -n $line ]]; do
+  printf '%s\n' "${line//@RUNTIME_DIR@/${runtime%/}}"
+done <"$template" >"$temporary"
+mv -n -- "$temporary" "$target"

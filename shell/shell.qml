@@ -15,6 +15,7 @@ import "modules/audio" as Audio
 import "modules/record" as Record
 import "modules/shot" as Shot
 import "modules/auth" as Auth
+import "modules/clipboard" as Clipboard
 import "modules/mpris" as Mpris
 import "modules/notifications" as Notif
 import "modules/panels" as Panels
@@ -79,6 +80,10 @@ ShellRoot {
         sourceComponent: Shot.ShotShortcut {}
     }
     Loader {
+        active: Config.Config.clipboardEnabled
+        sourceComponent: Clipboard.ClipboardShortcut {}
+    }
+    Loader {
         active: Config.Config.mprisEnabled
         sourceComponent: Mpris.MprisShortcut {}
     }
@@ -105,7 +110,7 @@ ShellRoot {
     Panels.PanelGroup {
         panels: [
             Record.RecordPanelState, Shot.ShotPanelState, Tuning.TuningState, Audio.AudioState,
-            Apps.AppState, Wallpaper.PickerState, Mpris.MprisState, Notif.NotifState
+            Apps.AppState, Wallpaper.PickerState, Mpris.MprisState, Notif.NotifState, Clipboard.ClipboardState
         ]
     }
 
@@ -151,5 +156,9 @@ ShellRoot {
     Variants {
         model: Config.Config.mprisEnabled ? Quickshell.screens : []
         Mpris.MprisSurface { inputState: shellInput }
+    }
+    Variants {
+        model: Config.Config.clipboardEnabled ? Quickshell.screens : []
+        Clipboard.ClipboardSurface { inputState: shellInput }
     }
 }

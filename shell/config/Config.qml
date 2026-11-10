@@ -14,6 +14,7 @@ QtObject {
     readonly property bool screenRecordEnabled: true
     readonly property bool screenShotEnabled: true
     readonly property bool authEnabled: true
+    readonly property bool clipboardEnabled: true
     // The media control: bar icon, panel and panel key. The media keys have their own switch (phase 2).
     readonly property bool mprisEnabled: true
     // The keyboard media keys (play or pause, pause, next, previous) are handled by the shell.

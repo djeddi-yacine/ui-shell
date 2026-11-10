@@ -30,6 +30,7 @@ return {
     notifications = { key = "B", target = "ui-shell:notifications" },
     notifications_dnd = { key = "D", target = "ui-shell:notifications-dnd" },
     notifications_dismiss = { key = "BACKSPACE", target = "ui-shell:notifications-dismiss" },
+    clipboard = { key = "V", target = "ui-shell:clipboard" },
   },
 
   -- The keyboard media keys, handled by the shell (shell/modules/mpris/MprisKeys.qml). An ordered

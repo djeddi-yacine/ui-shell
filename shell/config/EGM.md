@@ -4,7 +4,7 @@
 Singleton QML configuration for the shell: feature toggles, key bindings, panel geometry, and per-component option specs. Module `UiShell.Config` ([config/qmldir]). Three files are source-tree placeholders replaced at runtime preparation (see Side Effects).
 
 ## Interface
-- `Config` [Config.qml]: `watchSourceFiles`, `barEnabled`, `appLauncherEnabled`, `controlTuningEnabled`, `audioControlEnabled`, `screenRecordEnabled`, `screenShotEnabled`, `barHeight`, `barLabel`, `barWorkspaceNumbers`, `barWorkspacesEnabled`, `barControlMode`, `notificationsEnabled` (mirrors `Notifications.enabled`).
+- `Config` [Config.qml]: `watchSourceFiles`, `barEnabled`, `appLauncherEnabled`, `controlTuningEnabled`, `audioControlEnabled`, `screenRecordEnabled`, `screenShotEnabled`, `barHeight`, `barLabel`, `barWorkspaceNumbers`, `barWorkspacesEnabled`, `barControlMode`, `notificationsEnabled`, `clipboardEnabled` (mirrors `Notifications.enabled`).
 - `AppLauncher` [AppLauncher.qml]: shortcut (`shortcutAppId`, `shortcutName`), runner (`runnerExecutable`, `runnerArguments`), layout, row and key properties (`visibleRows`, `showIcons`, `previousKey`, ...).
 - `Audio` [Audio.qml]: `shortcutName`, `maximumVolumePercent`, `volumeStepPercent`, `refreshDelay`, layout sizes.
 - `ComponentSpec` [ComponentSpec.qml:components, valid]: option tables (any number of options; integer, boolean or choices of numbers or strings, with optional labels) for `launcher`, `wallpaper`, `audio`, `record`, `shot`, `notifications`; `valid(option, value)`; `validRules(value)` returns `""` or the first problem of a notification rules list.
@@ -17,6 +17,11 @@ Singleton QML configuration for the shell: feature toggles, key bindings, panel 
 - `Config` gains `mprisEnabled` (bar entry, panel, panel key) and `mprisKeysEnabled` (the four media keys).
 - `Mpris` also holds the art limits (sizes, caps, timeouts, cache bounds), the tool names and the provider table; `commands.mediaArt` is `scripts/media-art`; `blurhashAvailable` is set at start from the tool check and hides the mode in the settings.
 - `Notifications` (singleton) [Notifications.qml]: `enabled`, timeouts (`lowTimeoutMs`, `normalTimeoutMs`, `maxTimeoutMs`), sound (`soundEnabled`, `soundFile`), `popupNamespace`, `drawerNamespace`, shortcut names (`shortcutDrawer`, `shortcutDnd`, `shortcutDismiss`), card and drawer sizes, the stack deck (`deckDepth`, `deckPeek`, `deckScaleStep`, `deckShade`), `arrivalWindowMs`, icon button sizes.
+- `Clipboard` (singleton) [Clipboard.qml]: `namespace`, `scrimNamespace`, `shortcutAppId`, `shortcutName`, `scrimOpacity`, card and row geometry (`cardWidth`, `cardHeight`, `rowHeight`, `badgeSize`, `previewHeight`), `imageDelayMilliseconds`, and the keys: `previewKey` (Space), `copyContentModifiers` (Shift, with Enter: copy a file's content), `previousKey`, `nextKey`, `previousPageKey`, `nextPageKey`, `deleteKey`, `clearModifiers`, `refreshKey`, `refreshLetterKey`, plus `emptyText` and `noMatchText`.
+- `Placement` (singleton) [Placement.qml:defaultMode, y]: where a panel card spawns (`"center"`, `"top"` under the bar, `"bottom"`); `y(mode, areaHeight, cardHeight, barHeight, margin)` returns the card's y.
+- `Shot` [Shot.qml]: `placement`, `shortcutAppId`, `shortcutName` (`screen-shot`), `asynchronousPanelLoad`, card sizes, `closeDelayMilliseconds`, defaults `copyToClipboard` and `saveToFile`.
+- `Record` [Record.qml]: `placement`, `shortcutName` (`screen-record`), `asynchronousPanelLoad`, card sizes, and recording defaults (`countdownSeconds`, `desktopAudio`, `microphone`, `fps`, `quality`, `codec`, `audioCodec`, `container`, `bitrate`, `cursor`, `webcam`), `safetyRefreshSeconds`, `clockTickMilliseconds`.
+- `RegionPick` [RegionPick.qml]: `dimOpacity`, `borderWidth`, `handleSize` of the region picker overlay.
 
 ## Invariants
 - `Outputs` never substitutes another screen: unsupported mode or missing target logs `console.error` and returns `null` [Outputs.qml:launcherScreen, pickerScreen].
@@ -24,6 +29,8 @@ Singleton QML configuration for the shell: feature toggles, key bindings, panel 
 - `ComponentSpec.valid` accepts `undefined`; booleans must be boolean; integers must be in range or in `choices` [ComponentSpec.qml:valid].
 - `Keyboard.shortcut` throws for modifiers or keys without an explicit name [Keyboard.qml:shortcut].
 - `ErrorPanels.dismissKey` is `Keyboard.cancelKey` [ErrorPanels.qml:dismissKey].
+- `Placement.y` returns the centred position for any mode other than `"top"` and `"bottom"` [Placement.qml:y].
+- `Config.clipboardEnabled` gates both the clipboard shortcut and its windows [Config.qml:clipboardEnabled, ../shell.qml].
 
 ## Side Effects
 - None at runtime in this directory (pure `QtObject` singletons).

@@ -9,6 +9,7 @@ singleton Placement 1.0 Placement.qml
 singleton Audio 1.0 Audio.qml
 singleton Record 1.0 Record.qml
 singleton Shot 1.0 Shot.qml
+singleton Clipboard 1.0 Clipboard.qml
 singleton ComponentSpec 1.0 ComponentSpec.qml
 singleton WallpaperPicker 1.0 WallpaperPicker.qml
 singleton Outputs 1.0 Outputs.qml

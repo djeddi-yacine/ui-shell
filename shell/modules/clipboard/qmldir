@@ -1,0 +1,7 @@
+module UiShell.Clipboard
+singleton ClipboardState 1.0 ClipboardState.qml
+singleton ClipboardSearch 1.0 ClipboardSearch.qml
+ClipboardShortcut 1.0 ClipboardShortcut.qml
+ClipboardSurface 1.0 ClipboardSurface.qml
+ClipboardPanel 1.0 ClipboardPanel.qml
+ClipboardRow 1.0 ClipboardRow.qml

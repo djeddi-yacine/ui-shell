@@ -5,7 +5,7 @@ local profile = require("profile")
 
 hl.layer_rule({
   name = "shell-owns-motion",
-  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|mpris|auth|auth-scrim|notif|notif-drawer)$" },
+  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|mpris|auth|auth-scrim|notif|notif-drawer|clipboard|clipboard-scrim)$" },
   no_anim = true,
 })
 
@@ -15,6 +15,15 @@ hl.layer_rule({
 hl.layer_rule({
   name = "auth-not-shared",
   match = { namespace = "^ui-shell-auth$" },
+  no_screen_share = true,
+})
+
+-- The clipboard history shows what was copied, passwords included. Its card is requested to be kept
+-- out of compositor screen sharing, like the authentication card. Whether gpu-screen-recorder,
+-- which captures below the compositor, honours this is tested, not assumed.
+hl.layer_rule({
+  name = "clipboard-not-shared",
+  match = { namespace = "^ui-shell-clipboard$" },
   no_screen_share = true,
 })
 

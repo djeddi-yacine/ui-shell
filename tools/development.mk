@@ -13,7 +13,7 @@ REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: dev-shaders refs-pull dev-help dev-stage dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
 
 dev-help:
 	@printf '%s\n' \
@@ -22,6 +22,7 @@ dev-help:
 		'  refs-pull             Pull reference repos; merges allowed, dirty repos skipped' \
 		'  dev-stage             Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
+		'  dev-seed-clipboard    Write ~/.config/cliphist/config (history in the runtime dir) only if absent' \
 		'  dev-import-themes     Regenerate reference definitions; explicit POSITIVE/WARNING/NEGATIVE required' \
 		'  dev-bundle-themes     Maintainers: import, then refresh the checked-in bundled-themes/ (credit in CREDITS.md)' \
 		'  dev-lint              Check source QML (override QMLLINT explicitly)' \
@@ -47,6 +48,10 @@ refs-pull:
 dev-stage:
 	@bash "$(ROOT)/tools/scripts/stage-config" "$(ROOT)" "$(CONFIG_ROOT)"
 
+# Writes the user's own cliphist config, so it is never part of staging; an existing file is kept.
+dev-seed-clipboard:
+	@bash "$(ROOT)/tools/scripts/seed-cliphist-config" "$(ROOT)" "$${XDG_CONFIG_HOME:-$$HOME/.config}"
+
 dev-configure: dev-stage
 	@mkdir -p "$(ROOT)/.build"
 	@resolved=$$(mktemp "$(ROOT)/.build/.paths.XXXXXX"); trap 'rm -f -- "$$resolved"' EXIT; \
@@ -70,8 +75,17 @@ dev-lint:
 dev-verify-hypr: dev-configure
 	@runtime=$$(<"$(RUNTIME_FILE)"); env UI_SHELL_RUNTIME="$$runtime" UI_SHELL_RUNTIME_LUA="$$(jq -r '.runtimeLua' "$$runtime")" Hyprland --verify-config --config "$$(jq -r '.paths.hypr' "$$runtime")/hyprland.lua"
 
+# The plugin's objects do not depend on Hyprland's headers, so after a Hyprland upgrade make would
+# only relink them and the plugin would refuse to load ("Version mismatch"). Remember which
+# Hyprland the objects were built against and rebuild them all when it changes.
+PHANTOMAT_STAMP := $(PHANTOMAT_DIR)/.build/hyprland-build-stamp
 dev-build-phantomat:
-	@$(MAKE) -C "$(PHANTOMAT_DIR)" OUT="$(PHANTOMAT_PLUGIN)" -j2 all
+	@stamp=$$(pkg-config --modversion hyprland)-$$(for dir in $$(pkg-config --cflags-only-I hyprland | sed 's/-I//g'); do if [ -f "$$dir/src/version.h" ]; then sed -n 's/^#define GIT_COMMIT_HASH *"\(.*\)"/\1/p' "$$dir/src/version.h"; fi; done | head -n 1); \
+	if [ "$$(cat "$(PHANTOMAT_STAMP)" 2>/dev/null)" != "$$stamp" ]; then \
+		printf 'Hyprland changed (%s): rebuilding Phantomat from scratch.\n' "$$stamp"; \
+		rm -rf -- "$(PHANTOMAT_DIR)/.build/obj"; \
+	fi; \
+	$(MAKE) -C "$(PHANTOMAT_DIR)" OUT="$(PHANTOMAT_PLUGIN)" -j2 all && mkdir -p "$(dir $(PHANTOMAT_STAMP))" && printf '%s' "$$stamp" >"$(PHANTOMAT_STAMP)"
 
 dev-verify-phantomat: dev-build-phantomat
 	@test -s "$(PHANTOMAT_PLUGIN)"

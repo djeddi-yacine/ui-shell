@@ -23,6 +23,15 @@ end
 
 require("hyprland")
 
+-- Only the disposable session records clipboard history here; on a real desktop the
+-- cliphist user unit owns the watcher. Both selections feed the same private store.
+hl.on("hyprland.start", function()
+  hl.exec_cmd("wl-paste --type text --watch cliphist store")
+  hl.exec_cmd("wl-paste --type image --watch cliphist store")
+  -- A few sample entries so the panel (Super+V) has something to show in the test session.
+  hl.exec_cmd([[sh -c 'for text in "first sample entry" "a second one, with several words" "quote \" and backslash \\" "file:///usr/share/applications/foot.desktop"; do printf "%s" "$text" | cliphist store; done; printf "line one\nline two\nline three" | cliphist store']])
+end)
+
 hl.monitor(settings.output)
 
 hl.bind(settings.terminal.bind, hl.dsp.exec_cmd(settings.terminal.command), {

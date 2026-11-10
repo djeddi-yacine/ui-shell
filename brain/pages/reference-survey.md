@@ -5,7 +5,7 @@ category: reference
 status: active
 tags: [quickshell, hyprland, composition, ipc]
 created: "2026-09-30T04:43:21"
-updated: "2026-10-10T15:35:28"
+updated: "2026-11-10T04:17:25"
 ---
 
 <!-- compiled_truth -->
@@ -65,4 +65,10 @@ Implementation claims must be checked against fresh source and the installed Qui
   kind: decision
   summary: Document merge-allowed reference refresh and preservation of dirty repositories.
   source: "User request and verified refs-pull target, 2026-10-10"
+  affects: [reference-survey]
+
+- time: 2026-11-10T04:17:25
+  kind: reversal
+  summary: "Correct the earlier reading that refs/dots-hyprland/dots/ is empty: the checkout is populated (.config/quickshell/ii), so the clipboard study now records its real Quickshell side (cliphistService, Cliphist.qml, launcher integration)."
+  source: features/studies/clipboard.md checkout note
   affects: [reference-survey]

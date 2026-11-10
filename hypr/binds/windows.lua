@@ -16,7 +16,7 @@ if profile.phantomat.enabled and profile.phantomat.mode == "canvas" then
 end
 
 hl.bind(profile.window_maximize_bind, hl.dsp.window.fullscreen({ mode = "maximized" }), { description = "Toggle maximized" })
-hl.bind(mod .. " + V", hl.dsp.window.float(), { description = "Toggle floating" })
+hl.bind(mod .. " + Z", hl.dsp.window.float(), { description = "Toggle floating" })
 
 for key, direction in pairs({ LEFT = "l", RIGHT = "r", UP = "u", DOWN = "d" }) do
   hl.bind(mod .. " + " .. key, hl.dsp.focus({ direction = direction }), { description = "Focus " .. direction })

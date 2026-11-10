@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+# Clipboard history backend for the shell: cliphist holds the history, wl-copy puts an entry
+# back on the clipboard. The shell captures nothing; the package's cliphist.service
+# (`wl-paste --watch cliphist store`) does, and the owner starts it.
+#
+#   clipboard status          prints {"state": S}
+#   clipboard list            prints {"state":"ok","items":[...]} or {"state": S}
+#   clipboard copy            standard input: one list line; serves that entry with wl-copy
+#   clipboard delete          standard input: one list line; deletes that entry
+#   clipboard wipe            deletes every entry
+#   clipboard copy-content    standard input: one list line of a single file:// entry; copies the
+#                             file's text or picture instead of its address (see below)
+#   clipboard image           standard input: one list line; prints {"mime": M, "data": BASE64}
+#
+# S is ok, no-cliphist, no-wl-clipboard, no-tool (with "tool"), store-outside-runtime or
+# watcher-off. Only ok lets list and the actions run.
+#
+# A list line is what `cliphist list` prints: ID, a tab, the preview. Clipboard content never
+# appears in an argument or in a shell string: it travels through standard input, pipes and shell
+# variables only, and never in a message this script prints. copy, delete and image first read
+# the history again and require a line equal to the one received, so a recycled id can never
+# act on a different entry. (A line whose preview holds bytes that are not valid UTF-8 cannot be
+# sent back unchanged through JSON; such an entry is refused as changed. Clear all still works.)
+#
+# Exit codes: 0 done, 2 usage, 3 the entry changed, 4 unavailable or failed, 5 timed out,
+# 6 too large, 7 refused (copy-content only). CLIPBOARD_TIMEOUT (seconds, default 5) bounds every external call;
+# CLIPBOARD_IMAGE_LIMIT (bytes, default 8388608) bounds the image preview, CLIPBOARD_FILE_LIMIT
+# (bytes, same default) the file copy-content reads.
+set -euo pipefail
+
+readonly empty_history_message='opening db: please store something first'
+readonly watcher_pattern='^([^ ]*/)?wl-paste .*--watch .*cliphist .*store'
+timeout_seconds=${CLIPBOARD_TIMEOUT:-5}
+image_limit=${CLIPBOARD_IMAGE_LIMIT:-8388608}
+file_limit=${CLIPBOARD_FILE_LIMIT:-8388608}
+[[ $timeout_seconds =~ ^[1-9][0-9]*$ ]] || { printf 'clipboard: CLIPBOARD_TIMEOUT must be a whole number of seconds\n' >&2; exit 2; }
+[[ $file_limit =~ ^[1-9][0-9]*$ ]] || { printf 'clipboard: CLIPBOARD_FILE_LIMIT must be a whole number of bytes\n' >&2; exit 2; }
+[[ $image_limit =~ ^[1-9][0-9]*$ ]] || { printf 'clipboard: CLIPBOARD_IMAGE_LIMIT must be a whole number of bytes\n' >&2; exit 2; }
+
+entries=()
+
+die() { # CODE MESSAGE (a fixed text, never content)
+  local code=$1; shift
+  printf 'clipboard: %s\n' "$*" >&2
+  exit "$code"
+}
+# Every external call is bounded; 124 is timeout(1)'s "timed out".
+run() { timeout --kill-after=1 "$timeout_seconds" "$@"; }
+check_run() { # STATUS: stop with the timeout code if the call timed out
+  (( $1 != 124 )) || die 5 'a clipboard command timed out'
+}
+# The JSON object for a state, written without jq so it works when jq is the missing tool.
+state_json() { # STATE [TOOL]
+  if [[ -n ${2-} ]]; then printf '{"state":"%s","tool":"%s"}\n' "$1" "$2"
+  else printf '{"state":"%s"}\n' "$1"; fi
+}
+
+# Prints the state; ok when the history can be used.
+state() {
+  local tool
+  command -v cliphist >/dev/null || { printf 'no-cliphist'; return; }
+  command -v wl-copy >/dev/null && command -v wl-paste >/dev/null || { printf 'no-wl-clipboard'; return; }
+  for tool in jq pgrep base64 awk realpath stat grep; do
+    command -v "$tool" >/dev/null || { printf 'no-tool:%s' "$tool"; return; }
+  done
+  local version status=0 store=
+  # cliphist prints its settings (no clipboard content) on standard error.
+  version=$(run cliphist version 2>&1) || status=$?
+  check_run "$status"
+  (( status == 0 )) || { printf 'no-cliphist'; return; }
+  while IFS=$'\t' read -r key value; do
+    if [[ $key == db-path ]]; then store=$value; fi
+  done <<<"$version"
+  # The history must be memory-backed: the store has to sit under the runtime directory.
+  local runtime=${XDG_RUNTIME_DIR-}
+  if [[ -z $runtime || $runtime != /* || $store != "${runtime%/}"/* || $store == */../* ]]; then
+    printf 'store-outside-runtime'; return
+  fi
+  pgrep -u "$(id -u)" -f -- "$watcher_pattern" >/dev/null || { printf 'watcher-off'; return; }
+  printf 'ok'
+}
+print_state() { # STATE (as state() prints it)
+  case $1 in
+    no-tool:*) state_json no-tool "${1#no-tool:}" ;;
+    *) state_json "$1" ;;
+  esac
+}
+require_ok() { # stop with the unavailable code unless the history can be used
+  local current
+  current=$(state)
+  [[ $current == ok ]] || die 4 "the clipboard history is unavailable ($current)"
+}
+
+# Fills the global array `entries` with the list lines, newest first. An empty history is not
+# an error: cliphist reports it as one before the first entry is stored.
+read_history() {
+  local output status=0
+  output=$(run cliphist list 2>&1) || status=$?
+  check_run "$status"
+  if (( status != 0 )); then
+    [[ $output == "$empty_history_message" ]] || die 4 'cliphist could not read the history'
+    entries=()
+    return
+  fi
+  entries=()
+  [[ -z $output ]] || mapfile -t entries < <(printf '%s\n' "$output")
+}
+
+# Reads one list line from standard input into `line` and requires it to be in the history.
+require_entry() {
+  line=
+  IFS= read -r line || [[ -n $line ]] || die 2 'a list line is required on standard input'
+  [[ $line =~ ^[0-9]+$'\t' ]] || die 2 'standard input is not a list line'
+  read_history
+  local candidate
+  for candidate in "${entries[@]}"; do
+    [[ $candidate == "$line" ]] && return 0
+  done
+  die 3 'that entry changed; refresh the list'
+}
+
+# The wl-copy type for a list line: the picture's type from its preview, plain text otherwise.
+copy_type() { # LINE
+  local pattern='^[0-9]+'$'\t''\[\[ binary data [^ ]+ [A-Za-z]+ ([a-z0-9]+)'
+  if [[ $1 =~ $pattern ]]; then
+    case ${BASH_REMATCH[1]} in
+      png) printf 'image/png' ;;
+      jpg|jpeg) printf 'image/jpeg' ;;
+      bmp) printf 'image/bmp' ;;
+      gif) printf 'image/gif' ;;
+      webp) printf 'image/webp' ;;
+      tiff) printf 'image/tiff' ;;
+      *) printf 'application/octet-stream' ;;
+    esac
+  else
+    printf 'text/plain;charset=utf-8'
+  fi
+}
+
+list_items() { # reads the list lines on standard input
+  jq -Rsc --arg home "${HOME-}" '
+    def unpercent:
+      def utf8:
+        if length == 0 then []
+        elif .[0] < 128 then [.[0]] + (.[1:] | utf8)
+        elif .[0] < 224 then [(.[0] - 192) * 64 + (.[1] - 128)] + (.[2:] | utf8)
+        elif .[0] < 240 then [(.[0] - 224) * 4096 + (.[1] - 128) * 64 + (.[2] - 128)] + (.[3:] | utf8)
+        else [(.[0] - 240) * 262144 + (.[1] - 128) * 4096 + (.[2] - 128) * 64 + (.[3] - 128)] + (.[4:] | utf8)
+        end;
+      def nibble: if . >= 97 then . - 87 elif . >= 65 then . - 55 else . - 48 end;
+      gsub("(?<run>(%[0-9A-Fa-f]{2})+)"; .run as $run
+        | try ([$run | scan("%(..)") | .[0] | explode | (.[0] | nibble) * 16 + (.[1] | nibble)] | utf8 | implode)
+          catch $run);
+    def shorten: if $home != "" and (. == $home or startswith($home + "/")) then "$HOME" + .[($home | length):] else . end;
+    def picture: ["png", "jpg", "jpeg", "bmp", "gif", "webp", "tiff"];
+    split("\n") | map(select(length > 0)) | map(
+      . as $line
+      | ($line | index("\t")) as $tab
+      | select($tab != null)
+      | {line: $line, id: $line[:$tab], preview: $line[$tab + 1:]}
+      | .preview as $preview
+      | ([$preview | capture("^\\[\\[ binary data (?<size>[0-9.]+ [A-Za-z]+) (?<type>[a-z0-9]+)( (?<width>[0-9]+)x(?<height>[0-9]+))? \\]\\]$")] | first // null) as $binary
+      | {line, id,
+         kind: (if $binary != null then (if (picture | index($binary.type)) != null then "image" else "binary" end)
+                elif ($preview | startswith("file://")) then "file"
+                else "text" end),
+         text: (if $binary != null then ""
+                elif ($preview | startswith("file://")) then
+                  ($preview | split(" ") | map(select(length > 0) | sub("^file://(localhost)?"; "") | unpercent | shorten) | join(", "))
+                else $preview end),
+         type: ($binary.type // null),
+         size: ($binary.size // null),
+         width: (if $binary.width then ($binary.width | tonumber) else null end),
+         height: (if $binary.height then ($binary.height | tonumber) else null end)})
+    | {state: "ok", items: .}'
+}
+
+# Bytes in a cliphist size such as "346 B", "52 KiB" or "1.2 MiB" (rounded up).
+size_in_bytes() { # SIZE UNIT
+  case $2 in
+    B) awk -v n="$1" 'BEGIN { printf "%d", n + 0.999 }' ;;
+    KiB) awk -v n="$1" 'BEGIN { printf "%d", n * 1024 + 0.999 }' ;;
+    MiB) awk -v n="$1" 'BEGIN { printf "%d", n * 1048576 + 0.999 }' ;;
+    *) printf '%s' "$((image_limit + 1))" ;;
+  esac
+}
+
+verb=${1-}
+(( $# <= 1 )) || die 2 'usage: clipboard status|list|copy|copy-content|delete|wipe|image'
+case $verb in
+  status)
+    print_state "$(state)"
+    ;;
+  list)
+    current=$(state)
+    if [[ $current != ok ]]; then print_state "$current"; exit 0; fi
+    read_history
+    if (( ${#entries[@]} == 0 )); then printf '{"state":"ok","items":[]}\n'
+    else printf '%s\n' "${entries[@]}" | list_items; fi
+    ;;
+  copy)
+    require_ok
+    require_entry
+    type=$(copy_type "$line")
+    # wl-copy stays alive to serve the clipboard. Left holding the caller's pipes it would keep
+    # them open forever, and the caller reads our output until it closes.
+    status=0
+    printf '%s\n' "$line" | run cliphist decode 2>/dev/null | run wl-copy --type "$type" >/dev/null 2>&1 || status=$?
+    check_run "$status"
+    (( status == 0 )) || die 4 'the entry could not be copied'
+    ;;
+  copy-content)
+    require_ok
+    require_entry
+    # Only an explicit request reads a file, and only a single regular file inside the home
+    # directory, as plain text or as a picture, up to file_limit bytes. The path comes from
+    # clipboard text, which anything can set, so every check is made on the resolved path.
+    preview=${line#*$'\t'}
+    [[ $preview == file://* && $preview != *' '* ]] || die 7 'only a single copied file can be copied as its content'
+    encoded=${preview#file://}
+    encoded=${encoded#localhost}
+    [[ $encoded == /* ]] || die 7 'only a file on this computer can be copied as its content'
+    [[ $encoded != *%00* && ! $encoded =~ %($|.($|[^0-9A-Fa-f])|[^0-9A-Fa-f]) ]] || die 7 'the file address is not valid'
+    encoded=${encoded//\\/\\\\}
+    path=$(printf '%b' "${encoded//%/\\x}")
+    resolved=$(realpath -e -- "$path" 2>/dev/null) || die 7 'the file is gone'
+    [[ -n ${HOME-} && $resolved == "${HOME%/}"/* ]] || die 7 'only a file in your home directory can be copied as its content'
+    exec 3<"$resolved" || die 7 'the file cannot be read'
+    [[ -f /dev/fd/3 ]] || die 7 'only a regular file can be copied as its content'
+    size=$(stat -L -c %s /dev/fd/3)
+    (( size > 0 )) || die 7 'the file is empty'
+    (( size <= file_limit )) || die 6 'the file is too large'
+    case ${resolved,,} in
+      *.png) type=image/png ;;
+      *.jpg|*.jpeg) type=image/jpeg ;;
+      *.gif) type=image/gif ;;
+      *.webp) type=image/webp ;;
+      *.bmp) type=image/bmp ;;
+      *.tif|*.tiff) type=image/tiff ;;
+      *) grep -qI '' <&3 || die 7 'only a text or picture file can be copied as its content'
+         exec 3<"$resolved"
+         type='text/plain;charset=utf-8' ;;
+    esac
+    status=0
+    run wl-copy --type "$type" <&3 >/dev/null 2>&1 || status=$?
+    check_run "$status"
+    (( status == 0 )) || die 4 'the file could not be copied'
+    ;;
+  delete)
+    require_ok
+    require_entry
+    status=0
+    printf '%s\n' "$line" | run cliphist delete >/dev/null 2>&1 || status=$?
+    check_run "$status"
+    (( status == 0 )) || die 4 'the entry could not be deleted'
+    ;;
+  wipe)
+    require_ok
+    status=0
+    output=$(run cliphist wipe 2>&1) || status=$?
+    check_run "$status"
+    (( status == 0 )) || [[ $output == "$empty_history_message" ]] || die 4 'the history could not be cleared'
+    ;;
+  image)
+    require_ok
+    require_entry
+    pattern='^[0-9]+'$'\t''\[\[ binary data ([0-9.]+) ([A-Za-z]+) ([a-z0-9]+)'
+    [[ $line =~ $pattern ]] || die 2 'the entry is not a picture'
+    # copy_type runs its own pattern match, so take the size out of the line first.
+    size=${BASH_REMATCH[1]} unit=${BASH_REMATCH[2]}
+    type=$(copy_type "$line")
+    [[ $type == image/* ]] || die 2 'the entry is not a picture'
+    (( $(size_in_bytes "$size" "$unit") <= image_limit )) || die 6 'the picture is too large to preview'
+    status=0
+    data=$(printf '%s\n' "$line" | run cliphist decode 2>/dev/null | base64 -w0) || status=$?
+    check_run "$status"
+    (( status == 0 )) || die 4 'the picture could not be read'
+    printf '{"mime":"%s","data":"%s"}\n' "$type" "$data"
+    ;;
+  *) die 2 'usage: clipboard status|list|copy|copy-content|delete|wipe|image' ;;
+esac

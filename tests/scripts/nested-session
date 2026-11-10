@@ -8,6 +8,8 @@ for part in "${test_copied_project_parts[@]}"; do
 done
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 bash "$test_project/tools/scripts/stage-config" "$test_project" "$test_config_root"
+# The clipboard panel reads the package's own cliphist store; seed its config in the private home.
+bash "$test_project/tools/scripts/seed-cliphist-config" "$test_project" "$XDG_CONFIG_HOME"
 if [[ -n ${UI_SHELL_TEST_MANAGER_BUS-} ]]; then
   mkdir -p "$test_runtime/app2unit-bin"
   ln -s "$test_project/$test_app_runner" "$test_runtime/app2unit-bin/systemd-run"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Puts default/default.png on the clipboard of THIS session several ways, so the clipboard panel
+# (Super+V or the bar button) has a picture and file entries to show. Run it in a terminal of the
+# session under test (make test-env or make test-env-host); it changes that session's clipboard.
+# wl-copy offers one type per copy, so a file manager's multi-type offer is not reproduced.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+png=$root/default/default.png
+for tool in wl-copy jq; do
+  command -v "$tool" >/dev/null || { printf '%s is required.\n' "$tool" >&2; exit 1; }
+done
+[[ -n ${WAYLAND_DISPLAY-} ]] || { printf '%s\n' 'Run this from a terminal of the session under test (no WAYLAND_DISPLAY).' >&2; exit 1; }
+[[ -f $png ]] || { printf 'Missing %s\n' "$png" >&2; exit 1; }
+pause=${CLIPBOARD_CASE_PAUSE:-1}
+# URL-encode the path the way file managers do (everything but unreserved characters and /).
+uri=file://$(jq -nr --arg path "$png" '$path | @uri | gsub("%2F"; "/")')
+step() { printf 'case: %s\n' "$1"; }
+step 'picture (image/png, the file content)'
+wl-copy --type image/png <"$png"
+sleep "$pause"
+step 'file (text/uri-list, as a file manager offers a copied file)'
+printf '%s\r\n' "$uri" | wl-copy --type text/uri-list
+sleep "$pause"
+step 'file as text (text/plain with a file:// address)'
+printf '%s' "$uri" | wl-copy --type text/plain
+sleep "$pause"
+step 'path as text (text/plain with the plain path)'
+printf '%s' "$png" | wl-copy --type text/plain
+sleep "$pause"
+printf '%s\n' 'done: open the panel and look for a picture entry, file entries and the plain path; select the picture and press Space for the preview.'

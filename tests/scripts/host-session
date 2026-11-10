@@ -43,11 +43,20 @@ bwrap "${args[@]}" -- bash -c '
   root=$UI_SHELL_ROOT
   dest=$XDG_CONFIG_HOME/ui-shell
   bash "$root/tools/scripts/stage-config" "$root" "$dest"
+  # The clipboard panel reads the cliphist store named by the (private) cliphist config; seed it
+  # and, when no copy watcher runs for this user, run one for the length of this session.
+  bash "$root/tools/scripts/seed-cliphist-config" "$root" "$XDG_CONFIG_HOME"
+  watchers=()
+  if ! pgrep -u "$(id -u)" -f -- "^([^ ]*/)?wl-paste .*--watch .*cliphist .*store" >/dev/null; then
+    wl-paste --type text --watch cliphist store & watchers+=($!)
+    wl-paste --type image --watch cliphist store & watchers+=($!)
+  fi
+  trap "kill \"\${watchers[@]}\" 2>/dev/null || true" EXIT
   resolved=$(mktemp "$XDG_CACHE_HOME/.ui-shell-paths.XXXXXX")
   bash "$dest/scripts/read-shell-config" "$dest/config.ini" "$dest/scripts/read-ini" >"$resolved"
   export UI_SHELL_RUNTIME
   UI_SHELL_RUNTIME=$(bash "$dest/scripts/prepare-runtime" "$resolved")
   rm -f -- "$resolved"
   printf "Host session. Private state: %s\n" "${XDG_CONFIG_HOME%/config}"
-  exec qs --no-duplicate --path "$(jq -er ".paths.quickshell" "$UI_SHELL_RUNTIME")"
+  qs --no-duplicate --path "$(jq -er ".paths.quickshell" "$UI_SHELL_RUNTIME")"
 '

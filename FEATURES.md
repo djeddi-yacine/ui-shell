@@ -20,6 +20,7 @@ This list records approved scope; it does not claim that every feature is shippe
 - notification system — Quickshell notification server and QML notification store
 - notification grouping — QML notification store
 - notification idle mode and DND — QML notification store and hypridle state
+- clipboard history — cliphist store (memory-only), Quickshell panel, wl-copy
 - session menu — Quickshell QML and systemd-login
 - lock screen trigger — hyprlock
 - contextual information popup (Ctrl+I) for the focused target, selected app, or wallpaper — Quickshell QML

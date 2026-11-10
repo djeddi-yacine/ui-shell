@@ -1,9 +1,10 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-10T02:23:56.002Z._
+_Auto-generated. Last updated 2026-11-10T15:32:16.404Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
+- [clipboard-history](pages/clipboard-history.md) — category: decision | tags: [clipboard, shell] | The shell captures and stores nothing for clipboard history. The store is the package's own cliphist.service (wl-paste --watch cliphist stor
 - [contextual-shell-popups](pages/contextual-shell-popups.md) — category: decision | tags: [shell, ux, keyboard, configuration] | # Decision
 - [gui-test-viewport](pages/gui-test-viewport.md) — category: decision | tags: [tests, gui, viewport] | # Decision
 - [hyprland-native-composition](pages/hyprland-native-composition.md) — category: decision | tags: [hyprland, lua, workspaces, groups] | # Decision

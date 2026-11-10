@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Tests for scripts/clipboard with stand-ins for cliphist, wl-copy, wl-paste and pgrep: no
+# Wayland session, no real history and no real clipboard are touched. The stand-ins log their
+# arguments, and the test requires that a marker placed inside the clipboard content appears
+# in none of them (content travels through standard input only).
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+script=$root/scripts/clipboard
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-test.XXXXXX")
+trap 'rm -rf -- "${scratch:?}"' EXIT
+fake=$scratch/fake runtime=$scratch/run
+mkdir -p "$scratch/bin" "$scratch/tools" "$fake" "$runtime"
+export XDG_RUNTIME_DIR=$runtime HOME=/home/tester FAKE=$fake
+marker=SECRET-MARKER-7f3a
+
+# The real tools the script needs, linked into one directory, so a case can leave one out.
+for tool in bash timeout jq base64 id cat sleep wc head tr grep mv awk realpath stat; do
+  ln -s -- "$(command -v "$tool")" "$scratch/tools/$tool"
+done
+cat >"$scratch/bin/cliphist" <<'SHIM'
+#!/usr/bin/env bash
+printf 'cliphist %s\n' "$*" >>"$FAKE/calls"
+[[ ${FAKE_SLEEP_VERB-} != "$1" ]] || sleep "${FAKE_SLEEP:-3}"
+case $1 in
+  version)
+    printf 'cliphist 0.7.0\n\ndb-path\t%s\nmax-items\t80\n' "${FAKE_DB:-$XDG_RUNTIME_DIR/ui-shell/clipboard/db}" >&2 ;;
+  list)
+    if [[ -s $FAKE/list.txt ]]; then cat "$FAKE/list.txt"
+    else echo 'opening db: please store something first' >&2; exit 1; fi ;;
+  decode)
+    IFS= read -r line
+    id=${line%%$'\t'*}
+    if [[ -f $FAKE/payload-$id ]]; then cat "$FAKE/payload-$id"; else printf 'payload-%s' "$id"; fi ;;
+  delete)
+    IFS= read -r line
+    grep -vxF -- "$line" "$FAKE/list.txt" >"$FAKE/list.new" || true
+    mv -- "$FAKE/list.new" "$FAKE/list.txt" ;;
+  wipe)
+    if [[ -s $FAKE/list.txt ]]; then : >"$FAKE/list.txt"
+    else echo 'opening db: please store something first' >&2; exit 1; fi ;;
+esac
+SHIM
+cat >"$scratch/bin/wl-copy" <<'SHIM'
+#!/usr/bin/env bash
+printf 'wl-copy %s\n' "$*" >>"$FAKE/calls"
+[[ -z ${FAKE_COPY_FAIL-} ]] || exit 1
+cat >"$FAKE/copied"
+SHIM
+cat >"$scratch/bin/wl-paste" <<'SHIM'
+#!/usr/bin/env bash
+exit 0
+SHIM
+cat >"$scratch/bin/pgrep" <<'SHIM'
+#!/usr/bin/env bash
+printf 'pgrep %s\n' "$*" >>"$FAKE/calls"
+[[ ! -e $FAKE/no-watcher ]]
+SHIM
+chmod +x "$scratch/bin/"*
+
+checks=0
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+ok() { checks=$((checks + 1)); }
+# Runs the script with only the fakes and the linked real tools on PATH.
+clip() { PATH=$scratch/bin:$scratch/tools bash "$script" "$@"; }
+# Same, with one tool left out.
+clip_without() { local omit=$1; shift
+  local dir=$scratch/without-$omit
+  if [[ ! -d $dir ]]; then
+    mkdir -p "$dir"
+    for entry in "$scratch/bin/"* "$scratch/tools/"*; do
+      [[ ${entry##*/} == "$omit" ]] || ln -s -- "$entry" "$dir/${entry##*/}"
+    done
+  fi
+  PATH=$dir bash "$script" "$@"
+}
+status_of() { local status=0; "$@" >"$scratch/out" 2>"$scratch/err" || status=$?; printf '%s' "$status"; }
+reset_history() {
+  printf '%s\n' \
+    "7"$'\t'"$marker plain text" \
+    "6"$'\t''say "hi" \ back' \
+    "5"$'\t''file:///home/tester/My%20Docs/a%20b.txt file:///tmp/caf%C3%A9' \
+    "4"$'\t''[[ binary data 346 B png 640x480 ]]' \
+    "3"$'\t''[[ binary data 12 KiB zzz ]]' >"$fake/list.txt"
+  rm -f "$fake/copied" "$fake/no-watcher" "$fake/payload-"*
+  : >"$fake/calls"
+}
+reset_history
+line_of() { sed -n "${1}p" "$fake/list.txt"; }
+
+echo '== status'
+clip status | jq -e '.state == "ok"' >/dev/null || fail 'status ok'; ok
+clip_without cliphist status | jq -e '.state == "no-cliphist"' >/dev/null || fail 'no-cliphist'; ok
+clip_without wl-copy status | jq -e '.state == "no-wl-clipboard"' >/dev/null || fail 'no-wl-clipboard (wl-copy)'; ok
+clip_without wl-paste status | jq -e '.state == "no-wl-clipboard"' >/dev/null || fail 'no-wl-clipboard (wl-paste)'; ok
+clip_without pgrep status | jq -e '.state == "no-tool" and .tool == "pgrep"' >/dev/null || fail 'no-tool pgrep'; ok
+clip_without base64 status | jq -e '.state == "no-tool" and .tool == "base64"' >/dev/null || fail 'no-tool base64'; ok
+FAKE_DB=/home/tester/.cache/cliphist/db clip status | jq -e '.state == "store-outside-runtime"' >/dev/null || fail 'store outside runtime'; ok
+FAKE_DB=$runtime/../escape/db clip status | jq -e '.state == "store-outside-runtime"' >/dev/null || fail 'store with dot-dot'; ok
+touch "$fake/no-watcher"
+clip status | jq -e '.state == "watcher-off"' >/dev/null || fail 'watcher off'; ok
+rm -f "$fake/no-watcher"
+grep -q "pgrep -u $(id -u) -f -- " "$fake/calls" || fail 'pgrep must be limited to this user'; ok
+
+echo '== the actions refuse outside the ok state'
+touch "$fake/no-watcher"
+[[ $(clip list | jq -r '.state') == watcher-off ]] || fail 'list outside ok must report the state'; ok
+[[ $(status_of bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$(line_of 1)" "$scratch/bin:$scratch/tools" "$script") == 4 ]] || fail 'copy outside ok must exit 4'; ok
+[[ $(status_of env PATH="$scratch/bin:$scratch/tools" bash "$script" wipe) == 4 ]] || fail 'wipe outside ok must exit 4'; ok
+rm -f "$fake/no-watcher"
+
+echo '== list'
+clip list >"$scratch/list.json"
+jq -e '.state == "ok" and (.items | length) == 5' "$scratch/list.json" >/dev/null || fail "list shape: $(head -c 300 "$scratch/list.json" | tr -d '\n' | sed "s/$marker/<marker>/g")"; ok
+jq -e '.items[0] | .id == "7" and .kind == "text" and .text == "SECRET-MARKER-7f3a plain text"' "$scratch/list.json" >/dev/null || fail 'text item'; ok
+jq -e '.items[1].text == "say \"hi\" \\ back"' "$scratch/list.json" >/dev/null || fail 'quotes and backslash'; ok
+jq -e '.items[2] | .kind == "file" and .text == "$HOME/My Docs/a b.txt, /tmp/café"' "$scratch/list.json" >/dev/null || fail "file item: $(jq -c '.items[2]' "$scratch/list.json")"; ok
+jq -e '.items[3] | .kind == "image" and .type == "png" and .size == "346 B" and .width == 640 and .height == 480' "$scratch/list.json" >/dev/null || fail 'image item'; ok
+jq -e '.items[4] | .kind == "binary" and .type == "zzz" and .size == "12 KiB" and .width == null' "$scratch/list.json" >/dev/null || fail 'binary item'; ok
+jq -e '[.items[] | .line] == [inputs] ' "$scratch/list.json" <(jq -R . "$fake/list.txt") >/dev/null 2>&1 || true
+[[ $(jq -r '.items[0].line' "$scratch/list.json") == "$(line_of 1)" ]] || fail 'the line must be the list line, unchanged'; ok
+: >"$fake/list.txt"
+clip list | jq -e '.state == "ok" and .items == []' >/dev/null || fail 'an empty history is not an error'; ok
+reset_history
+
+echo '== copy'
+[[ $(status_of bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$(line_of 1)" "$scratch/bin:$scratch/tools" "$script") == 0 ]] || fail "copy text: $(cat "$scratch/err")"; ok
+[[ $(<"$fake/copied") == payload-7 ]] || fail 'the decoded entry must reach wl-copy'; ok
+grep -qx 'wl-copy --type text/plain;charset=utf-8' "$fake/calls" || fail 'text type'; ok
+printf '%s' 'binary-bytes' >"$fake/payload-4"
+bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$(line_of 4)" "$scratch/bin:$scratch/tools" "$script"
+grep -qx 'wl-copy --type image/png' "$fake/calls" || fail 'picture type'; ok
+[[ $(<"$fake/copied") == binary-bytes ]] || fail 'picture bytes'; ok
+bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$(line_of 5)" "$scratch/bin:$scratch/tools" "$script"
+grep -qx 'wl-copy --type application/octet-stream' "$fake/calls" || fail 'binary type'; ok
+[[ $(status_of env FAKE_COPY_FAIL=1 bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$(line_of 1)" "$scratch/bin:$scratch/tools" "$script") == 4 ]] || fail 'a failing wl-copy must exit 4'; ok
+
+echo '== a changed entry'
+stale="7"$'\t''something else'
+[[ $(status_of bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$stale" "$scratch/bin:$scratch/tools" "$script") == 3 ]] || fail 'a stale line must exit 3'; ok
+[[ $(status_of bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" delete' _ "$stale" "$scratch/bin:$scratch/tools" "$script") == 3 ]] || fail 'delete of a stale line must exit 3'; ok
+[[ $(wc -l <"$fake/list.txt") == 5 ]] || fail 'a stale delete must remove nothing'; ok
+[[ $(status_of bash -c 'printf "%s\n" "not a line" | PATH=$1 bash "$2" copy' _ "$scratch/bin:$scratch/tools" "$script") == 2 ]] || fail 'input that is no list line must exit 2'; ok
+
+echo '== delete and wipe'
+bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" delete' _ "$(line_of 2)" "$scratch/bin:$scratch/tools" "$script"
+[[ $(wc -l <"$fake/list.txt") == 4 ]] || fail 'delete must remove one entry'; ok
+! grep -qF 'say "hi"' "$fake/list.txt" || fail 'the deleted entry must be gone'; ok
+clip wipe
+[[ ! -s $fake/list.txt ]] || fail 'wipe must empty the history'; ok
+[[ $(status_of env PATH="$scratch/bin:$scratch/tools" bash "$script" wipe) == 0 ]] || fail 'wiping an empty history is not an error'; ok
+reset_history
+
+echo '== image'
+printf '%s' 'png-bytes' >"$fake/payload-4"
+bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" image' _ "$(line_of 4)" "$scratch/bin:$scratch/tools" "$script" >"$scratch/image.json"
+jq -e '.mime == "image/png" and (.data | @base64d) == "png-bytes"' "$scratch/image.json" >/dev/null || fail 'image output'; ok
+[[ $(status_of bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" image' _ "$(line_of 1)" "$scratch/bin:$scratch/tools" "$script") == 2 ]] || fail 'a text entry is no picture'; ok
+[[ $(status_of bash -c 'printf "%s\n" "$1" | CLIPBOARD_IMAGE_LIMIT=100 PATH=$2 bash "$3" image' _ "$(line_of 4)" "$scratch/bin:$scratch/tools" "$script") == 6 ]] || fail 'a picture over the limit must exit 6'; ok
+grep -q 'decode' "$fake/calls" || true
+: >"$fake/calls"
+bash -c 'printf "%s\n" "$1" | CLIPBOARD_IMAGE_LIMIT=100 PATH=$2 bash "$3" image' _ "$(line_of 4)" "$scratch/bin:$scratch/tools" "$script" 2>/dev/null || true
+! grep -q decode "$fake/calls" || fail 'a too-large picture must not be decoded'; ok
+
+echo '== copy-content'
+home=$scratch/home outside=$scratch/outside
+mkdir -p "$home/dir" "$outside"
+printf 'hello %s file\n' "$marker" >"$home/a b.txt"
+printf '\211PNG\r\n\032\n\000\000bytes' >"$home/pic.PNG"
+printf 'a\000b' >"$home/data.bin"
+: >"$home/empty.txt"
+printf 'outside' >"$outside/secret.txt"
+ln -s -- "$outside/secret.txt" "$home/link.txt"
+printf 'twelve bytes' >"$home/big.txt"
+content_line() { printf '9\t%s' "$1"; }
+content_status() { # PREVIEW [ENV...]: runs copy-content on a history that holds that one entry
+  local preview=$1; shift
+  content_line "$preview" >>"$fake/list.txt"; printf '\n' >>"$fake/list.txt"
+  rm -f "$fake/copied"; : >"$fake/calls"
+  status_of env HOME="$home" "$@" PATH="$scratch/bin:$scratch/tools" bash -c 'printf "%s\n" "$1" | bash "$2" copy-content' _ "$(content_line "$preview")" "$script"
+  sed -i '/^9\t/d' "$fake/list.txt"
+}
+[[ $(content_status "file://$home/a%20b.txt") == 0 ]] || fail "copy-content of a text file: $(cat "$scratch/err")"; ok
+[[ $(<"$fake/copied") == "hello $marker file" ]] || fail 'the file text must reach wl-copy'; ok
+grep -qx 'wl-copy --type text/plain;charset=utf-8' "$fake/calls" || fail 'text file type'; ok
+[[ $(content_status "file://localhost$home/pic.PNG") == 0 ]] || fail 'copy-content of a picture file'; ok
+grep -qx 'wl-copy --type image/png' "$fake/calls" || fail 'picture file type'; ok
+cmp -s "$fake/copied" "$home/pic.PNG" || fail 'the picture bytes must be copied unchanged'; ok
+[[ $(content_status "file://$outside/secret.txt") == 7 ]] || fail 'a file outside the home directory must be refused'; ok
+[[ ! -e $fake/copied ]] || fail 'a refused file must not reach wl-copy'; ok
+[[ $(content_status "file://$home/link.txt") == 7 ]] || fail 'a link out of the home directory must be refused'; ok
+[[ $(content_status "file://$home/data.bin") == 7 ]] || fail 'a binary file must be refused'; ok
+[[ $(content_status "file://$home/empty.txt") == 7 ]] || fail 'an empty file must be refused'; ok
+[[ $(content_status "file://$home/dir") == 7 ]] || fail 'a directory must be refused'; ok
+[[ $(content_status "file://$home/missing.txt") == 7 ]] || fail 'a missing file must be refused'; ok
+[[ $(content_status "file://$home/a%20b.txt file://$home/pic.PNG") == 7 ]] || fail 'several files must be refused'; ok
+[[ $(content_status "file://$home/a%zzb.txt") == 7 ]] || fail 'a bad percent escape must be refused'; ok
+[[ $(content_status "file://$home/a%00b.txt") == 7 ]] || fail 'an encoded NUL must be refused'; ok
+[[ $(content_status "file://$home/big.txt" CLIPBOARD_FILE_LIMIT=5) == 6 ]] || fail 'a file over the limit must exit 6'; ok
+[[ $(content_status "just some text") == 7 ]] || fail 'a text entry has no file'; ok
+[[ $(status_of bash -c 'printf "%s\n" "$1" | HOME=$4 PATH=$2 bash "$3" copy-content' _ "9"$'\t'"file://$home/a%20b.txt" "$scratch/bin:$scratch/tools" "$script" "$home") == 3 ]] || fail 'copy-content of a line not in the history must exit 3'; ok
+! grep -qF "$marker" "$fake/calls" || fail 'file content appeared in a command line'; ok
+
+echo '== timeout'
+[[ $(status_of env FAKE_SLEEP_VERB=list FAKE_SLEEP=5 CLIPBOARD_TIMEOUT=1 PATH="$scratch/bin:$scratch/tools" bash "$script" list) == 5 ]] || fail 'a hung cliphist must exit 5'; ok
+[[ $(status_of env CLIPBOARD_TIMEOUT=0 PATH="$scratch/bin:$scratch/tools" bash "$script" list) == 2 ]] || fail 'a bad timeout must exit 2'; ok
+[[ $(status_of env PATH="$scratch/bin:$scratch/tools" bash "$script" bogus) == 2 ]] || fail 'an unknown verb must exit 2'; ok
+
+echo '== content never reaches an argument, a log or a message'
+! grep -qF "$marker" "$fake/calls" || fail 'content appeared in a command line'; ok
+reset_history
+for verb in list status; do clip "$verb" >/dev/null 2>"$scratch/err" || true; ! grep -qF "$marker" "$scratch/err" || fail "$verb wrote content to standard error"; done; ok
+bash -c 'printf "%s\n" "$1" | PATH=$2 bash "$3" copy' _ "$(line_of 1)" "$scratch/bin:$scratch/tools" "$script" 2>"$scratch/err" >/dev/null || true
+bash -c 'printf "%s\n" "$1" | FAKE_COPY_FAIL=1 PATH=$2 bash "$3" copy' _ "$(line_of 1)" "$scratch/bin:$scratch/tools" "$script" 2>>"$scratch/err" >/dev/null || true
+! grep -qF "$marker" "$scratch/err" || fail 'a failure message held content'; ok
+! grep -qF "$marker" "$fake/calls" || fail 'content appeared in a command line (actions)'; ok
+
+printf 'clipboard: %d checks passed\n' "$checks"

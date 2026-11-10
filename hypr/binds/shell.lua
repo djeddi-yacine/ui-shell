@@ -9,6 +9,7 @@ local media = profile.shell_shortcuts.media_panel
 local drawer = profile.shell_shortcuts.notifications
 local dnd = profile.shell_shortcuts.notifications_dnd
 local dismiss = profile.shell_shortcuts.notifications_dismiss
+local clipboard = profile.shell_shortcuts.clipboard
 hl.bind(profile.main_mod .. " + " .. launcher.key, hl.dsp.global(launcher.target), {
   description = "Open application launcher",
 })
@@ -47,4 +48,8 @@ hl.bind(profile.action_mod .. " + " .. dismiss.key, hl.dsp.global(dismiss.target
 
 hl.bind(profile.action_mod .. " + " .. drawer.key, hl.dsp.global(drawer.target), {
   description = "Open the notification drawer",
+})
+
+hl.bind(profile.main_mod .. " + " .. clipboard.key, hl.dsp.global(clipboard.target), {
+  description = "Toggle the clipboard history",
 })

@@ -1,0 +1,5 @@
+# cliphist settings for the shell's clipboard history (seeded by tools/scripts/seed-cliphist-config).
+# The history lives in the runtime directory (memory), so it is gone at logout or reboot.
+# The runtime-directory placeholder in db-path is replaced when the file is seeded.
+db-path @RUNTIME_DIR@/ui-shell/clipboard/db
+max-items 80

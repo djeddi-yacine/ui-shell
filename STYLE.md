@@ -265,7 +265,7 @@ Every module (launcher, wallpaper picker, control tuning, audio) has the same pa
 - **Keys, information and options live in the context popup, not on screen.** Ctrl+Space lists the keys (the panel's `bindings`), Ctrl+I shows information, Ctrl+E opens the component's settings. Use `PanelContext`; a panel without component settings passes `settings: null`. No permanent key hints, usage text or repeated identity titles.
 - **Options are data.** A component's two Ctrl+E options are one entry in `shell/config/ComponentSpec.qml` plus a `scripts/render-<component>-settings` renderer (registered as an optional command in the manifest). The editor, the settings adapter and the file reader all read the spec.
 - **Load the panel asynchronously** (`Config.<Module>.asynchronousPanelLoad`, true): popups created in the same frame as the window's first layout distort it.
-- **One shortcut per module, checked against the existing binds** (`hypr/binds/*.lua`), since `test-hypr-config` does not detect duplicates. Taken `SUPER` keys include A, D, F, G, L, P, S, V, X, W, Space, Return, Tab; the shell modules use Space (launcher), W (wallpaper), T (tuning) and M (audio).
+- **One shortcut per module, checked against the existing binds** (`hypr/binds/*.lua`), since `test-hypr-config` does not detect duplicates. Taken `SUPER` keys include A, D, F, G, L, P, S, V, X, Z, W, Space, Return, Tab; the shell modules use Space (launcher), W (wallpaper), T (tuning), M (audio) and V (clipboard history; Z toggles floating).
 
 ## The authentication dialog (centred modal)
 
