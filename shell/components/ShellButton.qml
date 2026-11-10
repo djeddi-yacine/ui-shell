@@ -23,6 +23,9 @@ Button {
     font.family: style.uiFamily
     font.pointSize: style.bodyPointSize
 
+    // The colour its label is drawn in, for a content item that is not text (an icon).
+    readonly property color foreground: visual.foreground
+
     ShellControlState {
         id: visual
         style: root.style

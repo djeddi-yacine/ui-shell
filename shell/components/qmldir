@@ -22,3 +22,5 @@ PaletteColorPicker 1.0 PaletteColorPicker.qml
 ExitDialog 1.0 ExitDialog.qml
 TargetPicker 1.0 TargetPicker.qml
 SecretDialog 1.0 SecretDialog.qml
+Icon 1.0 Icon.qml
+ShellIconButton 1.0 ShellIconButton.qml

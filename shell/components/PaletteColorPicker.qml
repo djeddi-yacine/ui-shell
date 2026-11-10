@@ -20,9 +20,9 @@ ContextPopup {
     // A colour you changed and did not use is unsaved work: leaving asks first.
     readonly property bool dirty: !Qt.colorEqual(value, seedColor)
     closePolicy: dirty ? Popup.NoAutoClose : Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    function requestClose() { exit.request(dirty, root.Window.window ? root.Window.window.activeFocusItem : null) }
+    function requestClose() { exitDialog.request(dirty, root.owner.Window.window ? root.owner.Window.window.activeFocusItem : null) }
     ExitDialog {
-        id: exit
+        id: exitDialog
         owner: root.owner
         style: root.style
         inputState: root.inputState
@@ -32,10 +32,11 @@ ContextPopup {
     }
     shortcutsEnabled: false
     width: Math.min(owner.width - Config.ContextPanels.outerMargin * 2, Config.ThemeEditor.colorPickerWidth)
+    // The slider of the channel named by initialColorChannel, set by that channel's row.
+    property Slider initialControl: null
     onOpened: {
-        const index = Config.ThemeEditor.colorChannels.findIndex(channel => channel.key === Config.ThemeEditor.initialColorChannel)
-        if (index < 0) throw new Error("Configure a named initial RGB channel")
-        channelRows.itemAt(index).control.forceActiveFocus()
+        if (!initialControl) throw new Error("Configure a named initial RGB channel")
+        initialControl.forceActiveFocus()
     }
 
     function begin(nextRole, color, previousFocus) {
@@ -76,6 +77,12 @@ ContextPopup {
                 id: row
                 required property var modelData
                 readonly property Slider control: channel
+                Binding {
+                    target: root
+                    property: "initialControl"
+                    value: row.control
+                    when: row.modelData.key === Config.ThemeEditor.initialColorChannel
+                }
                 Layout.fillWidth: true
                 spacing: Config.ContextPanels.spacing
                 Text {

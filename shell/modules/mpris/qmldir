@@ -7,6 +7,5 @@ MprisPanel 1.0 MprisPanel.qml
 MprisCard 1.0 MprisCard.qml
 MprisArtBackdrop 1.0 MprisArtBackdrop.qml
 MprisArtLayer 1.0 MprisArtLayer.qml
-SvgIcon 1.0 SvgIcon.qml
 MarqueeText 1.0 MarqueeText.qml
 PreviewSource 1.0 PreviewSource.qml

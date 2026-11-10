@@ -21,7 +21,7 @@ Controls.ShellButton {
     // Development labels: the icon stays, and the name says what the button opens.
     contentItem: Row {
         spacing: root.style.spacingTight
-        Mpris.SvgIcon {
+        Controls.Icon {
             anchors.verticalCenter: parent.verticalCenter
             name: "audio-player"
             size: Config.Mpris.barIconSize

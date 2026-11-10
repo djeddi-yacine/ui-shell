@@ -109,14 +109,14 @@ Item {
             d.failed = true
             keyClick("a")
             compare(after.count, 1)
-            verify(String(findChild(d, "lockIcon").source).endsWith("lock-cross.svg"))
+            compare(findChild(d, "lockIcon").name, "lock-cross")
         }
         function test_acceptedShowsTheCheckedLockAndDropsKeys() {
             const d = make()
             const icon = findChild(d, "lockIcon")
-            verify(String(icon.source).endsWith("lock.svg"))
+            compare(icon.name, "lock")
             d.succeeded = true
-            verify(String(icon.source).endsWith("lock-checked.svg"))
+            compare(icon.name, "lock-checked")
             const submitted = spy(d, "submitted")
             keyClick("a")
             keyClick(Qt.Key_Return)

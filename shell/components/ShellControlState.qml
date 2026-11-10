@@ -15,7 +15,9 @@ import "../theme" as Theme
 // Rows and tiles that are not Qt controls omit `control` and set the flags.
 Theme.ControlState {
     required property var style
-    property Item control: null
+    // Any Qt control (button, slider, combo box, text field): which of hovered, down and pressed it
+    // has differs, so the flags below ask for them by name.
+    property var control: null
     property InputState inputState: null
     // Focus is shown when the keyboard drives (or always, in modes that say so) (Tab, arrows), not after a mouse
     // click, and only in the window that actually has keyboard focus (a bar

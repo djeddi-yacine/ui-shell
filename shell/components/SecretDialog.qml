@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.Effects
 import "../config" as Config
 import "../theme" as Theme
 
@@ -184,19 +183,15 @@ FocusScope {
                 Accessible.passwordEdit: !root.visibleEcho
                 Accessible.name: root.fieldText.length > 0 ? root.fieldText : Config.Auth.passwordLabel
 
-                // The lock mark (shell/icons), tinted with the field's own colour.
-                Image {
+                // The lock mark (shell/icons), drawn in the field's own colour.
+                Icon {
                     id: lock
                     objectName: "lockIcon"
                     anchors.centerIn: parent
                     visible: (root.fieldText.length === 0 || root.failed) && !(root.visibleEcho && root.buffer.length > 0)
-                    width: Config.Auth.iconSize
-                    height: Config.Auth.iconSize
-                    source: Qt.resolvedUrl(root.succeeded ? "../icons/lock-checked.svg" : root.failed ? "../icons/lock-cross.svg" : "../icons/lock.svg")
-                    sourceSize: Qt.size(Config.Auth.iconSize * 2, Config.Auth.iconSize * 2)
-                    fillMode: Image.PreserveAspectFit
-                    layer.enabled: true
-                    layer.effect: MultiEffect { colorization: 1; colorizationColor: field.markColor }
+                    size: Config.Auth.iconSize
+                    name: root.succeeded ? "lock-checked" : root.failed ? "lock-cross" : "lock"
+                    color: field.markColor
                 }
                 Text {
                     objectName: "fieldLabel"

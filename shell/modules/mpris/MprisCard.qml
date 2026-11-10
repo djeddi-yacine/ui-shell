@@ -115,7 +115,7 @@ FocusScope {
         RowLayout {
             Layout.fillWidth: true
             spacing: root.style.spacing
-            SvgIcon {
+            Controls.Icon {
                 objectName: "cassetteIcon"
                 name: "tape-music-cassette"
                 size: Config.Mpris.headerIconSize
@@ -144,7 +144,7 @@ FocusScope {
                 selected: root.selection.pinState !== "none"
                 Accessible.name: root.pinLabel
                 contentItem: Item {
-                    SvgIcon {
+                    Controls.Icon {
                         centered: true
                         name: root.selection.pinState === "none" ? "pin-circle" : "pin-circle-filled"
                         size: Config.Mpris.pinIconSize
@@ -287,7 +287,7 @@ FocusScope {
                 emphasis: Theme.Interaction.buttonEmphasis
                 Accessible.name: qsTr("Previous track")
                 contentItem: Item {
-                    SvgIcon { centered: true; name: "media-previous"; size: Config.Mpris.transportIconSize; color: root.style.text; opacity: previousButton.enabled ? 1 : 0.4 }
+                    Controls.Icon { centered: true; name: "media-previous"; size: Config.Mpris.transportIconSize; color: root.style.text; opacity: previousButton.enabled ? 1 : 0.4 }
                 }
                 onClicked: root.selection.previous()
                 // Space belongs to play and pause, not to whichever button holds the focus.
@@ -304,7 +304,7 @@ FocusScope {
                 text: root.playing ? qsTr("Pause") : qsTr("Play")
                 Accessible.name: root.playing ? qsTr("Pause") : qsTr("Play")
                 contentItem: Item {
-                    SvgIcon { centered: true; name: root.playing ? "media-pause" : "media-play"; size: Config.Mpris.playIconSize; color: root.style.background; opacity: playButton.enabled ? 1 : 0.4 }
+                    Controls.Icon { centered: true; name: root.playing ? "media-pause" : "media-play"; size: Config.Mpris.playIconSize; color: root.style.background; opacity: playButton.enabled ? 1 : 0.4 }
                 }
                 onClicked: root.selection.playPause()
                 Keys.onSpacePressed: event => { event.accepted = true; root.selection.playPause() }
@@ -319,7 +319,7 @@ FocusScope {
                 emphasis: Theme.Interaction.buttonEmphasis
                 Accessible.name: qsTr("Next track")
                 contentItem: Item {
-                    SvgIcon { centered: true; name: "media-next"; size: Config.Mpris.transportIconSize; color: root.style.text; opacity: nextButton.enabled ? 1 : 0.4 }
+                    Controls.Icon { centered: true; name: "media-next"; size: Config.Mpris.transportIconSize; color: root.style.text; opacity: nextButton.enabled ? 1 : 0.4 }
                 }
                 onClicked: root.selection.next()
                 Keys.onSpacePressed: event => { event.accepted = true; root.selection.playPause() }
@@ -344,7 +344,7 @@ FocusScope {
                 emphasis: Theme.Interaction.buttonEmphasis
                 Accessible.name: qsTr("Show the previous player")
                 contentItem: Item {
-                    SvgIcon { centered: true; name: "arrow-left"; size: Config.Mpris.arrowIconSize; color: root.style.text; opacity: playerPreviousButton.enabled ? 1 : 0.4 }
+                    Controls.Icon { centered: true; name: "arrow-left"; size: Config.Mpris.arrowIconSize; color: root.style.text; opacity: playerPreviousButton.enabled ? 1 : 0.4 }
                 }
                 onClicked: root.selection.showPlayer(-1)
                 Keys.onSpacePressed: event => { event.accepted = true; root.selection.playPause() }
@@ -380,7 +380,7 @@ FocusScope {
                 emphasis: Theme.Interaction.buttonEmphasis
                 Accessible.name: qsTr("Show the next player")
                 contentItem: Item {
-                    SvgIcon { centered: true; name: "arrow-right"; size: Config.Mpris.arrowIconSize; color: root.style.text; opacity: playerNextButton.enabled ? 1 : 0.4 }
+                    Controls.Icon { centered: true; name: "arrow-right"; size: Config.Mpris.arrowIconSize; color: root.style.text; opacity: playerNextButton.enabled ? 1 : 0.4 }
                 }
                 onClicked: root.selection.showPlayer(1)
                 Keys.onSpacePressed: event => { event.accepted = true; root.selection.playPause() }
