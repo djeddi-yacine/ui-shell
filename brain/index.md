@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-10T16:07:36.655Z._
+_Auto-generated. Last updated 2026-11-11T00:17:48.364Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
@@ -20,6 +20,7 @@ _Auto-generated. Last updated 2026-11-10T16:07:36.655Z._
 - [screen-capture-module](pages/screen-capture-module.md) — category: decision | tags: [screen-recording, gsr, features] | <current best understanding — replace this with the real content>
 - [shared-style-and-toolkit-integration](pages/shared-style-and-toolkit-integration.md) — category: decision | tags: [style, theme, qt, gtk, qml, composition] | # Decision
 - [shell-architecture-and-omarchy-boundary](pages/shell-architecture-and-omarchy-boundary.md) — category: decision | tags: [shell, omarchy, quickshell, qml, composition] | # Decision
+- [shell-menu-dmenu](pages/shell-menu-dmenu.md) — category: decision | tags: [menu, shell, ipc] | The shell gets a dmenu-style menu that other programs call through its own command (not an impersonated dmenu).
 - [shell-scope-and-layout](pages/shell-scope-and-layout.md) — category: decision | tags: [scope, quickshell, hyprland, qml, lua, bash] | # Decision
 - [shipped-default-seed](pages/shipped-default-seed.md) — category: decision | tags: [default, staging, tests, config] | # Decision
 - [theme-profile-bundles](pages/theme-profile-bundles.md) — category: decision | tags: [theme, profiles, qml, composition] | # Decision
