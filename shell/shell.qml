@@ -16,6 +16,7 @@ import "modules/record" as Record
 import "modules/shot" as Shot
 import "modules/auth" as Auth
 import "modules/clipboard" as Clipboard
+import "modules/menu" as Menu
 import "modules/mpris" as Mpris
 import "modules/notifications" as Notif
 import "modules/panels" as Panels
@@ -28,6 +29,11 @@ ShellRoot {
         // Apply the saved control-colour tuning before the first surface renders.
         Adapters.ControlTuningStore.reload()
         Notif.NotifCenter.source = Adapters.NotifSource
+        // The panels the menu gives way to: the members of the group below.
+        Menu.MenuState.blockers = [
+            Record.RecordPanelState, Shot.ShotPanelState, Tuning.TuningState, Audio.AudioState,
+            Apps.AppState, Wallpaper.PickerState, Mpris.MprisState, Notif.NotifState, Clipboard.ClipboardState
+        ]
     }
     Adapters.QmlSettingsFile {
         id: notifRulesFile
@@ -160,5 +166,11 @@ ShellRoot {
     Variants {
         model: Config.Config.clipboardEnabled ? Quickshell.screens : []
         Clipboard.ClipboardSurface { inputState: shellInput }
+    }
+    // The menu other programs call through scripts/menu. It gives way to any panel of the group
+    // above (hidden while one is open, back when it closes) and never answers on its own.
+    Variants {
+        model: Quickshell.screens
+        Menu.MenuSurface { inputState: shellInput }
     }
 }

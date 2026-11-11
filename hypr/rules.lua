@@ -5,7 +5,7 @@ local profile = require("profile")
 
 hl.layer_rule({
   name = "shell-owns-motion",
-  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|mpris|auth|auth-scrim|notif|notif-drawer|clipboard|clipboard-scrim)$" },
+  match = { namespace = "^ui-shell-(bar|wallpaper-picker|app-launcher|control-tuning|audio-control|record|shot|mpris|auth|auth-scrim|notif|notif-drawer|clipboard|clipboard-scrim|menu|menu-scrim)$" },
   no_anim = true,
 })
 
@@ -24,6 +24,15 @@ hl.layer_rule({
 hl.layer_rule({
   name = "clipboard-not-shared",
   match = { namespace = "^ui-shell-clipboard$" },
+  no_screen_share = true,
+})
+
+-- The menu shows what a program asks the user to choose from (names, accounts, anything). Its card is
+-- requested to be kept out of compositor screen sharing, like the clipboard card; whether the
+-- screen recorder honours this is tested, not assumed.
+hl.layer_rule({
+  name = "menu-not-shared",
+  match = { namespace = "^ui-shell-menu$" },
   no_screen_share = true,
 })
 

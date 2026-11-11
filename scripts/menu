@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# The shell's menu client. Reads the choices from standard input, one per line, asks the running
+# shell to show them, and prints the chosen line. Written to be the whole menu command of
+# programs such as `uuctl` (from uwsm): `uuctl /path/to/scripts/menu -p`.
+#
+#   menu [-p <prompt>] [--app <name>] [-h] [--]
+#
+# Exit codes: 0 a line was chosen (printed with one newline), 1 no choice (cancelled, empty
+# input, or the caller went away), 2 usage error or input too large, 3 the shell is not reachable.
+#
+# The request is a directory under $XDG_RUNTIME_DIR/ui-shell/menu: the choices exactly as read
+# (items), a small JSON file (meta) and a named pipe (result) the shell answers on, with the number
+# of the chosen line or nothing. The choices travel through files only, never through an argument,
+# a variable or a message, and the shell never sends one back.
+set -u
+
+readonly maxItemBytes=8388608
+
+die() { printf 'menu: %s\n' "$1" >&2; exit "$2"; }
+
+usage() {
+  printf 'usage: menu [-p <prompt>] [--app <name>] [-h] [--]\n'
+  printf 'reads choices from standard input, prints the chosen line\n'
+  printf 'exit: 0 chosen, 1 no choice, 2 usage error, 3 shell not reachable\n'
+}
+
+prompt=""
+app=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -p)
+      [ $# -ge 2 ] || die "-p needs a value" 2
+      prompt=$2
+      shift 2
+      ;;
+    --app)
+      [ $# -ge 2 ] || die "--app needs a value" 2
+      app=$2
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) die "unknown option $1" 2 ;;
+  esac
+done
+[ $# -eq 0 ] || die "unexpected argument $1" 2
+
+# The caller's name is the tab the request is shown under. The caller of a `$(...)` is a copy of
+# the program that started it, so every call of one program gets the same name.
+if [ -z "$app" ]; then
+  IFS= read -r app < "/proc/$PPID/comm" 2>/dev/null || app=""
+  [ -n "$app" ] || app=unknown
+fi
+
+[ -n "${XDG_RUNTIME_DIR:-}" ] || die "XDG_RUNTIME_DIR is not set" 3
+spool=$XDG_RUNTIME_DIR/ui-shell/menu
+
+# The shell writes its process id to .shell. That process must still exist and still be Quickshell (`quickshell` or `qs`).
+# The id is read once: a shell that restarted never answers the requests of the one before it.
+shell_pid=""
+shell_alive() {
+  local comm
+  if [ -z "$shell_pid" ]; then
+    IFS= read -r shell_pid < "$spool/.shell" 2>/dev/null || { shell_pid=""; return 1; }
+    case $shell_pid in ''|*[!0-9]*) shell_pid=""; return 1 ;; esac
+  fi
+  IFS= read -r comm < "/proc/$shell_pid/comm" 2>/dev/null || return 1
+  # Quickshell runs as `qs` when started through that name, as `quickshell` otherwise.
+  [ "$comm" = quickshell ] || [ "$comm" = qs ]
+}
+
+# Only a spool the shell made for this user, closed to everyone else, is trusted: any other
+# process could otherwise put a request on the screen or read the choices.
+[ -d "$spool" ] && [ -O "$spool" ] || die "the shell is not running" 3
+[ "$(stat -c %a -- "$spool")" = 700 ] || die "the spool directory is not private" 3
+shell_alive || die "the shell is not running" 3
+
+id=$(date +%s%N)-$$
+staging=$spool/.new-$id
+request=$spool/$id
+cleanup() { rm -rf -- "$staging" "$request"; }
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+mkdir -m 700 -- "$staging" || die "cannot create the request" 3
+head -c $((maxItemBytes + 1)) > "$staging/items" || die "cannot read the choices" 2
+size=$(stat -c %s -- "$staging/items")
+[ "$size" -le "$maxItemBytes" ] || die "more than $maxItemBytes bytes of choices" 2
+[ "$size" -gt 0 ] || exit 1
+
+jq -n --argjson pid "$$" --arg app "$app" --arg prompt "$prompt" \
+  '{pid: $pid, app: $app, prompt: $prompt}' > "$staging/meta" || die "cannot write the request" 3
+mkfifo -m 600 -- "$staging/result" || die "cannot create the answer pipe" 3
+
+# One atomic rename: the shell never sees a half-written request.
+mv -T -- "$staging" "$request" || die "cannot publish the request" 3
+
+# Opened for reading and writing, so it does not wait for the shell's writer to appear.
+exec 3<> "$request/result"
+
+# The caller is the client's parent. A `$(...)` runs the client in a copy of the program that
+# started it, and that copy outlives a caller killed without warning, so the copy and every parent
+# that is an identical copy (same command line) are watched as well. The walk stops at the first
+# process that is another program: a launcher or wrapper above the caller may end at any time
+# without the caller being gone.
+command_line() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+ancestors=()
+walk=$PPID
+while :; do
+  ancestors+=("$walk")
+  parent=$(ps -o ppid= -p "$walk" | tr -d ' ')
+  case $parent in ''|0|1|*[!0-9]*) break ;; esac
+  [ "$(command_line "$parent")" = "$(command_line "$walk")" ] || break
+  walk=$parent
+done
+reply=""
+while :; do
+  IFS= read -r -t 1 -u 3 reply
+  status=$?
+  [ "$status" -ne 0 ] || break
+  # A status above 128 is the one-second timeout; anything else means the pipe is unusable.
+  [ "$status" -gt 128 ] || die "the answer pipe broke" 1
+  shell_alive || die "the shell stopped" 3
+  for walk in "${ancestors[@]}"; do
+    kill -0 "$walk" 2>/dev/null || die "the caller (process $walk) ended" 1
+  done
+done
+
+# The shell answers `Y<n>`: the number of the chosen line, counted from 1. The line itself is
+# printed from the file the client wrote, so it comes back byte for byte whatever its content.
+case $reply in
+  Y[1-9]*)
+    number=${reply#Y}
+    case $number in *[!0-9]*) exit 1 ;; esac
+    sed -n -- "${number}{p;q}" "$request/items"
+    ;;
+  *) exit 1 ;;
+esac

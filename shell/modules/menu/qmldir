@@ -1,0 +1,9 @@
+module UiShell.Menu
+singleton MenuState 1.0 MenuState.qml
+singleton MenuSearch 1.0 MenuSearch.qml
+MenuQueue 1.0 MenuQueue.qml
+MenuRow 1.0 MenuRow.qml
+MenuTabs 1.0 MenuTabs.qml
+MenuPanel 1.0 MenuPanel.qml
+MenuSurface 1.0 MenuSurface.qml
+MenuRequest 1.0 MenuRequest.qml
