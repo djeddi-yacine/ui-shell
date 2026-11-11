@@ -335,6 +335,7 @@ args+=(--setenv PATH "$test_home/.local/bin:/usr/bin:/bin" --setenv HOME "$test_
   --setenv UI_SHELL_OPEN_AUTH "${UI_SHELL_OPEN_AUTH:-0}"
   --setenv UI_SHELL_AUTH_AGENT "${UI_SHELL_AUTH_AGENT:-0}"
   --setenv UI_SHELL_OPEN_MPRIS "${UI_SHELL_OPEN_MPRIS:-0}"
+  --setenv UI_SHELL_OPEN_MENU "${UI_SHELL_OPEN_MENU:-0}"
   --setenv UI_SHELL_MPRIS_SOURCE "${UI_SHELL_MPRIS_SOURCE:-off}"
   --setenv UI_SHELL_SHOT_CONTEXT "${UI_SHELL_SHOT_CONTEXT-}"
   --setenv UI_SHELL_TEST_EXEC "${UI_SHELL_TEST_EXEC-}"
@@ -356,11 +357,16 @@ args+=(--setenv PATH "$test_home/.local/bin:/usr/bin:/bin" --setenv HOME "$test_
   --setenv QS_ICON_THEME "$test_icon_theme"
   --setenv LANG C.UTF-8 --chdir "$test_project")
 [[ $test_qt_portals != 0 ]] || args+=(--setenv QT_NO_XDG_DESKTOP_PORTAL 1)
+# UI_SHELL_HYPR_LOG sets what Hyprland and Aquamarine print to the terminal: off (errors only), debug (the default) or
+# trace (everything; also turns on their trace logging). launcher.log and hyprland.log always keep the full output.
+hypr_log=${UI_SHELL_HYPR_LOG-debug}
+[[ $hypr_log == off || $hypr_log == debug || $hypr_log == trace ]] || { printf 'UI_SHELL_HYPR_LOG must be off, debug or trace, got "%s".\n' "$hypr_log" >&2; exit 1; }
+[[ $hypr_log != trace ]] || args+=(--setenv HYPRLAND_TRACE 1 --setenv AQ_TRACE 1)
 if [[ $mode == launcher || $mode == apps ]]; then
   args+=(--setenv UI_SHELL_OPEN_PICKER 0 --setenv UI_SHELL_OPEN_APPS 1)
 fi
 
-exec {test_log_fd}> >(tee "$test_run_dir/launcher.log")
+exec {test_log_fd}> >(tee "$test_run_dir/launcher.log" | "$project_root/tests/scripts/filter-hypr-log" "$hypr_log")
 logger_pid=$!
 bwrap "${args[@]}" -- /usr/bin/bash /source/tests/scripts/nested-session "$mode" >&"$test_log_fd" 2>&1 &
 sandbox_pid=$!

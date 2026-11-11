@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Manual acceptance check, run in a terminal inside the session whose shell you want to test
+# (make test-env, then a terminal in it; or the real session). It starts `uuctl` with scripts/menu
+# as its menu command. uuctl asks 4 to 7 times in a row (unit type, unit, action...): the card
+# should stay on screen between the questions, show the prompt of each, and Esc on any of them
+# ends uuctl without an action. Nothing is changed unless you choose an action at the last step.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+command -v uuctl >/dev/null || { printf '%s\n' 'uuctl (uwsm) is not installed.' >&2; exit 1; }
+exec uuctl "$root/scripts/menu" -p

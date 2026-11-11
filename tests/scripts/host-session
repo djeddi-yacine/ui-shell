@@ -46,6 +46,8 @@ bwrap "${args[@]}" -- bash -c '
   # The clipboard panel reads the cliphist store named by the (private) cliphist config; seed it
   # and, when no copy watcher runs for this user, run one for the length of this session.
   bash "$root/tools/scripts/seed-cliphist-config" "$root" "$XDG_CONFIG_HOME"
+  # uuctl asks through the menu of this shell, in this private home.
+  bash "$root/tools/scripts/seed-menu-entry" "$root" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
   watchers=()
   if ! pgrep -u "$(id -u)" -f -- "^([^ ]*/)?wl-paste .*--watch .*cliphist .*store" >/dev/null; then
     wl-paste --type text --watch cliphist store & watchers+=($!)

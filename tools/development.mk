@@ -13,7 +13,7 @@ REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
 
 dev-help:
 	@printf '%s\n' \
@@ -23,6 +23,7 @@ dev-help:
 		'  dev-stage             Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
 		'  dev-seed-clipboard    Write ~/.config/cliphist/config (history in the runtime dir) only if absent' \
+		'  dev-seed-menu         Write ~/.local/share/applications/uuctl.desktop (asks through the shell menu) only if absent' \
 		'  dev-import-themes     Regenerate reference definitions; explicit POSITIVE/WARNING/NEGATIVE required' \
 		'  dev-bundle-themes     Maintainers: import, then refresh the checked-in bundled-themes/ (credit in CREDITS.md)' \
 		'  dev-lint              Check source QML (override QMLLINT explicitly)' \
@@ -51,6 +52,11 @@ dev-stage:
 # Writes the user's own cliphist config, so it is never part of staging; an existing file is kept.
 dev-seed-clipboard:
 	@bash "$(ROOT)/tools/scripts/seed-cliphist-config" "$(ROOT)" "$${XDG_CONFIG_HOME:-$$HOME/.config}"
+
+# Writes the user's own uuctl entry (outside staging), pointing at the staged scripts/menu that
+# make dev-run uses; an existing file is kept.
+dev-seed-menu: dev-stage
+	@bash "$(ROOT)/tools/scripts/seed-menu-entry" "$(ROOT)" "$(DEV_HOME)/.config" "$${XDG_DATA_HOME:-$$HOME/.local/share}"
 
 dev-configure: dev-stage
 	@mkdir -p "$(ROOT)/.build"

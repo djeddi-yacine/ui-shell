@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Runs inside the live nested session (UI_SHELL_TEST_EXEC=/source/tests/menu/session-check with
+# `make test-wallpaper`-style smoke mode): starts two scripts/menu clients as two apps against the
+# real shell, checks that the shell wrote .shell, that both menu windows are mapped, saves a
+# screenshot to /artifacts/menu.png, then kills one client and checks its request goes away.
+# Prints one `ok`/`FAIL` line per check; exits 1 on any failure.
+set -u
+client=/source/scripts/menu
+spool=$XDG_RUNTIME_DIR/ui-shell/menu
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (expected '$2', got '$3')"; fail=1; fi; }
+wait_for() { local i; for i in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+# check-runtime exports these in its own process; take them from the one nested instance.
+instances=$(hyprctl -j instances)
+export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
+HYPRLAND_INSTANCE_SIGNATURE=$(jq -er 'if length == 1 then .[0].instance else empty end' <<<"$instances")
+WAYLAND_DISPLAY=$(jq -er '.[0].wl_socket' <<<"$instances")
+requests() { find "$spool" -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null | wc -l; }
+
+wait_for '[ -s "$spool/.shell" ]'; check "the shell wrote .shell" yes "$([ -s "$spool/.shell" ] && echo yes || echo no)"
+check "spool mode" 700 "$(stat -c %a "$spool")"
+check "shell comm" qs "$(cat "/proc/$(cat "$spool/.shell")/comm")"
+
+# The launcher entry seeded in the private home asks through the staged menu script.
+entry=$XDG_DATA_HOME/applications/uuctl.desktop
+if command -v uuctl > /dev/null; then
+  exec_line=$(grep '^Exec=' "$entry" 2> /dev/null || true)
+  check "the uuctl entry runs the staged menu" "Exec=uuctl $XDG_CONFIG_HOME/ui-shell/scripts/menu -p" "$exec_line"
+  check "the staged menu script is executable" yes "$([ -x "$XDG_CONFIG_HOME/ui-shell/scripts/menu" ] && echo yes || echo no)"
+fi
+
+printf 'alpha\nbeta\ngamma\n' | "$client" -p "One: " --app first > /artifacts/menu-first.out 2>&1 & first=$!
+sleep 0.3
+printf 'delta\nepsilon\n' | "$client" -p "Two: " --app second > /artifacts/menu-second.out 2>&1 & second=$!
+wait_for '[ "$(requests)" -ge 2 ]'; check "two requests in the spool" 2 "$(requests)"
+sleep 1.5
+layers=$(hyprctl layers)
+check "menu card mapped" 1 "$(grep -c "namespace: ui-shell-menu," <<<"$layers")"
+check "menu scrim mapped" 1 "$(grep -c "namespace: ui-shell-menu-scrim," <<<"$layers")"
+grim /artifacts/menu.png 2>/artifacts/menu-grim.err; check "screenshot taken" yes "$([ -s /artifacts/menu.png ] && echo yes || echo no)"
+
+kill "$first"; wait "$first" 2>/dev/null
+for i in $(seq 40); do [ "$(requests)" -le 1 ] && break; sleep 0.1; done
+check "request of a killed client is dropped" 1 "$(requests)"
+kill "$second"; wait "$second" 2>/dev/null
+for i in $(seq 40); do [ "$(requests)" -eq 0 ] && break; sleep 0.1; done
+check "spool empty again" 0 "$(requests)"
+sleep 1
+layers=$(hyprctl layers)
+check "menu card unmapped after its leave animation" 0 "$(grep -c "namespace: ui-shell-menu," <<<"$layers")"
+exit $fail

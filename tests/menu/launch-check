@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Runs inside the live nested session: starts `uuctl` the way a launcher does (Hyprland's own
+# `exec` dispatcher, a detached `sh -c`) with scripts/menu as its menu command, and checks that the
+# card stays up: the request must still be in the spool after a few seconds, with no input given.
+# Prints one `ok`/`FAIL` line per check; exits 1 on any failure.
+set -u
+spool=$XDG_RUNTIME_DIR/ui-shell/menu
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (expected '$2', got '$3')"; fail=1; fi; }
+wait_for() { local i; for i in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+instances=$(hyprctl -j instances)
+export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
+HYPRLAND_INSTANCE_SIGNATURE=$(jq -er 'if length == 1 then .[0].instance else empty end' <<<"$instances")
+WAYLAND_DISPLAY=$(jq -er '.[0].wl_socket' <<<"$instances")
+requests() { find "$spool" -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null | wc -l; }
+
+command -v uuctl >/dev/null || { echo "ok   uuctl not installed, nothing to launch"; exit 0; }
+wait_for '[ -s "$spool/.shell" ]'
+timeout 10 hyprctl dispatch 'hl.dsp.exec_cmd("uuctl /source/scripts/menu -p")' >/artifacts/launch-dispatch.out 2>&1
+wait_for '[ "$(requests)" -ge 1 ]'; check "the launched uuctl asks" 1 "$(requests)"
+sleep 4; ps -eo pid,ppid,comm,args > /artifacts/launch-ps.txt
+check "the request is still waiting after 4 seconds" 1 "$(requests)"
+check "the card is mapped" 1 "$(hyprctl layers | grep -c 'namespace: ui-shell-menu,')"
+pkill -x uuctl; pkill -f /source/scripts/menu
+wait_for '[ "$(requests)" -eq 0 ]'
+
+# The shell's launcher hands the program to a shim that exits at once; the program carries on without it.
+timeout 10 hyprctl dispatch 'hl.dsp.exec_cmd("sh -c \"uuctl /source/scripts/menu -p & sleep 2; exit 0\"")' >>/artifacts/launch-dispatch.out 2>&1
+wait_for '[ "$(requests)" -ge 1 ]'; check "uuctl behind an exited launcher shim asks" 1 "$(requests)"
+sleep 4
+check "its request is still waiting after the shim ended" 1 "$(requests)"
+pkill -x uuctl; pkill -f /source/scripts/menu
+exit $fail

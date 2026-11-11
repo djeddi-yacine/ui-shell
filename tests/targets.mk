@@ -2,12 +2,12 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-clipboard test-clipboard-send test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders test-notify test-notifications
+.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-clipboard test-clipboard-send test-menu test-menu-session test-menu-stress test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders test-notify test-notifications
 
 test-help:
 	@printf '%s\n' \
 		'Test environment (private HOME and XDG state):' \
-		'  test-env          THE interactive session: nested Hyprland with every feature on (wallpaper picker, launcher, tuning, audio on the HOST PipeWire, recording, Phantomat when built); private saved state. UI_SHELL_HOST_PIPEWIRE=0 keeps audio private.' \
+		'  test-env          THE interactive session: nested Hyprland with every feature on (wallpaper picker, launcher, tuning, audio on the HOST PipeWire, recording, Phantomat when built); private saved state. UI_SHELL_HOST_PIPEWIRE=0 keeps audio private. UI_SHELL_HYPR_LOG=off|debug|trace sets the Hyprland/Aquamarine terminal log (default debug).' \
 		'  test-import-themes Regenerate reference definitions in private themes; no profile/window' \
 		'  test-env-host     Run the shell on the REAL session (screen, audio, MPRIS, recorder) with all writes kept in .test-state/host; stop your own shell first.' \
 		'  test-env-snapshot Restart saved test state, capture diagnostics, then close' \
@@ -30,6 +30,9 @@ test-help:
 		'  test-mpris        Check the media control namespace and keys against the Hyprland config, and the art script with stand-in tools (no player, no network)' \
 		'  test-auth         Check the authentication dialog and polkit logic with a fake request (no polkit)' \
 		'  test-clipboard    Check the clipboard script with stand-ins for cliphist, wl-copy and pgrep (no session)' \
+		'  test-menu         Check the menu client with a stand-in shell (no session)' \
+		'  test-menu-session The real menu in a nested session: two apps, windows map and unmap, a launcher shim ends, answers with the keyboard leave nothing behind' \
+		'  test-menu-stress  The real menu under bursts, churn, malformed requests, odd and huge input' \
 		'  test-clipboard-send  Copy default/default.png to the clipboard of this session as picture and file (run in the session under test)' \
 		'  test-shot         Check the screenshot script with stand-ins for grim and wl-copy (no screen)' \
 		'  test-shot-live    Take real screenshots of THIS desktop with grim and wl-copy and check them' \
@@ -44,7 +47,7 @@ test-help:
 		'  test-borders      Verify native output-scoped borders in a disposable session' \
 		''
 
-test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot test-clipboard test-auth test-mpris test-notifications
+test: test-scripts test-sandbox test-hypr-config test-qml test-theme-config test-pipelines test-record test-shot test-clipboard test-menu test-auth test-mpris test-notifications
 	@printf '%s\n' 'Checks passed.'
 
 test-scripts:
@@ -154,6 +157,19 @@ test-auth:
 
 test-clipboard:
 	@bash "$(ROOT)/tests/scripts/check-clipboard"
+
+test-menu:
+	@bash "$(ROOT)/tests/scripts/check-menu"
+
+# The real menu in a disposable nested session (private runtime directory); result in exec.log of the
+# kept artifact directory, which is printed. Fails when exec.log has a FAIL line.
+test-menu-session:
+	@bash "$(ROOT)/tests/scripts/run-menu-session" session-check
+	@bash "$(ROOT)/tests/scripts/run-menu-session" launch-check
+	@bash "$(ROOT)/tests/scripts/run-menu-session" close-check
+
+test-menu-stress:
+	@bash "$(ROOT)/tests/scripts/run-menu-session" stress-check
 
 test-clipboard-send:
 	@bash "$(ROOT)/tests/clipboard/send-cases"

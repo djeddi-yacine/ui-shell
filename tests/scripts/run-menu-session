@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Runs one script of tests/menu inside the nested session and fails when it reports a FAIL line.
+# usage: run-menu-session session-check|stress-check|launch-check|close-check
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+case ${1:-} in session-check|stress-check|launch-check|close-check) name=$1 ;; *) echo "usage: run-menu-session session-check|stress-check|launch-check|close-check" >&2; exit 2 ;; esac
+log=$(mktemp)
+trap 'rm -f -- "$log"' EXIT
+status=0
+UI_SHELL_PHANTOMAT=0 UI_SHELL_TEST_EXEC="/source/tests/menu/$name" \
+  timeout 580 bash "$root/tests/scripts/test-nested" snapshot ephemeral >"$log" 2>&1 || status=$?
+dir=$(sed -n 's/^Artifacts kept: //p' "$log" | tail -n1)
+[ -n "$dir" ] && [ -s "$dir/exec.log" ] || { tail -n 20 "$log" >&2; echo "menu session: no result (exit $status)" >&2; exit 1; }
+grep -v '^ok' "$dir/exec.log" || true
+printf 'menu session (%s): %s ok, %s failed; artifacts %s\n' "$name" "$(grep -c '^ok' "$dir/exec.log" || true)" "$(grep -c '^FAIL' "$dir/exec.log" || true)" "$dir"
+! grep -q '^FAIL\|^exit status' "$dir/exec.log"

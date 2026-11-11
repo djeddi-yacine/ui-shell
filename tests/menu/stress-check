@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Stress test of the real menu in the live nested session (no input is injected, so the answer path is
+# covered by tst_MenuQueue and by hand). Run it with
+#   UI_SHELL_PHANTOMAT=0 UI_SHELL_TEST_EXEC=/source/tests/menu/stress-check bash tests/scripts/test-nested snapshot ephemeral
+# Cases: a burst of clients over several apps, clients killed in every order, churn of start-and-kill,
+# malformed request directories, odd bytes, a very large list, and that the shell is alive, the spool is
+# empty and the card is gone at the end. Prints one `ok`/`FAIL` line per check; exits 1 on any failure.
+set -u
+# Bash reports every killed background job on standard error; only the check lines matter here.
+exec 2>/dev/null
+client=/source/scripts/menu
+spool=$XDG_RUNTIME_DIR/ui-shell/menu
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (expected '$2', got '$3')"; fail=1; fi; }
+wait_for() { local i; for i in $(seq "${2:-100}"); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+
+# check-runtime exports these in its own process; take them from the one nested instance.
+instances=$(hyprctl -j instances)
+export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
+HYPRLAND_INSTANCE_SIGNATURE=$(jq -er 'if length == 1 then .[0].instance else empty end' <<<"$instances")
+WAYLAND_DISPLAY=$(jq -er '.[0].wl_socket' <<<"$instances")
+
+requests() { find "$spool" -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null | wc -l; }
+card_count() { hyprctl layers | grep -c "namespace: ui-shell-menu,"; }
+scrim_count() { hyprctl layers | grep -c "namespace: ui-shell-menu-scrim,"; }
+shell_alive() { local pid; pid=$(cat "$spool/.shell" 2>/dev/null) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+settled() { # spool empty, no card, no scrim, within $1 tenths of a second
+  wait_for '[ "$(requests)" -eq 0 ] && [ "$(card_count)" -eq 0 ] && [ "$(scrim_count)" -eq 0 ]' "${1:-80}"
+}
+spawn() { # app, input-file -> pid in $spawned
+  "$client" -p "$1: " --app "$1" < "$2" > /dev/null 2>&1 &
+  spawned=$!
+}
+# The shell prints "Killed" for each reaped job; the braces keep that out of the log.
+reap() { local p; for p in "$@"; do kill -KILL "$p" 2>/dev/null; { wait "$p"; } 2>/dev/null; done; }
+reap_all() { { wait; } 2>/dev/null; }
+
+work=$(mktemp -d "$XDG_RUNTIME_DIR/stress.XXXXXX")
+trap 'rm -rf -- "${work:?}"' EXIT
+printf 'alpha\nbeta\ngamma\n' > "$work/small"
+
+wait_for '[ -s "$spool/.shell" ]'; check "the shell is ready" yes "$(shell_alive && echo yes || echo no)"
+check "nothing is shown at the start" 0 "$(( $(card_count) + $(scrim_count) ))"
+
+# --- one request: the card maps and unmaps ------------------------------------------------------
+spawn solo "$work/small"; p=$spawned
+wait_for '[ "$(card_count)" -eq 1 ]'; check "one request maps one card" 1 "$(card_count)"
+check "and one scrim" 1 "$(scrim_count)"
+reap "$p"
+settled; check "the killed request unmaps both" 0 "$(( $(card_count) + $(scrim_count) ))"
+
+# --- burst: 60 clients over 8 apps, killed in three different orders ----------------------------
+for order in forward backward shuffled; do
+  pids=()
+  for i in $(seq 60); do spawn "app$((i % 8))" "$work/small"; pids+=("$spawned"); done
+  wait_for '[ "$(requests)" -ge 60 ]' 200
+  check "burst ($order): all 60 requests are in the spool" 60 "$(requests)"
+  wait_for '[ "$(card_count)" -ge 1 ]' 100
+  check "burst ($order): exactly one card" 1 "$(card_count)"
+  check "burst ($order): exactly one scrim" 1 "$(scrim_count)"
+  case $order in
+    forward) victims=("${pids[@]}") ;;
+    backward) victims=(); for ((i = ${#pids[@]} - 1; i >= 0; i--)); do victims+=("${pids[i]}"); done ;;
+    shuffled) mapfile -t victims < <(printf '%s\n' "${pids[@]}" | shuf --random-source=<(yes 7)) ;;
+  esac
+  for p in "${victims[@]}"; do kill -KILL "$p" 2>/dev/null; done
+  reap_all
+  settled 120; check "burst ($order): spool and windows are empty after all callers died" 0 "$(( $(requests) + $(card_count) + $(scrim_count) ))"
+  check "burst ($order): the shell is alive" yes "$(shell_alive && echo yes || echo no)"
+done
+
+# --- churn: start and kill at once, 150 times with growing and shrinking gaps ------------------
+for i in $(seq 150); do
+  spawn "churn$((i % 5))" "$work/small"; p=$spawned
+  case $((i % 4)) in 0) ;; 1) sleep 0.01 ;; 2) sleep 0.05 ;; 3) sleep 0.2 ;; esac
+  kill -KILL "$p" 2>/dev/null
+done
+reap_all
+settled 150; check "churn: spool and windows are empty at the end" 0 "$(( $(requests) + $(card_count) + $(scrim_count) ))"
+check "churn: the shell is alive" yes "$(shell_alive && echo yes || echo no)"
+
+# --- the second request is already queued when the first one leaves: the card must stay mapped ----
+# (it is polled for 0.4 s after the first caller died, to catch a close and reopen in between)
+for i in $(seq 25); do
+  spawn seq "$work/small"; a=$spawned
+  wait_for '[ "$(card_count)" -eq 1 ]' 30
+  spawn seq "$work/small"; b=$spawned
+  wait_for '[ "$(requests)" -eq 2 ]' 50
+  sleep 0.3
+  reap "$a"
+  gaps=0
+  for _ in $(seq 20); do [ "$(card_count)" -eq 1 ] || gaps=$((gaps + 1)); sleep 0.02; done
+  check "hand-over $i: the card never closed between two queued requests" 0 "$gaps"
+  reap "$b"
+  settled 80 || { echo "FAIL hand-over $i: did not settle"; fail=1; break; }
+done
+
+# --- malformed request directories: each must be removed, none may map the card -----------------
+mk() { mkdir -m 700 -- "$spool/$1"; }
+good_name=$(date +%s%N)-$$
+mk "not-a-request-name"
+mk "123-456";                      printf 'not json' > "$spool/123-456/meta";  printf 'a\n' > "$spool/123-456/items"
+mk "124-456";                                                                  printf 'a\n' > "$spool/124-456/items"
+mk "125-456";                      printf '{"pid":1,"app":"x","prompt":"y"}' > "$spool/125-456/meta"
+mk "126-456";                      printf '{"pid":"1","app":"x","prompt":"y"}' > "$spool/126-456/meta"; printf 'a\n' > "$spool/126-456/items"
+mk "127-456";                      printf '{"pid":0,"app":"x","prompt":"y"}' > "$spool/127-456/meta";   printf 'a\n' > "$spool/127-456/items"
+mk "128-456";                      printf '{"pid":1,"app":5,"prompt":"y"}' > "$spool/128-456/meta";     printf 'a\n' > "$spool/128-456/items"
+mk "129-456";                      printf '[1,2]' > "$spool/129-456/meta";                                printf 'a\n' > "$spool/129-456/items"
+mk "130-456";                      printf '{"pid":999999,"app":"x","prompt":"y"}' > "$spool/130-456/meta"; printf 'a\n' > "$spool/130-456/items"
+printf 'stray' > "$spool/a-plain-file"
+settled 100; check "malformed requests: all removed, nothing shown" 0 "$(( $(requests) + $(card_count) + $(scrim_count) ))"
+check "malformed requests: a plain file is left alone" yes "$([ -f "$spool/a-plain-file" ] && echo yes || echo no)"
+rm -f -- "$spool/a-plain-file"
+check "malformed requests: the shell is alive" yes "$(shell_alive && echo yes || echo no)"
+
+# --- odd input -----------------------------------------------------------------------------------
+odd() { # description, file
+  spawn odd "$2"; local p=$spawned
+  wait_for '[ "$(card_count)" -eq 1 ]' 60
+  check "odd input ($1): the card maps" 1 "$(card_count)"
+  check "odd input ($1): the shell is alive" yes "$(shell_alive && echo yes || echo no)"
+  reap "$p"
+  settled 100; check "odd input ($1): back to nothing" 0 "$(( $(requests) + $(card_count) + $(scrim_count) ))"
+}
+printf '\n' > "$work/blank";                                  odd "one empty line" "$work/blank"
+printf '\n\n\n\n' > "$work/blanks";                           odd "only empty lines" "$work/blanks"
+printf 'a\r\nb\r\n' > "$work/crlf";                           odd "CRLF" "$work/crlf"
+printf 'caf\xc3\xa9\n\xff\xfe\xfd\n\xe2\x82\n' > "$work/utf8"; odd "invalid UTF-8" "$work/utf8"
+head -c 200000 /dev/zero | tr '\0' 'x' > "$work/longline"; printf '\nshort\n' >> "$work/longline"; odd "a 200 kB line" "$work/longline"
+printf 'a\tb\vc\fd\033[31m\n<b>x</b> &amp; %%s %%d \\n ${HOME} $(id)\n' > "$work/markup"; odd "markup and escapes" "$work/markup"
+printf 'first\0second\nthird\n' > "$work/nul";                odd "a NUL byte" "$work/nul"
+seq 1 100000 > "$work/many";                                  odd "100000 lines" "$work/many"
+head -c 8388608 /dev/zero | tr '\0' 'z' | fold -w 80 > "$work/big"; head -c 8388608 "$work/big" > "$work/big8"; odd "8 MB, the largest accepted" "$work/big8"
+spawn too-big <(head -c 8388609 /dev/zero | tr '\0' 'a'); p=$spawned; { wait "$p"; } 2>/dev/null; code=$?
+check "input over the cap exits 2" 2 "$code"
+
+# --- the shell and its log ----------------------------------------------------------------------
+check "the spool is private" 700 "$(stat -c %a "$spool")"
+log=$(ls /run/test/quickshell/by-id/*/log.log 2>/dev/null | head -n1)
+if [ -n "$log" ]; then bad=$(grep -ciE '(WARN|ERROR).*menu|menu.*(WARN|ERROR)' "$log" || true); else bad="no-log"; fi
+check "no menu warning or error in the shell log" 0 "$bad"
+check "the shell is alive at the end" yes "$(shell_alive && echo yes || echo no)"
+exit $fail

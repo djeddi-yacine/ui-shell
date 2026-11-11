@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# Tests for scripts/menu against a stand-in shell: a copy of `sleep` named quickshell (so the
+# client's process-name check passes) whose pid is written to .shell, and this script playing the
+# shell's part by reading the request directory and writing to its pipe. No Quickshell, no
+# Wayland session and no real spool are touched. Wrappers around jq, head, mkfifo, mv and ps log
+# their arguments, and the test requires that a marker placed inside the choices appears in none
+# of them (the choices travel through files only).
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+script=$root/scripts/menu
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/menu-test.XXXXXX")
+fakepid=""
+cleanup() {
+  [ -z "$fakepid" ] || kill "$fakepid" 2>/dev/null || true
+  rm -rf -- "${scratch:?}"
+}
+trap cleanup EXIT
+
+runtime=$scratch/run
+spool=$runtime/ui-shell/menu
+bin=$scratch/bin
+log=$scratch/argv.log
+mkdir -p "$bin" "$spool"
+chmod 700 "$spool"
+: > "$log"
+
+for tool in jq head mkfifo mv ps; do
+  real=$(command -v "$tool")
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s"\nexec "%s" "$@"\n' "$tool" "$log" "$real" > "$bin/$tool"
+  chmod +x "$bin/$tool"
+done
+cp "$(command -v sleep)" "$bin/quickshell"
+export XDG_RUNTIME_DIR=$runtime
+export PATH=$bin:$PATH
+
+fail=0
+check() { # description, expected, actual
+  if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"
+  else printf 'FAIL %s\n     expected: %q\n     actual:   %q\n' "$1" "$2" "$3"; fail=1; fi
+}
+
+start_shell() { "$bin/quickshell" 600 & fakepid=$!; printf '%s\n' "$fakepid" > "$spool/.shell"; }
+stop_shell() { kill "$fakepid" 2>/dev/null || true; wait "$fakepid" 2>/dev/null || true; fakepid=""; }
+requests() { find "$spool" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\n' | sort; }
+wait_request() { # prints the name of the first request, waiting up to five seconds
+  local i name
+  for i in $(seq 50); do
+    name=$(requests | head -n1)
+    if [ -n "$name" ]; then printf '%s' "$name"; return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+wait_gone() { # a request directory disappears within five seconds
+  local i
+  for i in $(seq 50); do [ -z "$(requests)" ] && return 0; sleep 0.1; done
+  return 1
+}
+# Starts the client in the background with its output in files; $1.. are its arguments.
+launch() { # input-file, arguments...
+  local input=$1; shift
+  "$script" "$@" < "$input" > "$scratch/out" 2> "$scratch/err" &
+  client=$!
+}
+finish() { # waits for the client, sets $code
+  code=0
+  wait "$client" || code=$?
+}
+
+printf 'one\ntwo (three)\n  four  \n' > "$scratch/items"
+
+# --- usage errors and early exits ---------------------------------------------------------------
+code=0; "$script" -x < "$scratch/items" > /dev/null 2>&1 || code=$?
+check "unknown option exits 2" 2 "$code"
+code=0; "$script" -p < "$scratch/items" > /dev/null 2>&1 || code=$?
+check "-p without a value exits 2" 2 "$code"
+code=0; "$script" stray < "$scratch/items" > /dev/null 2>&1 || code=$?
+check "a stray argument exits 2" 2 "$code"
+check "-h prints usage and exits 0" 0 "$("$script" -h > /dev/null; echo $?)"
+
+code=0; "$script" -p x < "$scratch/items" > /dev/null 2>&1 || code=$?
+check "no .shell file exits 3" 3 "$code"
+
+printf '999999\n' > "$spool/.shell"
+code=0; "$script" -p x < "$scratch/items" > /dev/null 2>&1 || code=$?
+check "a dead shell pid exits 3" 3 "$code"
+
+sleep 600 & other=$!
+printf '%s\n' "$other" > "$spool/.shell"
+code=0; "$script" -p x < "$scratch/items" > /dev/null 2>&1 || code=$?
+kill "$other"; wait "$other" 2>/dev/null || true
+check "a live pid that is not quickshell exits 3" 3 "$code"
+
+# Quickshell started as `qs` has the process name qs: that one is accepted too.
+cp "$(command -v sleep)" "$bin/qs"
+"$bin/qs" 600 & other=$!
+printf '%s\n' "$other" > "$spool/.shell"
+( "$script" -p x < "$scratch/items" > /dev/null 2>&1 ) & probe=$!
+name=$(wait_request) || name=""
+check "a shell named qs is accepted" yes "$([ -n "$name" ] && echo yes || echo no)"
+[ -z "$name" ] || printf '\n' > "$spool/$name/result"
+wait "$probe" 2>/dev/null || true
+kill "$other"; wait "$other" 2>/dev/null || true
+
+start_shell
+chmod 755 "$spool"
+code=0; "$script" -p x < "$scratch/items" > /dev/null 2>&1 || code=$?
+check "a spool open to others exits 3" 3 "$code"
+chmod 700 "$spool"
+
+code=0; "$script" -p x < /dev/null > /dev/null 2>&1 || code=$?
+check "empty input exits 1" 1 "$code"
+check "empty input creates no request" "" "$(requests)"
+
+head -c 8388609 /dev/zero | tr '\0' 'a' > "$scratch/big"
+code=0; "$script" -p x < "$scratch/big" > /dev/null 2>&1 || code=$?
+check "input over the cap exits 2" 2 "$code"
+check "input over the cap leaves no request" "" "$(requests)"
+
+# --- choose -------------------------------------------------------------------------------------
+launch "$scratch/items" -p "Pick: " --app tester
+name=$(wait_request)
+check "request name is <digits>-<client pid>" "$client" "${name#*-}"
+check "items are exactly the input" "$(cat "$scratch/items")" "$(cat "$spool/$name/items")"
+check "meta carries pid, app and prompt" \
+  "{\"pid\":$client,\"app\":\"tester\",\"prompt\":\"Pick: \"}" "$(jq -c . "$spool/$name/meta")"
+check "the staging directory is gone" "" "$(find "$spool" -mindepth 1 -maxdepth 1 -name '.new-*')"
+printf 'Y2\n' > "$spool/$name/result"
+finish
+check "choose exits 0" 0 "$code"
+check "choose prints the line and one newline" 'two (three)' "$(cat "$scratch/out")"
+check "choose prints exactly one line" 1 "$(wc -l < "$scratch/out")"
+wait_gone && check "choose removes the request" ok ok || check "choose removes the request" ok "left"
+
+launch "$scratch/items" -p "x"
+name=$(wait_request)
+printf 'Y3\n' > "$spool/$name/result"
+finish
+check "surrounding spaces are kept" '  four  ' "$(cat "$scratch/out")"
+
+launch "$scratch/items" -p "x"
+name=$(wait_request)
+printf 'Y\n' > "$spool/$name/result"
+finish
+check "a reply without a number is a cancel" 1 "$code"
+check "a reply without a number prints nothing" 0 "$(wc -c < "$scratch/out")"
+
+printf 'one\n\nthree' > "$scratch/blank"
+launch "$scratch/blank" -p "x"
+name=$(wait_request)
+printf 'Y2\n' > "$spool/$name/result"
+finish
+check "a blank line is chosen with exit 0" 0 "$code"
+check "a blank line prints one newline" '1' "$(wc -c < "$scratch/out")"
+launch "$scratch/blank" -p "x"
+name=$(wait_request)
+printf 'Y3\n' > "$spool/$name/result"
+finish
+check "a last line without a newline is printed with one" 'three' "$(cat "$scratch/out")"
+launch "$scratch/blank" -p "x"
+name=$(wait_request)
+printf 'Y9\n' > "$spool/$name/result"
+finish
+check "a number past the last line prints nothing" 0 "$(wc -c < "$scratch/out")"
+launch "$scratch/blank" -p "x"
+name=$(wait_request)
+printf 'Y2x\n' > "$spool/$name/result"
+finish
+check "a reply with a non-number is a cancel" 1 "$code"
+
+# --- cancel -------------------------------------------------------------------------------------
+launch "$scratch/items" -p "x"
+name=$(wait_request)
+printf '\n' > "$spool/$name/result"
+finish
+check "cancel exits 1" 1 "$code"
+check "cancel prints nothing" 0 "$(wc -c < "$scratch/out")"
+wait_gone && check "cancel removes the request" ok ok || check "cancel removes the request" ok "left"
+
+# --- the default app name -----------------------------------------------------------------------
+( "$script" -p x < "$scratch/items" > /dev/null 2>&1 ) &
+sub=$!
+name=$(wait_request)
+check "app defaults to the parent's process name" "$(cat "/proc/$sub/comm")" "$(jq -r .app "$spool/$name/meta")"
+printf '\n' > "$spool/$name/result"
+wait "$sub" || true
+
+# --- two clients at once ------------------------------------------------------------------------
+"$script" -p first < "$scratch/items" > "$scratch/out.first" 2>&1 & first=$!
+sleep 0.3
+"$script" -p second < "$scratch/items" > "$scratch/out.second" 2>&1 & second=$!
+for i in $(seq 50); do [ "$(requests | wc -l)" -ge 2 ] && break; sleep 0.1; done
+mapfile -t names < <(requests)
+check "two requests are listed" 2 "${#names[@]}"
+check "requests sort in arrival order" "$first" "${names[0]#*-}"
+printf 'Y2\n' > "$spool/${names[1]}/result"
+printf 'Y1\n' > "$spool/${names[0]}/result"
+wait "$first" || true; wait "$second" || true
+check "the first client gets the first answer" 'one' "$(cat "$scratch/out.first")"
+check "the second client gets the second answer" 'two (three)' "$(cat "$scratch/out.second")"
+
+# --- the shell stops while a client waits -------------------------------------------------------
+launch "$scratch/items" -p "x"
+wait_request > /dev/null
+stop_shell
+start=$SECONDS
+finish
+check "a stopped shell exits 3" 3 "$code"
+[ $((SECONDS - start)) -le 3 ] && check "a stopped shell is noticed within three seconds" ok ok \
+  || check "a stopped shell is noticed within three seconds" ok slow
+wait_gone && check "a stopped shell leaves no request from the client" ok ok \
+  || check "a stopped shell leaves no request from the client" ok "left"
+start_shell
+
+# --- the caller is killed without warning -------------------------------------------------------
+# The caller is a shell running the client inside $(...), as uuctl does, then killed with SIGKILL.
+bash -c '
+  v=$("$1" -p x < "$2")
+  echo "$v"
+' caller "$script" "$scratch/items" > /dev/null 2>&1 &
+caller=$!
+name=$(wait_request)
+clientpid=${name#*-}
+kill -KILL "$caller"
+wait "$caller" 2>/dev/null || true
+gone=no
+for i in $(seq 40); do
+  kill -0 "$clientpid" 2>/dev/null || { gone=yes; break; }
+  sleep 0.1
+done
+check "a client whose caller was killed exits" yes "$gone"
+check "and leaves no pipe holder behind" "" "$(pgrep -f -- "$spool/$name" || true)"
+# A client killed with SIGKILL cannot clean up: the shell does that. Remove it as the shell would.
+rm -rf -- "${spool:?}/$name"
+
+# --- the choices never appear in an argument ----------------------------------------------------
+marker=MARKER-5f2c1d
+printf '%s secret\n' "$marker" > "$scratch/secret"
+launch "$scratch/secret" -p "x"
+name=$(wait_request)
+printf 'Y1\n' > "$spool/$name/result"
+finish
+check "a marker in the choices is returned" "$marker secret" "$(cat "$scratch/out")"
+check "a marker in the choices is in no argument" 0 "$(grep -c -- "$marker" "$log" || true)"
+check "a marker is in no message" 0 "$(grep -c -- "$marker" "$scratch/err" || true)"
+
+# --- the uuctl launcher entry ---------------------------------------------------------------------
+seed=$root/tools/scripts/seed-menu-entry
+config=$scratch/seed/config; data=$scratch/seed/data
+cp "$(command -v sleep)" "$bin/uuctl"
+bash "$seed" "$root" "$config" "$data"
+entry=$data/applications/uuctl.desktop
+check "the entry asks through the staged menu script" "Exec=uuctl $config/ui-shell/scripts/menu -p" "$(grep '^Exec=' "$entry")"
+check "the entry keeps the rest of the package's" "$(grep -vc '^Exec=' "$root/tools/uuctl.desktop")" "$(grep -vc '^Exec=' "$entry")"
+check "the entry has no placeholder left" 0 "$(grep -c '@' "$entry" || true)"
+printf 'mine\n' > "$entry"
+bash "$seed" "$root" "$config" "$data"
+check "an existing entry is kept" mine "$(cat "$entry")"
+check "no temporary file is left" "uuctl.desktop" "$(ls -A "$data/applications")"
+mkdir -p "$scratch/nouuctl"
+for tool in realpath mkdir mktemp mv rm bash dirname; do ln -s "$(command -v "$tool")" "$scratch/nouuctl/$tool"; done
+code=0; PATH=$scratch/nouuctl bash "$seed" "$root" "$config" "$scratch/seed/other" || code=$?
+check "without uuctl nothing is written and it exits 0" "0 absent" "$code $([ -e "$scratch/seed/other" ] && echo present || echo absent)"
+code=0; bash "$seed" "$root" "$scratch/with space" "$scratch/seed/other2" 2> /dev/null || code=$?
+check "a staged path with a space is refused" 1 "$code"
+code=0; bash "$seed" "$root" 2> /dev/null || code=$?
+check "wrong argument count exits 2" 2 "$code"
+rm -f "$bin/uuctl"
+
+[ "$fail" -eq 0 ] && echo "menu: all checks passed" || { echo "menu: failures"; exit 1; }
