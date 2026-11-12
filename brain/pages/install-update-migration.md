@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [install, update, migration]
 created: "2026-11-11T02:03:44"
-updated: "2026-11-12T07:49:02"
+updated: "2026-11-12T08:08:40"
 ---
 
 <!-- compiled_truth -->
@@ -233,4 +233,15 @@ Related: [[shipped-default-seed]], [[xdg-runtime-and-theme-schema]].
 - time: 2026-11-12T07:49:02
   kind: decision
   summary: "Release rules written to docs/release-rules.md: tag, tree, startability, migrations, updater protocol stability, pre-push gate"
+  affects: [install-update-migration]
+
+- time: 2026-11-12T07:59:19
+  kind: decision
+  summary: "Releases are cut by make release-patch|minor|major (tools/scripts/release): VERSION = latest released version; gate, signed tag, then sandbox proofs (fresh install; previous tag updates to new and rolls back) BEFORE the push; failure before push undoes commit and tag. make test-release covers it with a throwaway key"
+  affects: [install-update-migration]
+
+- time: 2026-11-12T08:08:40
+  kind: decision
+  summary: "Release tooling never hardcodes machine-specific setup (owner instruction): RELEASE_GNUPGHOME is required with no default, RELEASE_SIGNING_KEY is optional (else the single usable signing key in that home), the script shows the signing key, requires its primary to equal the pinned update/signer.asc key, and asks to confirm before signing; a wrong key is fixed by setting the env again. The repository user.signingkey is no longer used. Docs use $RELEASE_GNUPGHOME."
+  source: owner chat
   affects: [install-update-migration]

@@ -14,14 +14,15 @@ make dev-check-update  # builds .build/release/dev and rehearses it against a cl
 
 ## 2. Rehearse the real signing key without publishing
 
+Set `RELEASE_GNUPGHOME` to the GnuPG home that holds the release key (no default is assumed anywhere).
 Use a scratch checkout and a scratch HOME so your real `~/.local`, `~/.config` and `~/.local/state`
 are never touched. This signs a **local** tag only.
 
 ```bash
 scratch=$(mktemp -d)
 git clone . "$scratch/repo" && cd "$scratch/repo"
-GNUPGHOME=$HOME/.local/share/gnupg/releases git tag -s -m 'rehearsal' v0.0.0-rehearsal
-GNUPGHOME=$HOME/.local/share/gnupg/releases git verify-tag v0.0.0-rehearsal   # Good signature, primary F197 7EFA ...
+GNUPGHOME=$RELEASE_GNUPGHOME git tag -s -m 'rehearsal' v0.0.0-rehearsal
+GNUPGHOME=$RELEASE_GNUPGHOME git verify-tag v0.0.0-rehearsal   # Good signature, primary F197 7EFA ...
 ```
 
 `git verify-tag` against a clean keyring (what the activator does) is covered by `make test-activator`;
@@ -32,7 +33,7 @@ scratch directory afterwards.
 ## 3. First real release (publishes: confirm each step)
 
 1. Commit the work (the repository has no commits of this feature yet) and push `main`.
-2. `GNUPGHOME=$HOME/.local/share/gnupg/releases git tag -s -m 'v0.1.0' v0.1.0` then `git push origin v0.1.0`.
+2. `GNUPGHOME=$RELEASE_GNUPGHOME git tag -s -m 'v0.1.0' v0.1.0` then `git push origin v0.1.0`.
    The tag name is final: the activator refuses a republished name.
 3. As a stranger, in a Bubblewrap sandbox (private home, read-only root, network only):
 

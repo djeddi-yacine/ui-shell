@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# tools/scripts/release end to end in a scratch repository: a throwaway signing key, a local bare
+# remote, the real dev-update sandbox. Covers the bump, the signed tag, the install and the
+# previous-to-new upgrade proofs, the push, the refusals, and the undo when a proof fails.
+# The real repository, keys and remote are never touched. Needs bwrap and gpg.
+set -euo pipefail
+root=$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/../..")
+scratch=$(mktemp -d)
+cleanup() { chmod -R u+w -- "${scratch:?}" 2>/dev/null || true; rm -r -- "${scratch:?}"; }
+trap cleanup EXIT
+fail() { printf 'Release flow check failed: %s\n' "$*" >&2; exit 1; }
+
+for dependency in bwrap gpg git; do command -v "$dependency" >/dev/null || fail "$dependency is required."; done
+
+# Two throwaway identities: the signer, and a stranger whose key must not be accepted.
+new_key() { # DIR NAME -> prints the fingerprint
+  GNUPGHOME=$1 gpg --batch --quiet --pinentry-mode loopback --passphrase '' --quick-gen-key "$2 <$2@example.invalid>" ed25519 sign never >/dev/null 2>&1
+  GNUPGHOME=$1 gpg --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }'
+}
+mkdir -m 700 "$scratch/gpg" "$scratch/other"
+signer_fp=$(new_key "$scratch/gpg" signer)
+other_fp=$(new_key "$scratch/other" other)
+GNUPGHOME=$scratch/gpg gpg --batch --armor --export "$signer_fp" >"$scratch/signer.asc"
+GNUPGHOME=$scratch/other gpg --batch --armor --export "$other_fp" >"$scratch/other.asc"
+
+# The repository: this tree's tooling on top of a clone, a first release signed by the throwaway key,
+# one change after it, and a bare remote.
+git clone -q -- "$root" "$scratch/repo"
+repo=$scratch/repo
+git -C "$repo" config user.name tester
+git -C "$repo" config user.email tester@example.invalid
+git -C "$repo" config commit.gpgsign false
+git -C "$repo" tag -l | xargs -r git -C "$repo" tag -d >/dev/null
+for file in tools/scripts/release tools/scripts/dev-update tools/development.mk .gitignore VERSION; do
+  mkdir -p -- "$(dirname -- "$repo/$file")"
+  cp -- "$root/$file" "$repo/$file"
+done
+git -C "$repo" add -A
+git -C "$repo" commit -q -m 'Tooling under test'
+GNUPGHOME=$scratch/gpg git -C "$repo" tag -s -u "$signer_fp!" -m v0.1.0 v0.1.0
+printf 'change\n' >"$repo/change.txt"
+git -C "$repo" add -f change.txt
+git -C "$repo" commit -q -m 'A change after v0.1.0'
+git init -q --bare "$scratch/remote.git"
+git -C "$repo" remote remove origin
+git -C "$repo" remote add origin "$scratch/remote.git"
+git -C "$repo" push -q origin main v0.1.0
+
+release() { # ARGS... ; environment and directory fixed; output kept in $scratch/out
+  (cd -- "$repo" && RELEASE_GNUPGHOME=$scratch/gpg RELEASE_SIGNER_KEY=${signer_key:-$scratch/signer.asc} \
+    bash tools/scripts/release "$@") >"$scratch/out" 2>&1
+}
+signer_key=$scratch/signer.asc
+
+# Refusals change nothing.
+head_before=$(git -C "$repo" rev-parse HEAD)
+printf 'dirty\n' >>"$repo/VERSION"
+! release patch --no-gate --yes || fail 'a dirty tree was released'
+rg -q 'not clean' "$scratch/out" || fail 'the dirty-tree refusal has no reason'
+git -C "$repo" checkout -q -- VERSION
+! release sideways --yes || fail 'an unknown bump was accepted'
+release patch --plan || fail "--plan failed: $(<"$scratch/out")"
+rg -q 'v0.1.0 -> v0.1.1' "$scratch/out" || fail '--plan did not name the next version'
+[[ $(git -C "$repo" rev-parse HEAD) == "$head_before" && -z $(git -C "$repo" tag -l v0.1.1) ]] || fail 'a refusal or --plan changed the repository'
+
+# A patch release: tag signed, proofs run, pushed.
+release patch --no-gate --no-public --yes || { cat -- "$scratch/out" >&2; fail 'the patch release failed'; }
+[[ $(git -C "$scratch/remote.git" show main:VERSION) == 0.1.1 ]] || fail 'the remote main lacks VERSION 0.1.1'
+GNUPGHOME=$scratch/gpg git -C "$scratch/remote.git" verify-tag v0.1.1 >/dev/null 2>&1 || fail 'the pushed tag does not verify'
+[[ $(git -C "$scratch/remote.git" log -1 --format=%s v0.1.1) == 'Release v0.1.1' ]] || fail 'the tag is not on the release commit'
+rg -q 'proof 2: v0.1.0 updates to v0.1.1' "$scratch/out" && rg -q 'rollback exit 0' "$scratch/out" || fail 'the upgrade and rollback proof did not run'
+! release patch --no-gate --yes || fail 'a release with nothing new was made'
+rg -q 'nothing to release' "$scratch/out" || fail 'the nothing-to-release refusal has no reason'
+
+# No default key home, and a key that is not the pinned one is refused before anything changes.
+git -C "$repo" commit -q --allow-empty -m 'Another change'
+head_before=$(git -C "$repo" rev-parse HEAD)
+(cd -- "$repo" && env -u RELEASE_GNUPGHOME bash tools/scripts/release minor --plan) >"$scratch/out" 2>&1 && fail 'a release without RELEASE_GNUPGHOME was planned'
+rg -q 'set RELEASE_GNUPGHOME' "$scratch/out" || fail 'the missing-home refusal has no reason'
+signer_key=$scratch/other.asc
+! release minor --plan || fail 'a signing key that is not the pinned one was accepted'
+rg -q 'pins' "$scratch/out" || fail 'the key-mismatch refusal has no reason'
+signer_key=$scratch/signer.asc
+# Without --yes the key is shown and a "no" changes nothing.
+! (cd -- "$repo" && RELEASE_GNUPGHOME=$scratch/gpg RELEASE_SIGNER_KEY=$signer_key bash tools/scripts/release minor --no-gate </dev/null) >"$scratch/out" 2>&1 || fail 'signing went ahead without confirmation'
+rg -q "signing key $signer_fp" "$scratch/out" || fail 'the signing key was not shown'
+[[ $(git -C "$repo" rev-parse HEAD) == "$head_before" ]] || fail 'a declined confirmation changed the repository'
+
+# A failing proof is undone and never pushed: a symlink in a release part is refused by the build.
+ln -s /etc/passwd "$repo/shell/badlink"
+git -C "$repo" add -f shell/badlink
+git -C "$repo" commit -q -m 'A tree the release build refuses'
+head_before=$(git -C "$repo" rev-parse HEAD)
+! release minor --no-gate --no-public --yes || fail 'a release that cannot be installed was made'
+[[ $(git -C "$repo" rev-parse HEAD) == "$head_before" ]] || fail 'the failed release commit was not removed'
+[[ -z $(git -C "$repo" tag -l v0.2.0) && -z $(git -C "$scratch/remote.git" tag -l v0.2.0) ]] || fail 'the failed release left a tag'
+[[ $(git -C "$scratch/remote.git" show main:VERSION) == 0.1.1 ]] || fail 'the failed release reached the remote'
+printf '%s\n' 'Release flow checks passed.'

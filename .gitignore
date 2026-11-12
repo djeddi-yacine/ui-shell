@@ -10,6 +10,7 @@
 !/Makefile
 !/README.md
 !/STYLE.md
+!/VERSION
 
 !/.vscode/
 !/.vscode/settings.json

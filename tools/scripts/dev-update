@@ -23,6 +23,8 @@
 #                  later against an earlier install to test a real upgrade. Never deleted.
 #   --keep         keep the temporary home of this run (printed at the end)
 #   --no-net       no network (only meaningful with a local --repo)
+#   --signer-key   public key file pinned instead of update/signer.asc, for tags signed with a test or
+#                  not yet published key (a local --repo only; the activator is told it is a test)
 #
 # Exit 0 when every check passes, 1 when a check fails, 2 on usage errors.
 set -euo pipefail
@@ -132,7 +134,7 @@ usage() {
   exit "${1:-2}"
 }
 repo=$(sed -n 's/^repository=//p' "$root/update/activator" | head -n 1)
-from=latest to='' steps=install,dry-run,update,again home='' keep=0 net=1
+from=latest to='' signer='' steps=install,dry-run,update,again home='' keep=0 net=1
 fingerprint=$(grep -E -m1 '^([0-9A-F]{4} {1,2}){9}[0-9A-F]{4}$' "$root/README.md" || true)
 while (( $# )); do
   case $1 in
@@ -144,6 +146,7 @@ while (( $# )); do
     --home) (( $# >= 2 )) || usage; home=$2; shift 2 ;;
     --keep) keep=1; shift ;;
     --no-net) net=0; shift ;;
+    --signer-key) (( $# >= 2 )) || usage; signer=$2; shift 2 ;;
     -h|--help) usage 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage ;;
   esac
@@ -171,8 +174,14 @@ if [[ $repo == /* || $repo == ./* || $repo == ../* ]]; then
   args+=(--ro-bind "$repo_path" /repo)
   env_args+=(--setenv DEV_UPDATE_REPO /repo --setenv UI_SHELL_UPDATE_TEST 1 --setenv UI_SHELL_UPDATE_REPO /repo)
   repo_label="$repo_path (local, bound read-only)"
+  if [[ -n $signer ]]; then
+    signer=$(realpath -e -- "$signer") || { printf 'Signer key %s does not exist.\n' "$signer" >&2; exit 2; }
+    args+=(--ro-bind "$signer" /signer.asc)
+    env_args+=(--setenv UI_SHELL_SIGNER_KEY /signer.asc)
+  fi
 else
   (( net )) || { printf '%s\n' '--no-net needs a local --repo.' >&2; exit 2; }
+  [[ -z $signer ]] || { printf '%s\n' '--signer-key needs a local --repo.' >&2; exit 2; }
   env_args+=(--setenv DEV_UPDATE_REPO "$repo")
   repo_label=$repo
 fi

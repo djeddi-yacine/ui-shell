@@ -2,7 +2,7 @@
 TEST_RUNNER := $(ROOT)/tests/scripts/test-nested
 TEST_STATE := $(ROOT)/tests/scripts/test-state
 
-.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-clipboard test-clipboard-send test-menu test-menu-session test-menu-stress test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-update test-activator test-crash test-migrations test-crossing test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders test-notify test-notifications
+.PHONY: test-auth test-mpris test-record test-record-live test-shot test-shot-live test-clipboard test-clipboard-send test-menu test-menu-session test-menu-stress test-audio test-audio-host test-help test test-scripts test-sandbox test-hypr-config test-update test-activator test-crash test-migrations test-crossing test-release test-qml test-theme-config test-pipelines test-app2unit test-app-launch test-session-close test-env test-env-host test-env-snapshot test-env-clean test-import-themes test-wallpaper test-launcher test-theme test-profiles test-motion test-borders test-notify test-notifications
 
 test-help:
 	@printf '%s\n' \
@@ -23,6 +23,7 @@ test-help:
 		'  test-crash        Kill the updater at every phase and recover with --force or --rollback (private HOME)' \
 		'  test-migrations  Run migrations in order, snapshot and restore across a shape change, prune and crash around a migration (private HOME)' \
 		'  test-crossing     Cross a development layout into the user directory and install cleanly (private HOME)' \
+		'  test-release      Cut a release in a scratch repository with a throwaway key: bump, signed tag, install and upgrade proofs, push, refusals and undo (bwrap)' \
 		'  test-qml          Lint QML and run isolated Qt Quick Test suites' \
 		'  test-theme-config Check theme definitions, references and config contracts' \
 		'  test-pipelines    Check generated wallpaper and component pipelines' \
@@ -52,7 +53,7 @@ test-help:
 		'  test-borders      Verify native output-scoped borders in a disposable session' \
 		''
 
-test: test-scripts test-sandbox test-hypr-config test-update test-activator test-crash test-migrations test-crossing test-qml test-theme-config test-pipelines test-record test-shot test-clipboard test-menu test-auth test-mpris test-notifications
+test: test-scripts test-sandbox test-hypr-config test-update test-activator test-crash test-migrations test-crossing test-release test-qml test-theme-config test-pipelines test-record test-shot test-clipboard test-menu test-auth test-mpris test-notifications
 	@printf '%s\n' 'Checks passed.'
 
 test-scripts:
@@ -140,6 +141,9 @@ test-migrations:
 
 test-crossing:
 	@bash "$(ROOT)/tests/scripts/check-crossing"
+
+test-release:
+	@bash "$(ROOT)/tests/scripts/check-release-flow"
 
 test-qml:
 	@bash "$(TEST_RUNNER)" qml ephemeral

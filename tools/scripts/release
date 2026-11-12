@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Development only: cut the next release. Bumps VERSION, commits, signs the tag, proves in a sandbox
+# that a stranger can install it and that the PREVIOUS release can update to it and roll back, and
+# only then pushes. Nothing is pushed before the proof passes; a failure before the push removes the
+# release commit and the tag again.
+#
+#   release patch|minor|major [--plan] [--no-gate] [--no-push] [--no-public] [--yes]
+#
+#   --plan       print what would happen and stop (changes nothing)
+#   --no-gate    skip make test, dev-lint, dev-shellcheck and dev-check-update
+#   --no-push    stop after the local proof; the commit and the signed tag stay local
+#   --no-public  skip the proof against the published repository after the push
+#   --yes        do not ask before pushing
+#
+# VERSION holds the version of the latest release (the tag without its v). Environment:
+#   RELEASE_GNUPGHOME    REQUIRED, no default: the GnuPG home that holds the release key
+#   RELEASE_SIGNING_KEY  optional: fingerprint of the signing (sub)key; by default the one valid
+#                        signing key found in RELEASE_GNUPGHOME (more than one: set this)
+#   RELEASE_SIGNER_KEY   public key the sandbox pins (default update/signer.asc)
+#   RELEASE_REMOTE / RELEASE_BRANCH  (default origin / main)
+# The key that will sign is shown and confirmed before anything changes; if it is not the right one,
+# set the variable again and rerun. Its primary key must equal the pinned one. Signing asks for the
+# key's passphrase.
+set -euo pipefail
+
+root=$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/../..")
+cd -- "$root"
+remote=${RELEASE_REMOTE:-origin} branch=${RELEASE_BRANCH:-main}
+gnupg_home=${RELEASE_GNUPGHOME:-}
+signer_key=${RELEASE_SIGNER_KEY:-$root/update/signer.asc}
+dev_update=$root/tools/scripts/dev-update
+
+die() { printf 'release: %s\n' "$*" >&2; exit 1; }
+say() { printf '\n== %s\n' "$*"; }
+usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+
+bump='' plan=0 gate=1 push=1 public=1 yes=0
+for argument in "$@"; do
+  case $argument in
+    patch|minor|major) [[ -z $bump ]] || usage; bump=$argument ;;
+    --plan) plan=1 ;;
+    --no-gate) gate=0 ;;
+    --no-push) push=0 ;;
+    --no-public) public=0 ;;
+    --yes) yes=1 ;;
+    -h|--help) usage 0 ;;
+    *) usage ;;
+  esac
+done
+[[ -n $bump ]] || usage
+
+# ---- preconditions -------------------------------------------------------------------------------
+for dependency in git gpg bwrap make; do command -v "$dependency" >/dev/null || die "$dependency is required."; done
+[[ $(git symbolic-ref --short HEAD) == "$branch" ]] || die "not on $branch."
+if [[ -n $(git status --porcelain) ]]; then
+  (( plan )) || die 'the working tree is not clean; commit or stash first.'
+  printf '%s\n' 'release: note: the working tree is not clean; a real release would refuse.' >&2
+fi
+version=$(<VERSION)
+[[ $version =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || die "VERSION must read MAJOR.MINOR.PATCH, got '$version'."
+major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+latest=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n 1)
+[[ $latest == "$version" ]] || die "VERSION is $version but the newest local tag is v${latest:-none}."
+git rev-parse -q --verify "refs/tags/v$version^{commit}" >/dev/null || die "v$version is not a tag of this repository."
+previous=v$version
+(( $(git rev-list --count "$previous..HEAD") > 0 )) || die "nothing to release: HEAD is $previous."
+if (( push )); then
+  git fetch --quiet "$remote" || die "cannot fetch $remote."
+  git merge-base --is-ancestor "$remote/$branch" HEAD || die "$remote/$branch has commits that this branch lacks; merge first."
+fi
+case $bump in
+  patch) next=$major.$minor.$((patch + 1)) ;;
+  minor) next=$major.$((minor + 1)).0 ;;
+  major) next=$((major + 1)).0.0 ;;
+esac
+tag=v$next
+git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "$tag already exists locally."
+if (( push )); then [[ -z $(git ls-remote --tags "$remote" "refs/tags/$tag") ]] || die "$tag already exists on $remote."; fi
+[[ -n $gnupg_home ]] || die 'set RELEASE_GNUPGHOME to the GnuPG home that holds the release key, then run again.'
+[[ -d $gnupg_home ]] || die "RELEASE_GNUPGHOME=$gnupg_home is not a directory."
+[[ -f $signer_key ]] || die "no signer key file $signer_key."
+fingerprint=$(gpg --show-keys --with-colons "$signer_key" | awk -F: '$1 == "fpr" { print $10; exit }')
+[[ -n $fingerprint ]] || die "$signer_key holds no key."
+# Secret signing keys in the release home that are neither expired, revoked nor invalid: "PRIMARY KEY".
+candidates=$(GNUPGHOME=$gnupg_home gpg --with-colons --list-secret-keys 2>/dev/null | awk -F: '
+  $1 == "sec" || $1 == "ssb" { kind = $1; usable = ($12 ~ /[sS]/ && $2 !~ /^[erid]$/) }
+  $1 == "fpr" { if (kind == "sec") primary = $10; if (usable) { print primary, $10; usable = 0 } }')
+if [[ -n ${RELEASE_SIGNING_KEY:-} ]]; then
+  signing_fpr=${RELEASE_SIGNING_KEY%!}
+  primary_fpr=$(awk -v key="$signing_fpr" '$2 == key { print $1; exit }' <<<"$candidates")
+  [[ -n $primary_fpr ]] || die "RELEASE_SIGNING_KEY=$signing_fpr is not a usable signing key in $gnupg_home."
+else
+  [[ -n $candidates ]] || die "no usable secret signing key in $gnupg_home (RELEASE_GNUPGHOME)."
+  (( $(wc -l <<<"$candidates") == 1 )) || die "several signing keys in $gnupg_home; set RELEASE_SIGNING_KEY to one fingerprint:
+$(awk '{ print "  " $2 }' <<<"$candidates")"
+  read -r primary_fpr signing_fpr <<<"$candidates"
+fi
+[[ $primary_fpr == "$fingerprint" ]] || die "the signing key belongs to $primary_fpr but $signer_key pins $fingerprint; set RELEASE_GNUPGHOME / RELEASE_SIGNING_KEY to the right key."
+
+say "plan: $previous -> $tag ($bump)"
+git log --oneline "$previous..HEAD" | sed 's/^/  /'
+printf '  gate: %s, push: %s, public proof: %s, signer %s\n' "$( ((gate)) && echo yes || echo no)" "$( ((push)) && echo yes || echo no)" "$( ((public && push)) && echo yes || echo no)" "$fingerprint"
+printf '  signing key %s in %s\n    %s\n' "$signing_fpr" "$gnupg_home" \
+  "$(GNUPGHOME=$gnupg_home gpg --with-colons --list-keys "$primary_fpr" | awk -F: '$1 == "uid" { print $10; exit }')"
+(( ! plan )) || exit 0
+if (( ! yes )); then
+  read -r -p 'Sign with this key? [y/N] ' answer
+  [[ $answer == y || $answer == Y ]] || die 'not confirmed; set RELEASE_GNUPGHOME / RELEASE_SIGNING_KEY and run again. Nothing changed.'
+fi
+
+# ---- gate ---------------------------------------------------------------------------------------
+if (( gate )); then
+  say 'gate'
+  make --no-print-directory test dev-lint dev-shellcheck dev-check-update
+fi
+
+# ---- commit and sign (undone if anything fails before the push) ---------------------------------------
+before=$(git rev-parse HEAD) pushed=0 work=''
+undo() {
+  local status=$?
+  [[ -z $work ]] || { chmod -R u+w -- "$work" 2>/dev/null || true; rm -r -- "${work:?}"; }
+  if (( status != 0 && ! pushed )); then
+    git tag -d "$tag" >/dev/null 2>&1 || true
+    [[ $(git rev-parse HEAD) == "$before" ]] || git reset --quiet --hard "$before"
+    printf 'release: failed; the release commit and tag %s are removed again.\n' "$tag" >&2
+  fi
+  return "$status"
+}
+trap undo EXIT
+say "commit and tag $tag"
+printf '%s\n' "$next" >VERSION
+git add VERSION
+git -c commit.gpgsign=false commit --quiet -m "Release $tag"
+GPG_TTY=$(tty 2>/dev/null || true) GNUPGHOME=$gnupg_home git -c "user.signingkey=$signing_fpr!" tag -s -m "$tag" "$tag"
+GNUPGHOME=$gnupg_home git verify-tag "$tag" 2>&1 | sed 's/^/  /'
+
+# ---- proof in the sandbox, offline, against this exact repository ----------------------------------------
+say 'proof 1: a stranger installs the new release'
+bash "$dev_update" --repo "$root" --no-net --signer-key "$signer_key" --fingerprint "$fingerprint" \
+  --from "$tag" --to "$tag" --steps install,dry-run,update,again | sed 's/^/  /'
+mkdir -p -- "$root/.build"
+work=$(mktemp -d -p "$root/.build" release.XXXXXX)
+say "proof 2: $previous updates to $tag, then rolls back"
+bash "$dev_update" --repo "$root" --no-net --signer-key "$signer_key" --fingerprint "$fingerprint" \
+  --home "$work/home" --from "$previous" --to "$previous" --steps install,update | sed 's/^/  /'
+bash "$dev_update" --repo "$root" --no-net --signer-key "$signer_key" --fingerprint "$fingerprint" \
+  --home "$work/home" --from "$previous" --to "$tag" --steps dry-run,update,again,rollback | sed 's/^/  /'
+
+if (( ! push )); then
+  trap - EXIT
+  [[ -z $work ]] || { chmod -R u+w -- "$work"; rm -r -- "${work:?}"; }
+  say "done locally: commit and signed tag $tag are not pushed. Push with: git push --atomic $remote $branch $tag"
+  exit 0
+fi
+
+# ---- push -------------------------------------------------------------------------------------------
+if (( ! yes )); then
+  read -r -p "Push $branch and $tag to $remote? [y/N] " answer
+  [[ $answer == y || $answer == Y ]] || die "not pushed; the commit and the tag $tag stay local (undo: git tag -d $tag && git reset --hard $before)."
+fi
+say "push $tag"
+git push --atomic "$remote" "$branch" "$tag"
+pushed=1
+
+# ---- proof against the published repository ---------------------------------------------------------
+if (( public )); then
+  say 'proof 3: the published repository'
+  rm -r -- "${work:?}/home" 2>/dev/null || { chmod -R u+w -- "$work/home"; rm -r -- "${work:?}/home"; }
+  bash "$dev_update" --from "$previous" --to "$previous" --home "$work/home" --steps install,update | sed 's/^/  /'
+  bash "$dev_update" --from "$previous" --to "$tag" --home "$work/home" --steps dry-run,update,again,rollback | sed 's/^/  /' ||
+    die "the published $tag fails the update proof; it is already public: fix forward with a new tag."
+fi
+say "released $tag"
