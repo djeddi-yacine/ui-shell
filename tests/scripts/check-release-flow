@@ -4,6 +4,8 @@
 # previous-to-new upgrade proofs, the push, the refusals, and the undo when a proof fails.
 # The real repository, keys and remote are never touched. Needs bwrap and gpg.
 set -euo pipefail
+# The caller's release settings (the real key, remote, branch) must never reach the scratch run.
+unset RELEASE_GNUPGHOME RELEASE_SIGNING_KEY RELEASE_SIGNER_KEY RELEASE_REMOTE RELEASE_BRANCH
 root=$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/../..")
 scratch=$(mktemp -d)
 cleanup() { chmod -R u+w -- "${scratch:?}" 2>/dev/null || true; rm -r -- "${scratch:?}"; }
