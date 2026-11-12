@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# The migrations that ship in migrations/, run directly on fixtures of old user data (private temp roots,
+# no sandbox): the effect, idempotence, and the cases that must be left alone.
+set -euo pipefail
+root=$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/../..")
+fail() { printf 'Shipped migrations: %s\n' "$*" >&2; exit 1; }
+scratch=$(mktemp -d "${CLAUDE_JOB_DIR:-${TMPDIR:-/tmp}}/shipped-migrations.XXXXXX")
+trap 'rm -r -- "${scratch:?}"' EXIT
+migration=$(find "$root/migrations" -name '*-retire-project-wallpaper-folder' -print -quit)
+[[ -x $migration ]] || fail 'the project-folder migration is missing or not executable'
+hash=$(sha256sum <"$root/default/default.png"); hash=${hash%% *}
+
+run() { # CONFIG ; the release is the checkout itself, read-only to the migration
+  UI_SHELL_CONFIG_HOME=$1 UI_SHELL_STATE_HOME=$scratch/state UI_SHELL_RELEASE=$root UI_SHELL_DRY_RUN=0 "$migration"
+}
+profile_with_project() { # DIR MODE
+  mkdir -p -- "$1/profiles/mine"
+  { printf '[wallpaper]\ncolor_mode = %s\nschema = 1\n\n' "$2"
+    printf '[wallpaper.default]\nfit_mode = contain\nfolder = project\noutput = \npalette_key = abc-%s-v2\npath = photo.jpg\n\n' "$2"
+    printf '[wallpaper.DP-1]\nfit_mode = cover\nfolder = personal\npath = keep.png\n'; } >"$1/profiles/mine/profile.ini"
+}
+
+# A profile on `project` falls back to the shipped default wallpaper; other selections are untouched.
+a=$scratch/a; profile_with_project "$a" light
+run "$a"
+profile=$a/profiles/mine/profile.ini
+rg -q '^folder = default$' "$profile" && rg -q '^path = default.png$' "$profile" || fail 'the selection did not fall back to default'
+rg -q "^palette_key = $hash-light-v2\$" "$profile" || fail 'the palette key does not follow the new image and the color mode'
+rg -q '^fit_mode = contain$' "$profile" && rg -q '^folder = personal$' "$profile" && rg -q '^path = keep.png$' "$profile" || fail 'another selection changed'
+cp -- "$profile" "$scratch/once"
+run "$a"
+cmp -s -- "$profile" "$scratch/once" || fail 'a second run changed the profile'
+
+# A user who defines their own `project` folder keeps the selection.
+b=$scratch/b; profile_with_project "$b" dark
+printf '[wallpaper_folders]\nproject = /home/me/Pictures\n' >"$b/settings.ini"
+cp -- "$b/profiles/mine/profile.ini" "$scratch/before"
+run "$b"
+cmp -s -- "$b/profiles/mine/profile.ini" "$scratch/before" || fail 'a user-defined project folder was rewritten'
+
+# No profiles at all is fine.
+mkdir -p -- "$scratch/c"; run "$scratch/c"
+printf '%s\n' 'Shipped migration checks passed.'

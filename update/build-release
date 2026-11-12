@@ -11,7 +11,7 @@ ui_valid_path "$clone" && ui_valid_path "$target" && ui_valid_tag "${tag%.tmp}" 
 [[ -d $clone && -f $clone/tools/manifest.ini && -f $clone/tools/settings.ini ]] || ui_die 1 "Not a source tree: $clone"
 [[ ! -e $target && ! -L $target && -d ${target%/*} ]] || ui_die 1 "Release target exists or has no parent: $target"
 
-parts=(update scripts shell hypr migrations default wallpapers)
+parts=(update scripts shell hypr migrations default)
 for part in "${parts[@]}" bundled-themes; do
   [[ -d $clone/$part ]] || ui_die 1 "Source tree lacks $part/."
   if [[ -n $(find "$clone/$part" -type l -print -quit) ]]; then ui_die 1 "A release holds no symlink: $part/ has one."; fi
@@ -22,10 +22,19 @@ mkdir -- "$target"
 for part in "${parts[@]}"; do
   cp -R --preserve=mode --no-preserve=timestamps,ownership -- "$clone/$part" "$target/$part"
 done
+# Development files that live beside runtime ones in the source tree stay out of a release. The list is
+# explicit; nothing is guessed. wallpapers/ (test images of a checkout) is not a part: the only shipped
+# wallpaper folder is default/.
+dev_only_files=(EGM.md README.md '*.frag' '*.frag.sha256')
+dev_only_dirs=(shell/svg)
+for name in "${dev_only_files[@]}"; do
+  case $name in */*) rm -f -- "$target/$name" ;; *) find "$target" -type f -name "$name" -delete ;; esac
+done
+for name in "${dev_only_dirs[@]}"; do rm -r -- "${target:?}/$name"; done
 # bundled-themes/ is not shipped as is: it is assembled with the default into shipped/.
 "$(dirname -- "${BASH_SOURCE[0]}")/assemble-shipped" "$clone" "$target/shipped"
 # The manifest is the release's address book; its wallpaper entries are relative to it, so they
-# already name the release's own default/ and wallpapers/. The baseline settings seed a clean install.
+# already name the release's own default/. The baseline settings seed a clean install.
 cp --no-preserve=timestamps,ownership -- "$clone/tools/manifest.ini" "$target/manifest.ini"
 cp --no-preserve=timestamps,ownership -- "$clone/tools/settings.ini" "$target/settings.baseline.ini"
 # Migration names, headers, executability and unique timestamps are validated before anything ships.

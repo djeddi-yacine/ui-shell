@@ -52,7 +52,9 @@ gpg_in --armor --export "$other_fp" >"$scratch/other.asc"
 [[ -s $scratch/key.asc && -s $scratch/other.asc ]] || fail 'could not create the test keys'
 work=$scratch/work
 mkdir -p "$work/tools"
-for part in update scripts shell hypr migrations default bundled-themes wallpapers; do cp -a -- "$project/$part" "$work/$part"; done
+for part in update scripts shell hypr migrations default bundled-themes; do cp -a -- "$project/$part" "$work/$part"; done
+# The fixture tests the mechanism with migrations of its own, not the ones this checkout ships.
+find "$work/migrations" -maxdepth 1 -type f -executable -delete
 cp -- "$project/tools/manifest.ini" "$project/tools/settings.ini" "$work/tools/"
 cp -- "$scratch/key.asc" "$work/update/signer.asc"
 git_in() { git -C "$work" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }

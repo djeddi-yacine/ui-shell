@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# shape: 1
+# The release no longer ships the `project` wallpaper folder (it held development test images). A profile
+# that still selects it falls back to the shipped default wallpaper, unless the user's settings.ini
+# defines a `project` folder of their own, which then stays. The data stays readable by the previous release.
+set -euo pipefail
+settings=$UI_SHELL_CONFIG_HOME/settings.ini
+image=$UI_SHELL_RELEASE/default/default.png
+[[ -f $image ]] || { printf '%s\n' 'migration: the release lacks default/default.png' >&2; exit 1; }
+if [[ -f $settings ]]; then
+  ! "$UI_SHELL_RELEASE/scripts/read-ini" "$settings" | jq -e '.wallpaper_folders.project != null' >/dev/null || exit 0
+fi
+hash=$(sha256sum <"$image"); hash=${hash%% *}
+for profile in "$UI_SHELL_CONFIG_HOME"/profiles/*/profile.ini; do
+  [[ -f $profile && ! -L $profile ]] || continue
+  grep -q '^folder *= *project *$' -- "$profile" || continue
+  mode=$(awk '/^\[/ { section = $0 } section == "[wallpaper]" && /^color_mode *=/ { sub(/^[^=]*= */, ""); print; exit }' "$profile")
+  [[ $mode == dark || $mode == light ]] || mode=dark
+  work=$(mktemp "${profile%/*}/.profile.XXXXXX")
+  awk -v key="$hash-$mode-v2" '
+    /^\[/ { inside = ($0 ~ /^\[wallpaper\.[^]]+\]$/) }
+    inside && /^folder *= *project *$/ { selected = 1; print "folder = default"; next }
+    inside && selected && /^path *=/ { print "path = default.png"; next }
+    inside && selected && /^palette_key *=/ { print "palette_key = " key; next }
+    /^\[/ { selected = 0 }
+    { print }
+  ' "$profile" >"$work"
+  chmod --reference="$profile" -- "$work"
+  mv -T -- "$work" "$profile"
+done

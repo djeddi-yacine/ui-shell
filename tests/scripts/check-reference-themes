@@ -69,7 +69,6 @@ with tempfile.TemporaryDirectory(prefix="reference-themes-") as temporary:
     )
     (installed / "scripts").rename(installed / "helpers")
     roles = {
-        "import-theme-colors": "reference-importer",
         "normalize-theme-colors": "toml-normalizer",
         "render-theme-colors": "palette-renderer",
     }
@@ -88,9 +87,7 @@ with tempfile.TemporaryDirectory(prefix="reference-themes-") as temporary:
     resolved.write_text(run(read_config, manifest, settings, installed / "helpers" / "read-ini", env=env).stdout)
     runtime = json.loads(resolved.read_text())
     env["UI_SHELL_RUNTIME"] = str(resolved)
-    role_importer = pathlib.Path(runtime["commands"]["importThemeColors"])
     importer = PROJECT / "tools" / "scripts" / "import-reference-themes"
-    assert role_importer.name == roles["import-theme-colors"]
     normalizer = pathlib.Path(runtime["commands"]["normalizeThemeColors"])
     renderer = pathlib.Path(runtime["commands"]["renderThemeColors"])
     custom_normalizer = pathlib.Path(runtime["commands"]["normalizeCustomColors"])

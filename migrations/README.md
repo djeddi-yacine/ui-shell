@@ -1,7 +1,7 @@
 # Migrations
 
 A migration changes user data when a release needs it in a new shape. This directory ships
-inside every release; the first version has no migration.
+inside every release. Shipped so far: `retire-project-wallpaper-folder` (profiles that select the retired `project` wallpaper folder fall back to the shipped default wallpaper).
 
 ## Rules
 

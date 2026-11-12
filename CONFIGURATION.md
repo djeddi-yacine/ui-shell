@@ -35,7 +35,6 @@ All wallpaper folders are user-owned entries in `settings.ini`, never directory 
 ```ini
 [wallpaper_folders]
 default = default
-project = wallpapers
 personal = ${HOME}/Pictures/Wallpapers
 ```
 

@@ -61,7 +61,7 @@ The high-level importer accepts:
 
 ```text
 bash tools/scripts/import-reference-themes RESOLVED_RUNTIME REFERENCE_ROOT POSITIVE_FIELD WARNING_FIELD NEGATIVE_FIELD
-bash scripts/import-theme-colors REFERENCE_ROOT DESTINATION NORMALIZER RENDERER POSITIVE_FIELD WARNING_FIELD NEGATIVE_FIELD
+bash tools/scripts/import-theme-colors REFERENCE_ROOT DESTINATION NORMALIZER RENDERER POSITIVE_FIELD WARNING_FIELD NEGATIVE_FIELD
 ```
 
 Theme config files are published as flat `SLUG-VARIANT/config.ini` entries beneath resolved `paths.themes`. Source files remain read-only. Status mappings are required choices, not inferred from ANSI names.

@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [install, update, migration]
 created: "2026-11-11T02:03:44"
-updated: "2026-11-12T08:42:00"
+updated: "2026-11-12T09:01:16"
 ---
 
 <!-- compiled_truth -->
@@ -250,4 +250,9 @@ Related: [[shipped-default-seed]], [[xdg-runtime-and-theme-schema]].
   kind: decision
   summary: "Release proofs now cover user data and the hard path: dev-update plants a user-directory file and a state file before an update and fails if the update or rollback changes them (settings.ini is reported, since a migration may rewrite it); tests/scripts/check-rich-release installs a candidate with a migration, reads_max 2 and a changed activator over a real previous release, checks the migration marker, the snapshot, the activator self-update and the rollback restore, then runs the whole release script on it. The v0.1.0 to v0.2.0 upgrade proved only signing, pinning, swap and rollback because no shipped part differed."
   source: owner chat
+  affects: [install-update-migration]
+
+- time: 2026-11-12T09:01:16
+  kind: decision
+  summary: "Release ships only runtime files; project wallpaper folder retired via migration"
   affects: [install-update-migration]

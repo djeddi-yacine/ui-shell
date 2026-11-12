@@ -1,6 +1,6 @@
 import QtQuick
 
-// A picture from shell/icons: a generated QML shape (scripts/generate-icons turns shell/svg/*.svg
+// A picture from shell/icons: a generated QML shape (tools/scripts/generate-icons turns shell/svg/*.svg
 // into them), drawn in `color` so it follows the theme. It is vector all the way, so it needs no
 // effect or GPU-only tint, and it is placed on whole pixels when `centered` so its strokes stay crisp.
 Item {

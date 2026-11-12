@@ -22,7 +22,7 @@ mkdir -m 0700 -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
 # The clone holds only what a release is built from, plus things it must leave out.
 clone=$scratch/clone
 mkdir -p "$clone/tools" "$clone/tests" "$clone/features" "$clone/brain" "$clone/refs"
-for part in update scripts shell hypr migrations default bundled-themes wallpapers; do cp -a -- "$project/$part" "$clone/$part"; done
+for part in update scripts shell hypr migrations default bundled-themes; do cp -a -- "$project/$part" "$clone/$part"; done
 cp -- "$project/tools/manifest.ini" "$project/tools/settings.ini" "$clone/tools/"
 printf 'x\n' >"$clone/tests/leak" && printf 'x\n' >"$clone/features/leak" && printf 'x\n' >"$clone/brain/leak" && printf 'x\n' >"$clone/refs/leak"
 data=$XDG_DATA_HOME/ui-shell config=$XDG_CONFIG_HOME/user-wm-shell state=$XDG_STATE_HOME/ui-shell cache=$XDG_CACHE_HOME/ui-shell
@@ -40,10 +40,11 @@ run build || fail "build failed: $(<"$scratch/err")"
 release=$data/releases/$tag
 [[ -d $release && ! -e $release.tmp ]] || fail 'the release directory is missing or a .tmp is left'
 [[ $(<"$release/RELEASE") == "$tag" ]] || fail 'RELEASE does not name the tag'
-for kept in update scripts shell hypr migrations default shipped wallpapers manifest.ini settings.baseline.ini SHA256SUMS; do
+for kept in update scripts shell hypr migrations default shipped manifest.ini settings.baseline.ini SHA256SUMS; do
   [[ -e $release/$kept ]] || fail "release lacks $kept"
 done
-for leaked in tests tools features brain refs; do [[ ! -e $release/$leaked ]] || fail "release holds $leaked"; done
+for leaked in tests tools features brain refs wallpapers; do [[ ! -e $release/$leaked ]] || fail "release holds $leaked"; done
+[[ -z $(find "$release" \( -name EGM.md -o -name 'README.md' -o -name '*.frag' -o -name '*.frag.sha256' \) -print -quit) && ! -e $release/shell/svg ]] || fail 'a development file shipped'
 [[ -z $(find "$release" -type l -print -quit) ]] || fail 'release holds a symlink'
 [[ -z $(find "$release" -perm /222 -print -quit) ]] || fail 'release has a writable entry'
 if (printf x >"$release/scripts/injected") 2>/dev/null; then fail 'a file could be created in the release'; fi

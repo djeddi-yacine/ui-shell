@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Regenerate colors-only reference Themes through configured command roles.
+# Regenerate colors-only reference Themes (the normalizer and renderer come from the configured command roles).
 set -euo pipefail
 (( $# == 5 )) || { printf '%s\n' 'Usage: import-reference-themes RESOLVED_RUNTIME REFERENCE_ROOT POSITIVE WARNING NEGATIVE' >&2; exit 2; }
 runtime=$1 reference=$(realpath -e -- "$2") positive=$3 warning=$4 negative=$5
 fail() { printf 'Reference themes: %s\n' "$*" >&2; exit 1; }
 themes=$(jq -er '.paths.themes' "$runtime")
-importer=$(jq -er '.commands.importThemeColors' "$runtime")
+importer=$(dirname -- "${BASH_SOURCE[0]}")/import-theme-colors
 root=$(jq -er '.configRoot' "$runtime")
 [[ -d $reference && $reference != / ]] || fail 'reference root must be a non-root directory'
 destination=$(realpath -m -- "$themes")
 [[ $destination == "$root/"* ]] || fail 'Theme storage must stay inside config root'
-[[ -x $importer ]] || fail 'resolved importThemeColors role is not executable'
+[[ -x $importer ]] || fail 'import-theme-colors is not executable'
 [[ -n $positive && -n $warning && -n $negative ]] || fail 'explicit semantic mappings required'
 # The converter owns source validation, path safety and flat-ID collision checks.
 exec "$importer" "$reference" "$destination" \

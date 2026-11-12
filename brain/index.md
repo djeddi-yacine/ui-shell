@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-12T07:42:00.778Z._
+_Auto-generated. Last updated 2026-11-12T08:01:16.996Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision

@@ -18,9 +18,11 @@ cp -a -- "$source_root/hypr/." "$destination/hypr/"
 # One clean default seed; user-created themes and profiles are never rewritten.
 bash "$script_directory/stage-defaults" "$source_root" "$destination"
 # The manifest is release-owned and always replaced; settings.ini is user-owned and seeded once.
-cp -- "$source_root/tools/manifest.ini" "$destination/manifest.ini"
+# Development adds the `project` wallpaper folder (the untracked images in wallpapers/) to the staged copy
+# only: a release ships no such folder.
+sed 's|^\[wallpaper_folders\]$|&\nproject = wallpapers|' "$source_root/tools/manifest.ini" >"$destination/manifest.ini"
 [[ -e $destination/settings.ini ]] || cp -- "$source_root/tools/settings.ini" "$destination/settings.ini"
-source_manifest=$("$source_root/scripts/read-ini" "$source_root/tools/manifest.ini")
+source_manifest=$("$source_root/scripts/read-ini" "$destination/manifest.ini")
 # Validate the installed pair only: the source tree has no runtime stores,
 # so a source-root profile resolution is not a valid installation check.
 # Absolute/XDG folder choices remain user-owned and are never created or

@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as tempor
     manifest = installed / "manifest.ini"
     settings = installed / "settings.ini"
     settings.write_text((project / "tools" / "settings.ini").read_text() + "\n[phantomat]\nlibrary = plugins/spatialoverview.so\n")
-    manifest.write_text((project / "tools" / "manifest.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/").replace("helpers/read-theme-state", "helpers/state-reader").replace("helpers/render-wallpaper-selection", "helpers/selection-renderer"))
+    manifest.write_text((project / "tools" / "manifest.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/").replace("helpers/read-theme-state", "helpers/state-reader").replace("helpers/render-wallpaper-selection", "helpers/selection-renderer").replace("[wallpaper_folders]\n", "[wallpaper_folders]\nproject = wallpapers\n"))
     # Selected images are referenced, never copied by bundle saves.
     (installed / "wallpapers").symlink_to(project / "wallpapers", target_is_directory=True)
     def run(command, *args, ok=True):

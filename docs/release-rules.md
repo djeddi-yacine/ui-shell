@@ -33,8 +33,10 @@ released version; the script refuses when it and the newest tag disagree.
 
 ## 2. The tree at the tag
 
-6. **The parts exist:** `update/ scripts/ shell/ hypr/ migrations/ default/ wallpapers/ bundled-themes/`
-   plus `tools/manifest.ini` and `tools/settings.ini` (`update/build-release`).
+6. **The parts exist:** `update/ scripts/ shell/ hypr/ migrations/ default/ bundled-themes/`
+   plus `tools/manifest.ini` and `tools/settings.ini` (`update/build-release`). Development files are left out by an explicit list there: every
+   `EGM.md` and `README.md`, `shell/svg/` and the `.frag` shader sources with their checksums,
+   and the checkout-only `wallpapers/`. The only shipped wallpaper folder is `default/`.
 7. **No symlinks** inside those parts and **no newline in any file name** (`update/build-release`).
    The repository holds no runtime links; the release layout creates them.
 8. **No file outside `SHA256SUMS`.** The release is built read-only and verified by `sha256sum --check
