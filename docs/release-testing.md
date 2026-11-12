@@ -1,6 +1,6 @@
 # Release testing
 
-How to check a release before and after it is signed. Everything here is run by the owner; nothing
+How to check a release before and after it is signed. What a release must satisfy is in `docs/release-rules.md`. Everything here is run by the owner; nothing
 below signs, tags or pushes by itself.
 
 ## 1. Gate before tagging (no network, no keys)
@@ -34,18 +34,18 @@ scratch directory afterwards.
 1. Commit the work (the repository has no commits of this feature yet) and push `main`.
 2. `GNUPGHOME=$HOME/.local/share/gnupg/releases git tag -s -m 'v0.1.0' v0.1.0` then `git push origin v0.1.0`.
    The tag name is final: the activator refuses a republished name.
-3. In a **scratch HOME** (no `XDG_*` set), as a stranger would:
+3. As a stranger, in a Bubblewrap sandbox (private home, read-only root, network only):
 
    ```bash
-   scratch=$(mktemp -d)
-   clean() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME HOME=$scratch "$@"; }
-   clean bash update/install-activator            # type the fingerprint from the README
-   clean $scratch/.local/bin/update-ui-shell --dry-run
-   clean $scratch/.local/bin/update-ui-shell
+   make dev-update                                   # clone the newest tag, pin the README fingerprint, dry-run, update, update again
+   make dev-update DEV_UPDATE_ARGS='--steps install,update,rollback --from v0.1.0'
+   make dev-update DEV_UPDATE_ARGS='--repo . --no-net --from v0.1.0'     # a local clone holding the signed tags
    ```
 
-   Expect: dry-run changes nothing; the update leaves `current -> releases/v0.1.0`, `settings.ini`
-   from the baseline, no pending marker.
+   To test a real upgrade, keep the home: install the old tag with `--home DIR --steps install,update --to v0.1.0`,
+   publish the new tag, then run `--home DIR --steps update,again --to v0.2.0`. `tools/scripts/dev-update --help`
+   lists every option. Expect: dry-run changes nothing; the update leaves `current -> releases/<tag>`,
+   `settings.ini` from the baseline, no pending marker; the second update says "Already current".
 4. Then your own machine: `update/install-activator`, `update-ui-shell`. If you used the dev layout,
    the crossing copies `themes/`, `profiles/`, `components/` and edited `hypr/user/*.lua` once and
    leaves the old directory untouched; keep it until the new session has started.

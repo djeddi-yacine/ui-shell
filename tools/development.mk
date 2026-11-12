@@ -13,7 +13,7 @@ REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: dev-release dev-check-update dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-shellcheck dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: dev-release dev-check-update dev-update dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-shellcheck dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
 
 dev-help:
 	@printf '%s\n' \
@@ -22,6 +22,7 @@ dev-help:
 		'  refs-pull             Pull reference repos; merges allowed, dirty repos skipped' \
 		'  dev-release           Build a release from the working tree under .build/release/dev (no updater needed)' \
 		'  dev-check-update      Build the dev release and rehearse it against a scratch copy of a clean user directory' \
+		'  dev-update            Install and update like a stranger in a Bubblewrap sandbox (private home, read-only root); options in DEV_UPDATE_ARGS, see tools/scripts/dev-update --help' \
 		'  dev-stage            Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
 		'  dev-seed-clipboard    Write ~/.config/cliphist/config (history in the runtime dir) only if absent' \
@@ -53,6 +54,10 @@ dev-release:
 
 dev-check-update:
 	@bash "$(ROOT)/tools/scripts/dev-release" "$(ROOT)" "$(ROOT)/.build" --check
+
+# Network by default (the public repository); DEV_UPDATE_ARGS='--repo . --no-net --from v0.1.0' stays local.
+dev-update:
+	@bash "$(ROOT)/tools/scripts/dev-update" $(DEV_UPDATE_ARGS)
 
 dev-stage:
 	@bash "$(ROOT)/tools/scripts/stage-config" "$(ROOT)" "$(CONFIG_ROOT)"

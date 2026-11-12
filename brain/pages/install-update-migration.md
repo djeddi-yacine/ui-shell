@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [install, update, migration]
 created: "2026-11-11T02:03:44"
-updated: "2026-11-12T01:54:09"
+updated: "2026-11-12T07:49:02"
 ---
 
 <!-- compiled_truth -->
@@ -228,4 +228,9 @@ Related: [[shipped-default-seed]], [[xdg-runtime-and-theme-schema]].
 - time: 2026-11-12T01:54:09
   kind: decision
   summary: "Open Item 2: shell/config constants are fixed per release"
+  affects: [install-update-migration]
+
+- time: 2026-11-12T07:49:02
+  kind: decision
+  summary: "Release rules written to docs/release-rules.md: tag, tree, startability, migrations, updater protocol stability, pre-push gate"
   affects: [install-update-migration]

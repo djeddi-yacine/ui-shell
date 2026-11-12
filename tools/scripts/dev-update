@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Development only: install and update the shell the way a stranger does, inside a Bubblewrap sandbox.
+# The sandbox has a private home (/home/test), a read-only root, no capabilities and nothing of the
+# host's user data; it shares the network only for a remote repository. The host is never written
+# except to the sandbox home directory chosen below.
+#
+#   dev-update [--repo URL|PATH] [--from TAG|latest] [--to TAG] [--steps LIST]
+#              [--fingerprint FPR] [--home DIR] [--keep] [--no-net]
+#
+#   --repo         repository to clone and update from (default: the one named in update/activator).
+#                  A local path (a clone or mirror holding the signed tags) is bound read-only and
+#                  needs no network; the activator is told it is a test repository.
+#   --from         tag whose checkout runs update/install-activator (default: latest, the highest v* tag)
+#   --to           tag the update step installs (default: whatever the activator picks, the newest)
+#   --steps        comma list, run in order; default install,dry-run,update,again
+#                    install   clone --from, type the fingerprint, install ~/.local/bin/update-ui-shell
+#                    dry-run   --dry-run; the data, config and state trees must stay unchanged
+#                    update    update (with --tag when --to is set); no pending marker may remain
+#                    again     a second update must report "Already current"
+#                    rollback  --rollback to the previous release (skipped when there is none)
+#   --fingerprint  primary fingerprint typed at the prompt (default: the one README.md shows)
+#   --home         keep the sandbox home in this directory and reuse it: run `--steps update --to NEW`
+#                  later against an earlier install to test a real upgrade. Never deleted.
+#   --keep         keep the temporary home of this run (printed at the end)
+#   --no-net       no network (only meaningful with a local --repo)
+#
+# Exit 0 when every check passes, 1 when a check fails, 2 on usage errors.
+set -euo pipefail
+
+script=$(realpath -e -- "${BASH_SOURCE[0]}")
+root=$(realpath -e -- "$(dirname -- "$script")/../..")
+sandbox_home=/home/test sandbox_runtime=/run/test
+
+# --- inside the sandbox -------------------------------------------------------------------------------
+inside() {
+  cd -- "$HOME"
+  local failures=0 tag=$DEV_UPDATE_FROM
+  local bin=$HOME/.local/bin/update-ui-shell data=$HOME/.local/share/ui-shell state=$HOME/.local/state/ui-shell
+  local out rc step before after previous args depth=(--depth 1)
+  pass() { printf 'PASS  %s\n' "$*"; }
+  fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
+  # Run a command, keep its output and status; the output is shown indented.
+  capture() {
+    rc=0
+    out=$("$@" 2>&1 </dev/null) || rc=$?
+    [[ -z $out ]] || sed 's/^/        /' <<<"$out"
+  }
+  # What the shell reads or the updater decides by: files with size and time, links, directory names.
+  # The updater's own lock file (and the directory holding it) is the one thing a dry-run may create.
+  trees() {
+    { find "$data" "$state" "$HOME/.config" -type f -printf 'f %p %s %T@\n'
+      find "$data" "$state" "$HOME/.config" -type l -printf 'l %p %l\n'
+      find "$data" "$state" "$HOME/.config" -type d -printf 'd %p\n'
+    } 2>/dev/null | grep -v -e " $state/update/lock " -e "^d $state/update$" -e "^f $state/update/lock$" | sort || true
+  }
+
+  if [[ $tag == latest ]]; then
+    tag=$(git ls-remote --tags --refs "$DEV_UPDATE_REPO" 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -n 1)
+    [[ -n $tag ]] || { printf 'No v* tag in %s.\n' "$DEV_UPDATE_REPO" >&2; exit 1; }
+  fi
+
+  IFS=, read -r -a step_names <<<"$DEV_UPDATE_STEPS"
+  for step in "${step_names[@]}"; do
+    printf '\n== %s\n' "$step"
+    case $step in
+      install)
+        [[ ! -e $HOME/src ]] || rm -r -- "${HOME:?}/src"
+        [[ $DEV_UPDATE_REPO != /* ]] || depth=()
+        git -c advice.detachedHead=false clone --quiet "${depth[@]}" --branch "$tag" "$DEV_UPDATE_REPO" "$HOME/src" 2>&1 | grep -v 'is not a commit' || true
+        [[ $(git -C "$HOME/src" describe --tags --exact-match 2>/dev/null) == "$tag" ]] && pass "cloned $tag" || fail "clone of $tag"
+        capture bash -c 'printf "%s\n" "$1" | bash "$2"' _ "$DEV_UPDATE_FINGERPRINT" "$HOME/src/update/install-activator"
+        (( rc == 0 )) && pass 'install-activator accepted the fingerprint' || fail "install-activator exit $rc"
+        [[ -x $bin ]] && pass 'update-ui-shell installed' || fail 'update-ui-shell missing'
+        [[ -f $state/signer.asc && $(stat -c %a "$state/signer.asc") == 600 ]] && pass 'signer key pinned (0600)' || fail 'signer key not pinned with mode 0600'
+        ;;
+      dry-run)
+        before=$(trees)
+        capture "$bin" --dry-run
+        (( rc == 0 )) && pass 'dry-run exit 0' || fail "dry-run exit $rc"
+        grep -q 'Rehearsal passed' <<<"$out" && pass 'rehearsal passed' || fail 'no "Rehearsal passed" line'
+        after=$(trees)
+        if [[ $before == "$after" ]]; then pass 'dry-run changed nothing'; else
+          fail 'dry-run changed data, config or state'
+          diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed 's/^/        /' || true
+        fi
+        ;;
+      update)
+        args=()
+        [[ -z $DEV_UPDATE_TO ]] || args=(--tag "$DEV_UPDATE_TO")
+        capture "$bin" "${args[@]}"
+        (( rc == 0 )) && pass 'update exit 0' || fail "update exit $rc"
+        if [[ -L $data/current ]]; then
+          pass "current -> $(readlink "$data/current")"
+          [[ -z $DEV_UPDATE_TO || $(readlink "$data/current") == "releases/$DEV_UPDATE_TO" ]] || fail "current is not releases/$DEV_UPDATE_TO"
+        else
+          fail 'no current link'
+        fi
+        [[ ! -e $state/update/pending ]] && pass 'no pending marker' || fail 'a pending marker is left'
+        [[ -f $HOME/.config/user-wm-shell/settings.ini ]] && pass 'settings.ini exists' || fail 'settings.ini missing'
+        ;;
+      again)
+        args=()
+        [[ -z $DEV_UPDATE_TO ]] || args=(--tag "$DEV_UPDATE_TO")
+        capture "$bin" "${args[@]}"
+        (( rc == 0 )) && grep -q 'Already current' <<<"$out" && pass 'second update: already current' || fail "second update (exit $rc) did not report Already current"
+        ;;
+      rollback)
+        if [[ -L $data/previous ]]; then
+          previous=$(readlink "$data/current")
+          capture "$bin" --rollback
+          (( rc == 0 )) && pass 'rollback exit 0' || fail "rollback exit $rc"
+          [[ $(readlink "$data/current") != "$previous" ]] && pass "current -> $(readlink "$data/current")" || fail 'current did not change'
+          [[ ! -e $state/update/pending ]] && pass 'no pending marker' || fail 'a pending marker is left'
+        else
+          printf 'SKIP  no previous release to roll back to\n'
+        fi
+        ;;
+    esac
+  done
+  printf '\n%s\n' "$( (( failures == 0 )) && echo 'All checks passed.' || echo "$failures check(s) failed.")"
+  (( failures == 0 ))
+}
+
+if [[ ${1-} == --inside ]]; then
+  inside
+  exit
+fi
+
+# --- on the host --------------------------------------------------------------------------------------
+usage() {
+  sed -n '2,/^set -euo/p' "$script" | sed '$d; s/^# \{0,1\}//' >&2
+  exit "${1:-2}"
+}
+repo=$(sed -n 's/^repository=//p' "$root/update/activator" | head -n 1)
+from=latest to='' steps=install,dry-run,update,again home='' keep=0 net=1
+fingerprint=$(grep -E -m1 '^([0-9A-F]{4} {1,2}){9}[0-9A-F]{4}$' "$root/README.md" || true)
+while (( $# )); do
+  case $1 in
+    --repo) (( $# >= 2 )) || usage; repo=$2; shift 2 ;;
+    --from) (( $# >= 2 )) || usage; from=$2; shift 2 ;;
+    --to) (( $# >= 2 )) || usage; to=$2; shift 2 ;;
+    --steps) (( $# >= 2 )) || usage; steps=$2; shift 2 ;;
+    --fingerprint) (( $# >= 2 )) || usage; fingerprint=$2; shift 2 ;;
+    --home) (( $# >= 2 )) || usage; home=$2; shift 2 ;;
+    --keep) keep=1; shift ;;
+    --no-net) net=0; shift ;;
+    -h|--help) usage 0 ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; usage ;;
+  esac
+done
+[[ -n $repo && -n $fingerprint ]] || { printf '%s\n' 'No repository or fingerprint found; pass --repo and --fingerprint.' >&2; exit 2; }
+IFS=, read -r -a wanted_steps <<<"$steps"
+for step in "${wanted_steps[@]}"; do
+  case $step in install|dry-run|update|again|rollback) ;; *) printf 'Unknown step: %s\n' "$step" >&2; exit 2 ;; esac
+done
+[[ $from == latest || $from =~ ^v[0-9A-Za-z._-]+$ ]] && [[ -z $to || $to =~ ^v[0-9A-Za-z._-]+$ ]] || { printf '%s\n' '--from and --to must be tags such as v0.1.0.' >&2; exit 2; }
+for dependency in bwrap git gpg; do
+  command -v "$dependency" >/dev/null || { printf 'dev-update needs %s.\n' "$dependency" >&2; exit 1; }
+done
+
+args=(--unshare-all --die-with-parent --new-session --cap-drop ALL --clearenv
+  --ro-bind /usr /usr --ro-bind /etc /etc --ro-bind /sys /sys
+  --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64
+  --proc /proc --dev /dev --tmpfs /tmp --perms 0700 --tmpfs "$sandbox_runtime")
+env_args=(--setenv PATH /usr/bin --setenv LANG C.UTF-8 --setenv HOME "$sandbox_home" --setenv XDG_RUNTIME_DIR "$sandbox_runtime"
+  --setenv DEV_UPDATE_FROM "$from" --setenv DEV_UPDATE_TO "$to" --setenv DEV_UPDATE_STEPS "$steps"
+  --setenv DEV_UPDATE_FINGERPRINT "$fingerprint")
+
+if [[ $repo == /* || $repo == ./* || $repo == ../* ]]; then
+  repo_path=$(realpath -e -- "$repo") || { printf 'Repository path %s does not exist.\n' "$repo" >&2; exit 2; }
+  args+=(--ro-bind "$repo_path" /repo)
+  env_args+=(--setenv DEV_UPDATE_REPO /repo --setenv UI_SHELL_UPDATE_TEST 1 --setenv UI_SHELL_UPDATE_REPO /repo)
+  repo_label="$repo_path (local, bound read-only)"
+else
+  (( net )) || { printf '%s\n' '--no-net needs a local --repo.' >&2; exit 2; }
+  env_args+=(--setenv DEV_UPDATE_REPO "$repo")
+  repo_label=$repo
+fi
+if (( net )); then
+  args+=(--share-net)
+  # /etc/resolv.conf is usually a link into /run; the sandbox needs the directory it points to.
+  resolv=$(realpath -e -- /etc/resolv.conf 2>/dev/null || true)
+  [[ -z $resolv || $resolv == /etc/* ]] || args+=(--ro-bind "$(dirname -- "$resolv")" "$(dirname -- "$resolv")")
+fi
+
+if [[ -n $home ]]; then
+  mkdir -p -- "$home" && chmod 700 -- "$home"
+  home=$(realpath -e -- "$home")
+  cleanup=0
+else
+  mkdir -p -- "$root/.build/dev-update"
+  home=$(mktemp -d -p "$root/.build/dev-update" run.XXXXXX)
+  cleanup=$(( ! keep ))
+fi
+# Releases are read-only by design; give the owner write access back before deleting the run.
+remove_home() { chmod -R u+w -- "${home:?}" && rm -r -- "${home:?}"; }
+(( ! cleanup )) || trap remove_home EXIT
+
+printf 'repository   %s\nfrom / to    %s / %s\nsteps        %s\nfingerprint  %s\nsandbox home %s (host: %s)\n' \
+  "$repo_label" "$from" "${to:-newest}" "$steps" "$fingerprint" "$sandbox_home" "$home"
+rc=0
+# The root is made read-only last: a writable root lets Hyprland bind "/.socket2.sock" in verify mode and crash.
+bwrap "${args[@]}" --bind "$home" "$sandbox_home" --ro-bind "$script" /dev-update --remount-ro / "${env_args[@]}" \
+  bash /dev-update --inside || rc=$?
+(( cleanup )) || printf 'Sandbox home kept: %s\n' "$home"
+exit "$rc"
