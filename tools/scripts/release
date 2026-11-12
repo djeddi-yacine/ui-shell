@@ -63,10 +63,13 @@ latest=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n 1)
 [[ $latest == "$version" ]] || die "VERSION is $version but the newest local tag is v${latest:-none}."
 git rev-parse -q --verify "refs/tags/v$version^{commit}" >/dev/null || die "v$version is not a tag of this repository."
 previous=v$version
-(( $(git rev-list --count "$previous..HEAD") > 0 )) || die "nothing to release: HEAD is $previous."
+since=$(git rev-list --count "$previous..HEAD")
 if (( push )); then
   git fetch --quiet "$remote" || die "cannot fetch $remote."
-  git merge-base --is-ancestor "$remote/$branch" HEAD || die "$remote/$branch has commits that this branch lacks; merge first."
+  # An empty remote branch has nothing to be behind; only an existing one must be an ancestor.
+  if git rev-parse -q --verify "refs/remotes/$remote/$branch" >/dev/null; then
+    git merge-base --is-ancestor "$remote/$branch" HEAD || die "$remote/$branch has commits that this branch lacks; merge first."
+  fi
 fi
 case $bump in
   patch) next=$major.$minor.$((patch + 1)) ;;
@@ -98,7 +101,8 @@ fi
 [[ $primary_fpr == "$fingerprint" ]] || die "the signing key belongs to $primary_fpr but $signer_key pins $fingerprint; set RELEASE_GNUPGHOME / RELEASE_SIGNING_KEY to the right key."
 
 say "plan: $previous -> $tag ($bump)"
-git log --oneline "$previous..HEAD" | sed 's/^/  /'
+if (( since > 0 )); then git log --oneline "$previous..HEAD" | sed 's/^/  /'
+else printf '  no commits since %s: the release commit only bumps VERSION\n' "$previous"; fi
 printf '  gate: %s, push: %s, public proof: %s, signer %s\n' "$( ((gate)) && echo yes || echo no)" "$( ((push)) && echo yes || echo no)" "$( ((public && push)) && echo yes || echo no)" "$fingerprint"
 printf '  signing key %s in %s\n    %s\n' "$signing_fpr" "$gnupg_home" \
   "$(GNUPGHOME=$gnupg_home gpg --with-colons --list-keys "$primary_fpr" | awk -F: '$1 == "uid" { print $10; exit }')"

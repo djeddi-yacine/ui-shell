@@ -36,7 +36,7 @@ for file in tools/scripts/release tools/scripts/dev-update tools/development.mk 
   cp -- "$root/$file" "$repo/$file"
 done
 git -C "$repo" add -A
-git -C "$repo" commit -q -m 'Tooling under test'
+git -C "$repo" commit -q --allow-empty -m 'Tooling under test'
 GNUPGHOME=$scratch/gpg git -C "$repo" tag -s -u "$signer_fp!" -m v0.1.0 v0.1.0
 printf 'change\n' >"$repo/change.txt"
 git -C "$repo" add -f change.txt
@@ -69,8 +69,8 @@ release patch --no-gate --no-public --yes || { cat -- "$scratch/out" >&2; fail '
 GNUPGHOME=$scratch/gpg git -C "$scratch/remote.git" verify-tag v0.1.1 >/dev/null 2>&1 || fail 'the pushed tag does not verify'
 [[ $(git -C "$scratch/remote.git" log -1 --format=%s v0.1.1) == 'Release v0.1.1' ]] || fail 'the tag is not on the release commit'
 rg -q 'proof 2: v0.1.0 updates to v0.1.1' "$scratch/out" && rg -q 'rollback exit 0' "$scratch/out" || fail 'the upgrade and rollback proof did not run'
-! release patch --no-gate --yes || fail 'a release with nothing new was made'
-rg -q 'nothing to release' "$scratch/out" || fail 'the nothing-to-release refusal has no reason'
+release patch --plan || fail "--plan with nothing new failed: $(<"$scratch/out")"
+rg -q 'only bumps VERSION' "$scratch/out" || fail 'a release with no new commits is not announced'
 
 # No default key home, and a key that is not the pinned one is refused before anything changes.
 git -C "$repo" commit -q --allow-empty -m 'Another change'
