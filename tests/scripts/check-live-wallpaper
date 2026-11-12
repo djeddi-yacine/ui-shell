@@ -11,6 +11,7 @@ output=${1:?exact nested output required}
 runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
 registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
 manifest=$(jq -er '.configFile' "$runtime")
+settings_file=$(jq -er '.settingsFile' "$runtime")
 resolver=$(jq -er '.commands.readShellConfig' "$runtime")
 reader=$(jq -er '.commands.readIni' "$runtime")
 prepare_runtime=$(jq -er '.commands.prepareRuntime' "$runtime")
@@ -37,7 +38,7 @@ trap diagnose_exit EXIT
 
 hyprctl hyprpaper listactive >/artifacts/wallpaper-before.log
 before_registry=$(sha256sum "$registry")
-before_manifest=$(sha256sum -- "$manifest")
+before_manifest=$(sha256sum -- "$settings_file")
 if rg -Fqx -- "$output: $native_wallpaper" /artifacts/wallpaper-before.log; then
   printf '%s\n' 'Live test requires a wallpaper different from the initial assignment.' >&2; exit 1;
 fi
@@ -49,7 +50,7 @@ profile_sha=${profile_sha%% *}
 
 qs --path "$quickshell_directory" kill --any-display
 UI_SHELL_TEST_OUTPUT="$output" UI_SHELL_TEST_WALLPAPER="$wallpaper" \
-UI_SHELL_TEST_REGISTRY_SHA="$registry_sha" UI_SHELL_TEST_MANIFEST="$manifest" \
+UI_SHELL_TEST_REGISTRY_SHA="$registry_sha" UI_SHELL_TEST_MANIFEST="$settings_file" \
 UI_SHELL_TEST_MANIFEST_SHA="$manifest_sha" UI_SHELL_TEST_INITIAL_NATIVE="$initial_native" \
 UI_SHELL_TEST_PROFILE="$baseline_profile" UI_SHELL_TEST_PROFILE_SHA="$profile_sha" \
   timeout --kill-after=2 "$test_apply_seconds" qs --path "$quickshell_directory/picker-apply-test.qml" >/artifacts/picker-apply.log 2>&1
@@ -57,7 +58,7 @@ rg -F 'PICKER_APPLY_PASS' /artifacts/picker-apply.log
 [[ -s /artifacts/frame-picker-info.png && -s /artifacts/frame-picker-settings.png && -s /artifacts/frame-picker-error.png ]]
 hyprctl hyprpaper listactive >/artifacts/wallpaper-after.log
 rg -Fx -- "$output: $native_wallpaper" /artifacts/wallpaper-after.log
-"$resolver" "$manifest" "$reader" >"$scratch/resolved.json"
+"$resolver" "$manifest" "$settings_file" "$reader" >"$scratch/resolved.json"
 runtime=$("$prepare_runtime" "$scratch/resolved.json")
 export UI_SHELL_RUNTIME=$runtime
 export UI_SHELL_RUNTIME_LUA

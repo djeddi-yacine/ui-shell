@@ -41,17 +41,22 @@ display_socket="${XDG_RUNTIME_DIR:?Parent XDG_RUNTIME_DIR required}/${WAYLAND_DI
 [[ $WAYLAND_DISPLAY != /* ]] || display_socket=$WAYLAND_DISPLAY
 [[ -S $display_socket ]] || { printf 'Parent Wayland socket is missing: %s\n' "$display_socket" >&2; exit 1; }
 
+# Descriptor of the persistent-state lock; children close it so a stray one cannot keep the lock.
+# 9 is unused (closing it is harmless) in ephemeral mode.
+state_lock_fd=9
 if [[ $state_mode == persistent ]]; then
   state_dir=$(bash "$project_root/tests/scripts/test-state" path "${3:-$test_state_directory}")
   command -v flock >/dev/null || { printf '%s\n' 'flock is required for persistent test state.' >&2; exit 1; }
+  # shellcheck disable=SC2174 # the single leaf is created with the mode; its parents already exist and are private
   mkdir -p -m 0700 -- "${state_dir%/*}"
   exec {state_lock_fd}>>"$state_dir.lock"
   flock -n "$state_lock_fd" || { printf '%s\n' 'Persistent test state is already in use.' >&2; exit 1; }
   if [[ ! -e $state_dir ]]; then
     state_init=$(mktemp -d "${state_dir%/*}/.init-XXXXXX")
+    # shellcheck disable=SC2174 # the single leaf is created with the mode; its parents already exist and are private
     if ! { mkdir -m 0700 -- "$state_init/home" &&
            mkdir -p -m 0700 -- "$state_init/home/.config/ui-shell" &&
-           cp -- "$project_root/tools/config.ini" "$state_init/home/.config/ui-shell/config.ini" &&
+           cp -- "$project_root/tools/settings.ini" "$state_init/home/.config/ui-shell/settings.ini" &&
            bash "$project_root/tools/scripts/stage-defaults" "$project_root" "$state_init/home/.config/ui-shell" &&
            printf 'ui-shell-test-state:%s\n' "$test_state_schema" >"$state_init/.owner" &&
            mv -- "$state_init" "$state_dir"; }; then
@@ -186,7 +191,7 @@ if [[ $mode == run || $mode == apps || $mode == app-launch || $mode == app-close
   app_slice="app-uishelltest${test_session_id}.slice"
   systemctl --user show-environment | sort | sha256sum >"$test_run_dir/manager-before.log"
   xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$test_run_dir/$test_manager_socket" \
-    --filter --talk=org.freedesktop.systemd1 >"$test_run_dir/manager-proxy.log" 2>&1 &
+    --filter --talk=org.freedesktop.systemd1 >"$test_run_dir/manager-proxy.log" 2>&1 {state_lock_fd}>&- &
   manager_proxy_pid=$!
   deadline=$((SECONDS + test_app2unit_seconds))
   while [[ ! -S $test_run_dir/$test_manager_socket ]] && (( SECONDS < deadline )); do
@@ -228,16 +233,20 @@ fi
 if [[ $state_mode == persistent ]]; then
   args+=(--bind "$state_dir/home" "$test_home")
   preferences=$state_dir/home/.config/ui-shell
-  for private_part in .config .config/ui-shell .config/ui-shell/components .config/ui-shell/default .config/ui-shell/themes .config/ui-shell/profiles .config/ui-shell/config.ini; do
+  for private_part in .config .config/ui-shell .config/ui-shell/components .config/ui-shell/default .config/ui-shell/themes .config/ui-shell/profiles .config/ui-shell/settings.ini; do
     [[ ! -L $state_dir/home/$private_part ]] || { printf 'Redirected private test preferences: %s\n' "$private_part" >&2; exit 1; }
   done
   for runtime_part in "${test_ephemeral_config_parts[@]}"; do
     [[ ! -L $preferences/$runtime_part ]] || { printf 'Redirected disposable code directory: %s\n' "$runtime_part" >&2; exit 1; }
   done
+  # shellcheck disable=SC2174 # the single leaf is created with the mode; its parents already exist and are private
   mkdir -p -m 0700 -- "$preferences/components" "$preferences/themes" "$preferences/profiles"
-  [[ -e $preferences/config.ini ]] || cp -- "$project_root/tools/config.ini" "$preferences/config.ini"
-  [[ -f $preferences/config.ini ]] || { printf '%s\n' 'Private test manifest must be a regular file.' >&2; exit 1; }
-  if ! manifest_data=$("$project_root/scripts/read-ini" "$preferences/config.ini"); then
+  [[ -e $preferences/settings.ini ]] || cp -- "$project_root/tools/settings.ini" "$preferences/settings.ini"
+  [[ -f $preferences/settings.ini && ! -L $preferences/settings.ini ]] || { printf '%s\n' 'Private test settings must be a regular file.' >&2; exit 1; }
+  # Role paths come from the release manifest's user_paths; the profile choice from the user's settings.
+  if ! manifest_data=$(jq -n --argjson manifest "$("$project_root/scripts/read-ini" "$project_root/tools/manifest.ini")" \
+      --argjson settings "$("$project_root/scripts/read-ini" "$preferences/settings.ini")" \
+      '{paths:$manifest.user_paths, theme:$settings.theme}'); then
     printf '%s\n' 'Persistent test profile bundle is stale or invalid. Update the saved profile explicitly before running.' >&2
     exit 1
   fi
@@ -355,20 +364,21 @@ args+=(--setenv PATH "$test_home/.local/bin:/usr/bin:/bin" --setenv HOME "$test_
   --setenv GSETTINGS_BACKEND "$test_gsettings_backend"
   --setenv QT_IM_MODULE "$test_qt_input_method"
   --setenv QS_ICON_THEME "$test_icon_theme"
+  --setenv HYPRCURSOR_SIZE 24 --setenv XCURSOR_SIZE 24
   --setenv LANG C.UTF-8 --chdir "$test_project")
 [[ $test_qt_portals != 0 ]] || args+=(--setenv QT_NO_XDG_DESKTOP_PORTAL 1)
-# UI_SHELL_HYPR_LOG sets what Hyprland and Aquamarine print to the terminal: off (errors only), debug (the default) or
+# UI_SHELL_HYPR_LOG sets what Hyprland and Aquamarine print to the terminal: off (errors only), warn (warnings and errors), debug (the default) or
 # trace (everything; also turns on their trace logging). launcher.log and hyprland.log always keep the full output.
 hypr_log=${UI_SHELL_HYPR_LOG-debug}
-[[ $hypr_log == off || $hypr_log == debug || $hypr_log == trace ]] || { printf 'UI_SHELL_HYPR_LOG must be off, debug or trace, got "%s".\n' "$hypr_log" >&2; exit 1; }
+[[ $hypr_log == off || $hypr_log == warn || $hypr_log == debug || $hypr_log == trace ]] || { printf 'UI_SHELL_HYPR_LOG must be off, warn, debug or trace, got "%s".\n' "$hypr_log" >&2; exit 1; }
 [[ $hypr_log != trace ]] || args+=(--setenv HYPRLAND_TRACE 1 --setenv AQ_TRACE 1)
 if [[ $mode == launcher || $mode == apps ]]; then
   args+=(--setenv UI_SHELL_OPEN_PICKER 0 --setenv UI_SHELL_OPEN_APPS 1)
 fi
 
-exec {test_log_fd}> >(tee "$test_run_dir/launcher.log" | "$project_root/tests/scripts/filter-hypr-log" "$hypr_log")
+exec {test_log_fd}> >(exec {state_lock_fd}>&-; tee "$test_run_dir/launcher.log" | "$project_root/tests/scripts/filter-hypr-log" "$hypr_log")
 logger_pid=$!
-bwrap "${args[@]}" -- /usr/bin/bash /source/tests/scripts/nested-session "$mode" >&"$test_log_fd" 2>&1 &
+bwrap "${args[@]}" -- /usr/bin/bash /source/tests/scripts/nested-session "$mode" >&"$test_log_fd" 2>&1 {state_lock_fd}>&- &
 sandbox_pid=$!
 exec {test_log_fd}>&-
 test_log_fd=
@@ -382,7 +392,7 @@ if [[ $mode == run || $mode == apps || $mode == app-close || $mode == phantomat 
   saw_window=false
   window_pid=
   window_sized=false
-  nested_mode=$(sed -n 's/.*mode = "\([0-9][0-9]*x[0-9][0-9]*\)@.*/\1/p' "$project_root/hypr/user/nested.lua" | head -n 1)
+  nested_mode=$(sed -n 's/.*mode = "\([0-9][0-9]*x[0-9][0-9]*\)@.*/\1/p' "$project_root/hypr/default/nested.lua" | head -n 1)
   [[ $nested_mode =~ ^[0-9]+x[0-9]+$ ]] || nested_mode=1280x720
   while kill -0 "$sandbox_pid" 2>/dev/null; do
     if [[ -n $close_check_pid ]] && ! kill -0 "$close_check_pid" 2>/dev/null; then

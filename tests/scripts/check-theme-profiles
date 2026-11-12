@@ -25,8 +25,10 @@ with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as tempor
         (home / name).mkdir()
     installed = home / "config" / "shell space ' $literal \\identity"
     installed.mkdir()
-    for name in ("scripts", "hypr"):
-        shutil.copytree(project / name, installed / name)
+    # /project/shell is the generated tree in the sandbox; the shipped QML is UI_SHELL_STAGE_SHELL.
+    for name, source in (("scripts", project / "scripts"), ("hypr", project / "hypr"), ("shell", pathlib.Path(os.environ["UI_SHELL_STAGE_SHELL"]))):
+        shutil.copytree(source, installed / name)
+    (installed / "RELEASE").write_text("dev\n")
     subprocess.run(
         [str(project / "tools" / "scripts" / "stage-defaults"), str(project), str(installed)],
         env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -35,8 +37,10 @@ with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as tempor
     (installed / "scripts").rename(installed / "helpers")
     (installed / "helpers/read-theme-state").rename(installed / "helpers/state-reader")
     (installed / "helpers/render-wallpaper-selection").rename(installed / "helpers/selection-renderer")
-    manifest = installed / "config.ini"
-    manifest.write_text((project / "tools" / "config.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/").replace("helpers/read-theme-state", "helpers/state-reader").replace("helpers/render-wallpaper-selection", "helpers/selection-renderer"))
+    manifest = installed / "manifest.ini"
+    settings = installed / "settings.ini"
+    settings.write_text((project / "tools" / "settings.ini").read_text() + "\n[phantomat]\nlibrary = plugins/spatialoverview.so\n")
+    manifest.write_text((project / "tools" / "manifest.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/").replace("helpers/read-theme-state", "helpers/state-reader").replace("helpers/render-wallpaper-selection", "helpers/selection-renderer"))
     # Selected images are referenced, never copied by bundle saves.
     (installed / "wallpapers").symlink_to(project / "wallpapers", target_is_directory=True)
     def run(command, *args, ok=True):
@@ -73,10 +77,10 @@ with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as tempor
     fixture_json.write_text(json.dumps(fixture))
     (installed / "profiles/fixture").mkdir()
     run(helpers / "render-theme-profile", fixture_json, installed / "profiles/fixture/profile.ini")
-    manifest.write_text(manifest.read_text().replace(
+    settings.write_text(settings.read_text().replace(
         "profile = profiles/default/profile.ini", "profile = profiles/fixture/profile.ini"))
     resolved = scratch / "resolved.json"
-    resolved.write_text(run(helpers / "read-shell-config", manifest, helpers / "read-ini").stdout)
+    resolved.write_text(run(helpers / "read-shell-config", manifest, settings, helpers / "read-ini").stdout)
     runtime = json.loads(resolved.read_text())
     assert runtime["theme"]["id"] == "fixture" and runtime["paths"]["profiles"] == str(installed / "profiles")
     assert runtime["paths"]["profileCache"] == str(home / "cache/ui-shell/profiles")
@@ -113,9 +117,9 @@ with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as tempor
         assert set(palette["hyprland"]) == {"active_border", "inactive_border"}, label
         assert all(isinstance(value, str) and value for value in palette["hyprland"].values()), label
     def state(base=""):
-        # Persistence changes the manifest; refresh publishes its runtime projection.
+        # Persistence changes the settings; refresh publishes its runtime projection.
         fresh = scratch / "state-runtime.json"
-        fresh.write_text(run(helpers / "read-shell-config", manifest, helpers / "read-ini").stdout)
+        fresh.write_text(run(helpers / "read-shell-config", manifest, settings, helpers / "read-ini").stdout)
         if base:
             selected_base = json.loads(run(helpers / "read-theme-profile", base, installed,
                                            installed / "profiles", installed / "themes", helpers / "read-ini").stdout)
@@ -188,11 +192,12 @@ with tempfile.TemporaryDirectory(prefix="theme-profiles-", dir="/tmp") as tempor
     assert baseline["revision"] != previous_revision
     assert refresh == editor()
     # A non-default global output policy must use that actual wallpaper palette.
-    policy_path = installed / "hypr/user/monitors.lua"
-    policy = policy_path.read_text()
+    policy_path = installed / "lua/monitors.lua"
+    policy = (installed / "hypr/default/monitors.lua").read_text()
+    policy_path.parent.mkdir(parents=True, exist_ok=True)
     policy_path.write_text(policy.replace('kind = "default-wallpaper"', 'kind = "output-wallpaper"').replace('output = "",', 'output = "HDMI-A-2",', 1))
     assert state()["globalPalette"] == baseline["byOutput"]["HDMI-A-2"]
-    policy_path.write_text(policy)
+    policy_path.unlink()
     imported = installed / "themes/imported-demo/config.ini"
     imported.parent.mkdir(parents=True)
     imported.write_bytes(default_theme.read_bytes())
@@ -293,7 +298,7 @@ end
 package.preload.profile = function()
     return { phantomat = { enabled = true, mode = "canvas" } }
 end
-package.preload["user.canvas"] = function() return { navigator = {} } end
+package.preload.userlua = function() return dofile(runtime.paths.hypr .. "/userlua.lua") end
 package.preload["binds.canvas"] = function() return true end
 package.preload["binds.phantomat"] = function() return true end
 local native_config, output_colors
@@ -352,12 +357,12 @@ dofile = original_dofile
     assert rebuilt["root"] == bundle["root"] and palette_output.is_file()
     assert subprocess.run(["sha256sum", "--check", "--status", str(checksum_file)], cwd=bundle["root"]).returncode == 0
     assert imported.read_bytes() == imported_before
-    before = manifest.read_bytes()
+    before = settings.read_bytes()
     save("named", baseline["revision"], ok=False)
     save("default", named["revision"], ok=False)
     save("bad/slug", named["revision"], ok=False)
     save("named", named["revision"], values=["invalid"] * 13, ok=False)
-    assert manifest.read_bytes() == before
+    assert settings.read_bytes() == before
     # Invalid recipe and preflight renderer failure leave selected config intact.
     bad = installed / "profiles/bad"
     bad.mkdir()
@@ -373,15 +378,15 @@ dofile = original_dofile
     run(helpers / "select-theme-profile", "activate", bad_ini, named["revision"], "", ok=False)
     bad_ini.write_text(pathlib.Path(named_path).read_text().replace("bright_cyan = ", "bright_cyan = ../", 1))
     run(helpers / "select-theme-profile", "activate", bad_ini, named["revision"], "", ok=False)
-    assert manifest.read_bytes() == before
+    assert settings.read_bytes() == before
     run(helpers / "select-theme-profile", "activate", default_theme, named["revision"], "", ok=False)
-    assert manifest.read_bytes() == before
+    assert settings.read_bytes() == before
     renderer = helpers / "render-profile-quickshell"
     renderer_bytes = renderer.read_bytes()
     renderer.write_text("#!/usr/bin/env bash\nexit 1\n")
     run(helpers / "select-theme-profile", "activate", installed / "profiles/default/profile.ini", named["revision"], "", ok=False)
     renderer.write_bytes(renderer_bytes)
-    assert manifest.read_bytes() == before
+    assert settings.read_bytes() == before
     # Saving the active ID atomically replaces its single durable recipe.
     named_bytes = pathlib.Path(named_path).read_bytes()
     saved_output = snapshot_result(save("named", named["revision"], "WAYLAND-1", values=["#fedcba"] * 13).stdout)
@@ -445,7 +450,7 @@ dofile = original_dofile
     assert persisted_outputs["PERSIST-NEXT"]["paletteKey"] == next_item["paletteKey"]
     assert pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes() == native_runtime_before
     assert active_palette_file().read_bytes() == native_palette_before
-    # A manifest-only profile switch must also become the next selection's source.
+    # A settings-only profile switch must also become the next selection's source.
     before_profile_persist_runtime = pathlib.Path(env["UI_SHELL_RUNTIME"]).read_bytes()
     before_profile_persist_native = active_palette_file().read_bytes()
     run(helpers / "select-theme-profile", "persist", installed / "profiles/default/profile.ini", restored["revision"], "")
@@ -464,10 +469,10 @@ dofile = original_dofile
     assert active_palette_file().read_bytes() == native_palette_before
     preparation.write_bytes(preparation_bytes)
     ctl.write_bytes(ctl_bytes)
-    unchanged_manifest = manifest.read_bytes()
+    unchanged_manifest = settings.read_bytes()
     run(helpers / "select-theme-profile", "unknown", named_path, restored["revision"], "", ok=False)
     run(helpers / "select-theme-profile", "activate", named_path, "0" * 64, "", ok=False)
-    assert manifest.read_bytes() == unchanged_manifest
+    assert settings.read_bytes() == unchanged_manifest
     partial = run(helpers / "select-theme-profile", "activate", installed / "profiles/default/profile.ini", restored["revision"], "", ok=False)
     assert partial.returncode == 4 and not partial.stdout
     assert "Profile selected and valid; runtime/native apply incomplete" in partial.stderr
@@ -476,19 +481,19 @@ dofile = original_dofile
     successful_refresh = run(helpers / "refresh-theme")
     assert len(successful_refresh.stdout.splitlines()) == 2
     assert "fixture reload" in successful_refresh.stderr and "fixture apply failure" not in successful_refresh.stderr
-    refresh_manifest = manifest.read_bytes()
+    refresh_manifest = settings.read_bytes()
     ctl.write_text("#!/usr/bin/env bash\nprintf 'fixture reload failure\\n'\nexit 1\n")
     failed_refresh = run(helpers / "refresh-theme", ok=False)
     assert failed_refresh.returncode == 4 and not failed_refresh.stdout
     assert "Wallpaper applied/saved, but colors refresh failed" in failed_refresh.stderr
-    assert manifest.read_bytes() == refresh_manifest
+    assert settings.read_bytes() == refresh_manifest
     bootstrap_renderer = helpers / "render-runtime-config"
     bootstrap_renderer_bytes = bootstrap_renderer.read_bytes()
     bootstrap_renderer.write_text("#!/usr/bin/env bash\nexit 1\n")
     failed_refresh = run(helpers / "refresh-theme", ok=False)
     assert failed_refresh.returncode == 4 and not failed_refresh.stdout
     assert "Wallpaper applied/saved, but colors refresh failed" in failed_refresh.stderr
-    assert manifest.read_bytes() == refresh_manifest
+    assert settings.read_bytes() == refresh_manifest
     bootstrap_renderer.write_bytes(bootstrap_renderer_bytes)
     env["PATH"] = old_path
     env.pop("HYPRLAND_INSTANCE_SIGNATURE")
@@ -513,7 +518,7 @@ dofile = original_dofile
         return data
     def protected_truth():
         current = active_runtime()
-        paths = {manifest, pathlib.Path(env["UI_SHELL_RUNTIME"]), pathlib.Path(env["UI_SHELL_RUNTIME_LUA"])}
+        paths = {settings, pathlib.Path(env["UI_SHELL_RUNTIME"]), pathlib.Path(env["UI_SHELL_RUNTIME_LUA"])}
         paths.update(pathlib.Path(path) for path in current["bootstrap"].values())
         bundle_root = pathlib.Path(current["bundle"]["root"])
         paths.update(path for path in bundle_root.rglob("*") if path.is_file())

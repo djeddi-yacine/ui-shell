@@ -35,10 +35,14 @@
 !/scripts/**
 !/shell/
 !/shell/**
+!/migrations/
+!/migrations/**
 !/tests/
 !/tests/**
 !/tools/
 !/tools/**
+!/update/
+!/update/**
 !/wallpapers/
 !/wallpapers/manifest.txt
 # Images are downloaded by tools/scripts/fetch-wallpapers, never tracked.

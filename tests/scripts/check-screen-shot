@@ -58,7 +58,7 @@ rm -f "$scratch/shots/"*
 result=$("$script" capture monitor:M --copy yes --save no)
 jq -e '.file == null and .copied == true' <<<"$result" >/dev/null || fail "copy only: $result"; ok
 [[ -z $(ls "$scratch/shots") ]] || fail 'a copy-only screenshot left a file'; ok
-[[ -z $(ls "$scratch" | grep '^ui-shell-shot\.') ]] || fail 'the temporary file was not removed'; ok
+! compgen -G "$scratch/ui-shell-shot.*" >/dev/null || fail 'the temporary file was not removed'; ok
 : >"$FAKE_LOG"
 result=$("$script" capture monitor:M --copy no --save yes)
 jq -e '.copied == false and (.file != null)' <<<"$result" >/dev/null || fail "save only: $result"; ok

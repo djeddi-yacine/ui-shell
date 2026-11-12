@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Copy a shipped profile (and the shipped theme it names) into the user stores when the user has no
+# entry of that id yet, so the editor can save over it. A user entry always wins and is never touched.
+#   ensure-user-profile RUNTIME_JSON PROFILE_ID_OR_PATH   (a path outside the user profile store is ignored)
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: ensure-user-profile RUNTIME_JSON PROFILE_ID_OR_PATH' >&2; exit 2; }
+runtime=$1 id=$2
+profiles=$(jq -er '.paths.profiles' "$runtime") themes=$(jq -er '.paths.themes' "$runtime")
+if [[ $id == /* ]]; then
+  [[ $id == "$profiles"/*/profile.ini ]] || exit 0
+  id=${id#"$profiles/"} id=${id%/profile.ini}
+fi
+[[ $id =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || exit 0
+shipped_profiles=$(jq -er '.paths.shippedProfiles // empty' "$runtime") shipped_themes=$(jq -er '.paths.shippedThemes // empty' "$runtime")
+# copy_entry SHIPPED_STORE USER_STORE ID: copy a directory by a temporary sibling and a rename.
+copy_entry() {
+  local source=$1/$3 destination=$2/$3 stage
+  [[ -d $source && ! -e $destination && ! -L $destination ]] || return 0
+  mkdir -p -- "$2"
+  stage=$(mktemp -d "$2/.$3.XXXXXX")
+  cp -a -- "$source/." "$stage/"
+  chmod -R u+w -- "$stage"
+  mv -T -- "$stage" "$destination"
+}
+[[ -n $shipped_profiles && -f $shipped_profiles/$id/profile.ini && ! -e $profiles/$id ]] || exit 0
+copy_entry "$shipped_profiles" "$profiles" "$id"
+# Every theme the profile names: its definition and each [definition_overrides] entry.
+while IFS= read -r theme; do
+  [[ -z $theme || -z $shipped_themes ]] || copy_entry "$shipped_themes" "$themes" "$theme"
+done < <(grep -Eo 'themes/[a-z0-9]+(-[a-z0-9]+)*/config\.ini' "$profiles/$id/profile.ini" | sed 's|^themes/||; s|/config\.ini$||' | sort -u)

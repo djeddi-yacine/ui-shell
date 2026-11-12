@@ -4,6 +4,6 @@ set -euo pipefail
 runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-"$(jq -er '.commands.readShellConfig' "$runtime")" "$(jq -er '.configFile' "$runtime")" "$(jq -er '.commands.readIni' "$runtime")" >"$work/runtime.json"
+"$(jq -er '.commands.readShellConfig' "$runtime")" "$(jq -er '.configFile' "$runtime")" "$(jq -er '.settingsFile' "$runtime")" "$(jq -er '.commands.readIni' "$runtime")" >"$work/runtime.json"
 exec_command=$(jq -er '.commands.prepareRuntime' "$work/runtime.json")
 "$exec_command" "$work/runtime.json"

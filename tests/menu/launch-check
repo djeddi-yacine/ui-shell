@@ -7,7 +7,7 @@ set -u
 spool=$XDG_RUNTIME_DIR/ui-shell/menu
 fail=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (expected '$2', got '$3')"; fail=1; fi; }
-wait_for() { local i; for i in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+wait_for() { local _; for _ in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
 instances=$(hyprctl -j instances)
 export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
 HYPRLAND_INSTANCE_SIGNATURE=$(jq -er 'if length == 1 then .[0].instance else empty end' <<<"$instances")

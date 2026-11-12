@@ -6,11 +6,12 @@ output_name=$1 base_profile=$2 folder_id=$3 wallpaper_name=$4 fit_mode=$5 color_
 [[ $color_request == policy || $color_request == wallpaper ]] || { printf '%s\n' 'Color request must be policy or wallpaper.' >&2; exit 2; }
 resolver=$(jq -er '.commands.readShellConfig' "$runtime")
 reader=$(jq -er '.commands.readIni' "$runtime")
-manifest=$(jq -er '.configFile' "$runtime")
+release_manifest=$(jq -er '.configFile' "$runtime")
+settings=$(jq -er '.settingsFile' "$runtime")
 work=$(mktemp -d)
 temporary=''
 trap 'rm -rf -- "$work"; if [[ -n $temporary ]]; then rm -f -- "$temporary"; fi' EXIT
-"$resolver" "$manifest" "$reader" >"$work/runtime.json"
+"$resolver" "$release_manifest" "$settings" "$reader" >"$work/runtime.json"
 state_reader=$(jq -er '.commands.readThemeState' "$work/runtime.json")
 catalog=$(jq -er '.commands.themeCatalog' "$work/runtime.json")
 renderer=$(jq -er '.commands.renderThemeEditor' "$work/runtime.json")
@@ -24,6 +25,7 @@ themes=$(jq -er '.paths.themes' "$work/runtime.json")
 profile_reader=$(jq -er '.commands.readThemeProfile' "$work/runtime.json")
 [[ -n $base_profile ]] || base_profile=$(jq -er '.theme.profile' "$work/runtime.json")
 [[ $base_profile == /* ]] || base_profile="$root/$base_profile"
+"$(dirname -- "$0")/ensure-user-profile" "$work/runtime.json" "$base_profile"
 [[ $(realpath -e -- "$base_profile") == "$(realpath -e -- "$profiles")/"* ]] || { printf '%s\n' 'Draft base must be in the profiles directory.' >&2; exit 1; }
 "$profile_reader" "$base_profile" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
 jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$work/runtime.json" >"$work/base.json"

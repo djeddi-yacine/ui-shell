@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Update logic of a verified clone, called by update/activator with the lock held, once per phase.
+# No arguments. The activator sets UI_SHELL_UPDATE_{MODE,TAG,CLONE,DATA,CONFIG,STATE,CACHE}.
+#   build  step 5: build releases/<tag>.tmp from the clone, then rename it to releases/<tag>.
+#   check  step 6 (release not active): rehearse it against a scratch copy of the user data in
+#          cache/.check-<tag>, removed on exit; step 9 (current names it): read-only checks.
+#   migrate  step 7: seed the baseline settings.ini on a clean install then run the pending migrations.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib"
+ui_load_environment
+releases=$UI_SHELL_UPDATE_DATA/releases
+# The development layout a first install may cross from (read only).
+old_layout=${UI_SHELL_UPDATE_CONFIG%/*}/ui-shell
+# Highest shape the previously active release reads; empty on a clean install or when it is the target.
+previous_max() {
+  local active
+  active=$(ui_link_tag "$UI_SHELL_UPDATE_DATA/current")
+  if [[ -n $active && $active != "$UI_SHELL_UPDATE_TAG" ]]; then ui_manifest_reads "$releases/$active/manifest.ini" | cut -d' ' -f2; fi
+  return 0
+}
+case $UI_SHELL_UPDATE_MODE in
+  build)
+    mkdir -p -- "$releases"
+    [[ ! -e $releases/$UI_SHELL_UPDATE_TAG ]] || ui_die 1 "Release already exists: $UI_SHELL_UPDATE_TAG"
+    # A leftover partial build is removed first; the activator never leaves one that current uses.
+    if [[ -e $releases/$UI_SHELL_UPDATE_TAG.tmp ]]; then chmod -R u+w -- "$releases/$UI_SHELL_UPDATE_TAG.tmp"; rm -rf -- "${releases:?}/$UI_SHELL_UPDATE_TAG.tmp"; fi
+    "$here/build-release" "$UI_SHELL_UPDATE_CLONE" "$releases/$UI_SHELL_UPDATE_TAG.tmp" "$UI_SHELL_UPDATE_TAG"
+    mv -T -- "$releases/$UI_SHELL_UPDATE_TAG.tmp" "$releases/$UI_SHELL_UPDATE_TAG"
+    sync -- "$releases"
+    ;;
+  check)
+    release=$releases/$UI_SHELL_UPDATE_TAG
+    [[ -d $release ]] || ui_die 1 "No such release: $UI_SHELL_UPDATE_TAG"
+    if [[ $(readlink -- "$UI_SHELL_UPDATE_DATA/current" 2>/dev/null || true) == "releases/$UI_SHELL_UPDATE_TAG" ]]; then
+      # Step 9: the release is active; read-only checks against the real user data.
+      (cd -- "$release" && sha256sum --check --strict --quiet SHA256SUMS) >&2 || ui_die 1 'SHA256SUMS does not verify.'
+      "$release/scripts/read-shell-config" "$release/manifest.ini" "$UI_SHELL_UPDATE_CONFIG/settings.ini" "$release/scripts/read-ini" >/dev/null ||
+        ui_die 1 'read-shell-config rejects the active release.'
+    else
+      # Step 6: rehearse against a scratch copy of the user data (a clean install starts from the baseline).
+      scratch=$UI_SHELL_UPDATE_CACHE/.check-$UI_SHELL_UPDATE_TAG
+      [[ ! -e $scratch.state ]] || { chmod -R u+w -- "$scratch.state"; rm -rf -- "${scratch:?}.state"; }
+      [[ ! -e $scratch ]] || { chmod -R u+w -- "$scratch"; rm -rf -- "${scratch:?}"; }
+      mkdir -p -- "$scratch"
+      trap 'rm -rf -- "${scratch:?}"' EXIT
+      if [[ -d $UI_SHELL_UPDATE_CONFIG ]]; then cp -a --reflink=auto -- "$UI_SHELL_UPDATE_CONFIG/." "$scratch/"; fi
+      # The migrations run here first, against copies of the user data and of the markers.
+      scratch_state=$scratch.state
+      rm -rf -- "${scratch_state:?}"
+      mkdir -p -- "$scratch_state"
+      if [[ -d $UI_SHELL_UPDATE_STATE/migrations ]]; then cp -a -- "$UI_SHELL_UPDATE_STATE/migrations" "$scratch_state/migrations"; fi
+      trap 'rm -rf -- "${scratch:?}" "${scratch_state:?}"' EXIT
+      # A first install rehearses the crossing itself (it only reads the development directory).
+      [[ -f $scratch/settings.ini ]] || UI_SHELL_UPDATE_CRASH_AT= "$release/update/crossing/0001-from-dev-stage" "$release" "$scratch" "$scratch_state" "$old_layout" ||
+        ui_die 1 'The crossing fails in the rehearsal.'
+      UI_SHELL_UPDATE_CRASH_AT= "$here/run-migrations" "$release" "$scratch" "$scratch_state" "$(previous_max)" || ui_die 1 'A migration fails in the rehearsal.'
+      "$release/update/check-release" "$release" "$scratch"
+    fi
+    ;;
+  migrate)
+    release=$releases/$UI_SHELL_UPDATE_TAG
+    [[ -d $release ]] || ui_die 1 "No such release: $UI_SHELL_UPDATE_TAG"
+    # A clean install writes the shipped baseline once, then the pending migrations run in timestamp order.
+    mkdir -p -- "$UI_SHELL_UPDATE_CONFIG"
+    [[ -f $UI_SHELL_UPDATE_CONFIG/settings.ini ]] ||
+      "$release/update/crossing/0001-from-dev-stage" "$release" "$UI_SHELL_UPDATE_CONFIG" "$UI_SHELL_UPDATE_STATE" "$old_layout" ||
+      ui_die 1 'The crossing failed.'
+    "$here/run-migrations" "$release" "$UI_SHELL_UPDATE_CONFIG" "$UI_SHELL_UPDATE_STATE" "$(previous_max)" "$UI_SHELL_UPDATE_STATE/update/pending"
+    ;;
+esac

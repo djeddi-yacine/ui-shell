@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# update/activator, install-activator and rollback against the signed fixture repository (see update-fixture).
+# shellcheck disable=SC2034 # read by the sourced fixture
+check_name=Activator
+source "$(dirname -- "${BASH_SOURCE[0]}")/update-fixture"
+
+# ---- install-activator ----
+installer=$work/update/install-activator
+[[ $(echo wrong | UI_SHELL_SIGNER_KEY= bash "$installer" >/dev/null 2>&1; echo $?) == 3 ]] || fail 'a wrong typed fingerprint was accepted'
+[[ ! -e $bin && ! -e $state/signer.asc ]] || fail 'a refused install wrote files'
+# a pre-release ranks below its release
+[[ $(printf "v1.2.0\nv1.2.0-rc1\nv1.10.0\nv1.9.0\n" | bash -c 'source "$1/lib"; ui_version_sort' _ "$work/update" | tr "\n" " ") == "v1.2.0-rc1 v1.2.0 v1.9.0 v1.10.0 " ]] || fail "version order wrong"
+fingerprint=$key_fp
+grouped=$(bash -c 'source "$1/lib"; ui_key_format "$2"' _ "$work/update" "$fingerprint")
+# the README shows the fingerprint in groups; case and spaces do not matter
+printf '%s\n' "${grouped,,}" | bash "$installer" >/dev/null 2>"$scratch/err" || fail "install failed: $(<"$scratch/err")"
+[[ -x $bin && $(stat -c %a "$state/signer.asc") == 600 ]] || fail 'the activator or the pinned key has the wrong mode'
+! rg -qF 'source "$here/lib" # inline-lib' "$bin" || fail 'the installed activator still sources lib from disk'
+[[ ! -e $HOME/.gnupg ]] || fail 'the installer touched the default GnuPG home'
+before=$(tree_hash "$state")
+[[ $(printf '%s\n' "$fingerprint" | UI_SHELL_SIGNER_KEY=$scratch/other.asc bash "$installer" >/dev/null 2>&1; echo $?) == 3 ]] || fail 'a different key replaced the pinned one'
+[[ $(tree_hash "$state") == "$before" ]] || fail 'a refused different key changed the state'
+bash "$installer" </dev/null >/dev/null 2>&1 || fail 'a repeated install of the same key needed a prompt or failed'
+[[ $(tree_hash "$state") == "$before" ]] || fail 'a repeated install changed the pinned key'
+[[ $(bash "$installer" --bogus >/dev/null 2>&1; echo $?) == 2 ]] || fail 'an unknown option was not a usage error'
+
+# same primary, new signing subkey: the pin is refreshed without a prompt
+gpg_in --quick-add-key "$key_fp" ed25519 sign 2y
+gpg_in --armor --export "$key_fp" >"$scratch/refresh.asc"
+UI_SHELL_SIGNER_KEY=$scratch/refresh.asc bash "$installer" </dev/null >/dev/null 2>&1 || fail 'a refresh of the same primary failed'
+[[ $(gpg --homedir "$scratch/gpg" --with-colons --show-keys "$state/signer.asc" 2>/dev/null | rg -c '^sub:') == 2 ]] || fail 'the refresh did not add the new subkey'
+[[ $(stat -c %a "$state/signer.asc") == 600 ]] || fail 'the refreshed pin has the wrong mode'
+
+# a different primary needs --repin and a typed fingerprint
+other_grouped=$(bash -c 'source "$1/lib"; ui_key_format "$2"' _ "$work/update" "$other_fp")
+before=$(tree_hash "$state")
+[[ $(echo "$other_grouped" | UI_SHELL_SIGNER_KEY=$scratch/other.asc bash "$installer" --repin >/dev/null 2>&1; echo $?) == 0 ]] || fail '--repin with the right fingerprint failed'
+[[ $(tree_hash "$state") != "$before" ]] || fail '--repin did not replace the pin'
+[[ $(echo "$grouped" | UI_SHELL_SIGNER_KEY=$scratch/refresh.asc bash "$installer" --repin >/dev/null 2>&1; echo $?) == 0 ]] || fail 'could not repin the original key'
+[[ $(echo wrong | UI_SHELL_SIGNER_KEY=$scratch/other.asc bash "$installer" --repin >/dev/null 2>&1; echo $?) == 3 ]] || fail '--repin accepted a wrong fingerprint'
+gpg --homedir "$scratch/gpg" --with-colons --show-keys "$state/signer.asc" 2>/dev/null | rg -q "$key_fp" || fail 'the pinned key is not the original after the refused --repin'
+
+# ---- clean install of the first tag ----
+update --tag v0.1.0 || fail "clean install failed: $(<"$scratch/err")"
+[[ $(readlink "$data/current") == releases/v0.1.0 ]] || fail 'current does not name v0.1.0'
+(cd -- "$data/releases/v0.1.0" && sha256sum --check --strict --quiet SHA256SUMS) || fail 'the installed release does not verify'
+[[ -f $config/settings.ini && ! -e $state/update/pending && ! -e $cache/clone && ! -e $data/previous ]] || fail 'clean install left wrong state'
+[[ -z $(find "$data/releases" -maxdepth 1 -name '*.tmp' -print -quit) ]] || fail 'a .tmp release is left'
+
+# ---- no-op, older tag ----
+before=$(world)
+update --tag v0.1.0 || fail 'a no-op update failed'
+rg -q 'Already current' "$scratch/err" || fail 'the no-op did not say it is current'
+[[ $(world) == "$before" ]] || fail 'a no-op update changed something'
+
+# ---- update to the newest tag ----
+old=$(tree_hash "$data/releases/v0.1.0")
+update || fail "update failed: $(<"$scratch/err")"
+[[ $(readlink "$data/current") == releases/v0.2.0 && $(readlink "$data/previous") == releases/v0.1.0 ]] || fail 'current/previous wrong after the update'
+[[ $(tree_hash "$data/releases/v0.1.0") == "$old" ]] || fail 'the old release changed'
+cmp -s -- "$bin" <(bash -c 'source "$1/lib"; ui_compose_activator "$1"' _ "$data/releases/v0.2.0/update") || fail 'the activator was not self-updated'
+[[ $(code update --tag v0.1.0) == 3 ]] || fail 'an older tag was not refused with 3'
+rg -q 'older' "$scratch/err" || fail 'the older-tag refusal does not say why'
+
+# ---- dry run ----
+release_change third
+sign "$key_fp" v0.3.0
+git_in push -q origin main --tags
+before=$(world)
+update --dry-run || fail "dry-run failed: $(<"$scratch/err")"
+rg -q 'Release: v0.3.0' "$scratch/out" && rg -q 'Rehearsal passed' "$scratch/out" || fail 'dry-run printed no plan'
+[[ $(world) == "$before" ]] || fail 'dry-run changed a directory'
+
+# ---- refusals ----
+mkdir -p "$fakeproc/4242/fd"
+printf 'qs\n' >"$fakeproc/4242/comm"; ln -sfn / "$fakeproc/4242/cwd"; printf 'qs\0' >"$fakeproc/4242/cmdline"; : >"$fakeproc/4242/maps"
+before=$(world)
+[[ $(code update) == 3 ]] || fail 'a running qs did not refuse with 3'
+rg -q '4242' "$scratch/err" || fail 'the refusal does not list the pid'
+[[ $(world) == "$before" ]] || fail 'the session refusal changed something'
+rm -rf -- "$fakeproc/4242"
+
+# bad signatures: nothing of the clone runs; marker and clone are gone; exit 3
+release_change canary
+printf '#!/usr/bin/env bash\ntouch "%s/canary"\n' "$scratch" >"$work/update/run"
+chmod +x "$work/update/run"; git_in add -A >/dev/null; git_in commit -q -m canary
+git_in tag unsigned
+sign "$other_fp" wrongkey
+sign "$key_fp" altered
+altered=$(git_in cat-file tag altered | sed 's/^altered$/tampered/' | git_in hash-object -t tag -w --stdin)
+git_in update-ref refs/tags/altered "$altered"
+git_in push -q -f origin main --tags
+before=$(world)
+for bad in unsigned wrongkey altered; do
+  [[ $(code update --tag "$bad") == 3 ]] || fail "$bad was not refused with 3"
+  [[ ! -e $scratch/canary ]] || fail "$bad ran a file of the clone"
+  [[ ! -e $state/update/pending && ! -e $cache/clone ]] || fail "$bad left a marker or a clone"
+done
+[[ $(world) == "$before" ]] || fail 'a refused signature changed something'
+
+# an expired signing key refuses, even when the primary is the pinned one: pin an identity whose only
+# signing subkey expired in 2020, and sign with a clock frozen inside its lifetime
+expired_fp=$(new_identity expired 20200101T120000 1d)
+gpg_in --armor --export "$expired_fp" >"$scratch/expired.asc"
+printf '#!/bin/sh\nexec gpg --faked-system-time 20200101T180000! "$@"\n' >"$scratch/gpg-past"
+chmod +x "$scratch/gpg-past"
+GNUPGHOME=$scratch/gpg git_in -c gpg.format=openpgp -c "gpg.program=$scratch/gpg-past" -c "user.signingkey=$(sign_fp "$expired_fp")!" tag -s -m expired expired
+git_in push -q -f origin main --tags
+cp -p -- "$state/signer.asc" "$scratch/pin.keep"
+cp -- "$scratch/expired.asc" "$state/signer.asc"
+before=$(world)
+[[ $(code update --tag expired) == 3 ]] || fail 'a tag signed by an expired key was not refused with 3'
+[[ ! -e $scratch/canary && ! -e $state/update/pending && ! -e $cache/clone ]] || fail 'the expired-key refusal left a trace'
+[[ $(world) == "$before" ]] || fail 'the expired-key refusal changed something'
+cp -p -- "$scratch/pin.keep" "$state/signer.asc"
+
+# a revoked key refuses: sign with a fresh identity, then revoke its primary and pin the exported,
+# revoked public key
+revoked_fp=$(new_identity revoked)
+sign "$revoked_fp" revoked
+git_in push -q -f origin main --tags
+# key generation stores a revocation certificate (a colon in front of the armor header guards against accidental use)
+sed -n '/^:-----BEGIN/,$ { s/^://; p; }' "$scratch/gpg/openpgp-revocs.d/$revoked_fp.rev" >"$scratch/revoked.rev"
+gpg_in --import "$scratch/revoked.rev" || fail 'the revocation certificate was not imported'
+gpg_in --armor --export "$revoked_fp" >"$scratch/revoked.asc"
+rg -q '^rvk:|^pub:r:' < <(gpg --homedir "$scratch/gpg" --with-colons --list-keys "$revoked_fp" 2>/dev/null) || fail 'the test could not revoke its key'
+cp -- "$scratch/revoked.asc" "$state/signer.asc"
+before=$(world)
+[[ $(code update --tag revoked) == 3 ]] || fail 'a tag signed by a revoked key was not refused with 3'
+[[ ! -e $scratch/canary && ! -e $state/update/pending && ! -e $cache/clone ]] || fail 'the revoked-key refusal left a trace'
+[[ $(world) == "$before" ]] || fail 'the revoked-key refusal changed something'
+cp -p -- "$scratch/pin.keep" "$state/signer.asc"
+
+# a valid signed tag object republished under another name refuses (the object names itself)
+git_in update-ref refs/tags/z-renamed "$(git_in rev-parse refs/tags/v0.2.0)"
+git_in push -q -f origin refs/tags/z-renamed
+before=$(world)
+[[ $(code update --tag z-renamed) == 3 ]] || fail 'a signed tag republished under another name was not refused with 3'
+[[ ! -e $scratch/canary && ! -e $state/update/pending && ! -e $cache/clone ]] || fail 'the republished-tag refusal left a trace'
+[[ $(world) == "$before" ]] || fail 'the republished-tag refusal changed something'
+
+# ---- leftover marker, --force restart ----
+printf 'target=v0.3.0\nprevious=v0.2.0\nstart=%s\nphase=started\n' "$(date +%s)" >"$state/update/pending"
+[[ $(code update) == 4 ]] || fail 'a leftover marker did not refuse with 4'
+rg -q 'phase started, target v0.3.0' "$scratch/err" && rg -q -- '--force' "$scratch/err" || fail 'the marker refusal text is incomplete'
+[[ $(code update --dry-run) == 3 ]] || fail 'dry-run did not refuse with a marker'
+update --force || fail "--force failed: $(<"$scratch/err")"
+[[ $(readlink "$data/current") == releases/v0.3.0 && ! -e $state/update/pending ]] || fail '--force did not finish the update'
+
+# ---- rollback ----
+update --rollback || fail "rollback failed: $(<"$scratch/err")"
+[[ $(readlink "$data/current") == releases/v0.2.0 && $(readlink "$data/previous") == releases/v0.3.0 && ! -e $state/update/pending ]] || fail 'rollback left wrong links'
+mkdir -p "$state/migrations"; printf 'checksum=x\nshape=5\n' >"$state/migrations/1-raise"
+before=$(world)
+[[ $(code update --rollback) == 3 ]] || fail 'a rollback outside the shape range without snapshot was not refused'
+rg -q 'shape 5' "$scratch/err" || fail 'the shape refusal does not name the shape'
+[[ $(world) == "$before" ]] || fail 'the shape refusal changed something'
+printf 'Activator checks passed: install and pinned key, clean install, no-op, update and self-update, older tag, dry-run, refusals, signature order, marker and --force, rollback.\n'

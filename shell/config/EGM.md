@@ -2,7 +2,7 @@
 
 ## Overview
 Singleton QML configuration for the shell: feature toggles, key bindings, panel geometry, and per-component option specs. Module `UiShell.Config` ([config/qmldir]). Three files are source-tree placeholders replaced at runtime preparation (see Side Effects).
-
+Singleton QML configuration for the shell: feature toggles, key bindings, panel geometry, and per-component option specs. Module `UiShell.Config` ([config/qmldir]). The release is read-only: these constants are fixed per release (user-tunable options live in `settings.ini` and the `components/` store, read through `ComponentSettings`). The three `Generated*` singletons are not in this directory; runtime preparation adds them to a generated `qmldir` in the cache (see Side Effects).
 ## Interface
 - `Config` [Config.qml]: `watchSourceFiles`, `barEnabled`, `appLauncherEnabled`, `controlTuningEnabled`, `audioControlEnabled`, `screenRecordEnabled`, `screenShotEnabled`, `barHeight`, `barLabel`, `barWorkspaceNumbers`, `barWorkspacesEnabled`, `barControlMode`, `notificationsEnabled`, `clipboardEnabled` (mirrors `Notifications.enabled`).
 - `AppLauncher` [AppLauncher.qml]: shortcut (`shortcutAppId`, `shortcutName`), runner (`runnerExecutable`, `runnerArguments`), layout, row and key properties (`visibleRows`, `showIcons`, `previousKey`, ...).
@@ -11,7 +11,7 @@ Singleton QML configuration for the shell: feature toggles, key bindings, panel 
 - `Keyboard` [Keyboard.qml]: key/modifier constants, `namedKeys`, `shortcut(key, modifiers)`.
 - `WallpaperPicker` [WallpaperPicker.qml], `ThemeEditor` [ThemeEditor.qml] (roles, sources, colorChannels), `Tuning` [Tuning.qml], `ContextPanels` [ContextPanels.qml], `ErrorPanels` [ErrorPanels.qml]: panel geometry and key settings.
 - `Outputs` [Outputs.qml:launcherScreen, pickerScreen]: target-screen selection by `screen-index` or `output-name`.
-- `GeneratedLauncherOutput` [GeneratedLauncherOutput.qml], `GeneratedWallpapers` [GeneratedWallpapers.qml:items], `GeneratedRuntime` [GeneratedRuntime.qml: configFile, paths, commands, bootstrap, bundle, profileColors, wallpaperTargets, xdg, theme, wallpaperFolders].
+- `GeneratedLauncherOutput`, `GeneratedWallpapers` (`items`) and `GeneratedRuntime` (`configFile`, `paths`, `commands`, `bootstrap`, `bundle`, `profileColors`, `wallpaperTargets`, `xdg`, `theme`, `wallpaperFolders`) are NOT shipped here: `scripts/prepare-runtime` declares them in the generated `qmldir` and writes them to the runtime cache [scripts/prepare-runtime:qmldir block]. `Outputs.qml` reads `GeneratedLauncherOutput` and does not resolve outside a prepared runtime.
 - `Auth` (singleton) [Auth.qml]: `namespace`, `inputGuardMs`, `startupGraceMs`, `cardWidth`, `fieldHeight`, `scrimOpacity`, status texts.
 - `Mpris` (singleton) [Mpris.qml]: namespace, shortcut names, panel size, seek step, tick, `panelKeys`, `keyShortcuts`, and the art values used from phase 3.
 - `Config` gains `mprisEnabled` (bar entry, panel, panel key) and `mprisKeysEnabled` (the four media keys).
@@ -34,8 +34,7 @@ Singleton QML configuration for the shell: feature toggles, key bindings, panel 
 - `Config.clipboardEnabled` gates both the clipboard shortcut and its windows [Config.qml:clipboardEnabled, ../shell.qml].
 
 ## Side Effects
-- None at runtime in this directory (pure `QtObject` singletons).
-- Placeholders overwritten by runtime preparation: `GeneratedRuntime.qml` header comment "Source-tree declaration only. Staging replaces it from config.ini before use"; `GeneratedWallpapers.qml` comment "Placeholder only. Runtime preparation generates the configured folders". `GeneratedLauncherOutput.qml` is documented as an optional generated override [Outputs.qml comment "Generated values override only launcher hosting"].
+- Nothing here writes at runtime (pure `QtObject` singletons). `scripts/prepare-runtime` mirrors this directory into the runtime cache as links, appends `singleton GeneratedLauncherOutput|GeneratedWallpapers|GeneratedRuntime 1.0 <file>.qml` to a copy of this `qmldir`, creates `GeneratedLauncherOutput.qml` once with all values `undefined` (an existing file is kept), and regenerates the other two from the resolved config. `tools/scripts/lint-qml` overlays the same files for `make dev-lint`.
 - `ComponentSpec.validRules` allows only the keys `name`, `app`, `appId`, `appMatch`, `match`, `mute`, `hide`, `reveal`, `sound`; `name` is required; strings and booleans are type-checked; `sound` must be an absolute `.wav`, `.ogg` or `.oga` path; `appMatch` and `match` must compile as regular expressions [ComponentSpec.qml:validRules]. The `notifications` option `rules` is hand-written, never edited in the Ctrl+E popup.
 
 ## Verification

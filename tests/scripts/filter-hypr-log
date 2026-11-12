@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Passes standard input to standard output, dropping the Hyprland and Aquamarine log lines below a level.
-# usage: filter-hypr-log off|debug|trace
+# usage: filter-hypr-log off|warn|debug|trace
 #   off    only ERR and CRIT lines
+#   warn   WARN and above
 #   debug  DEBUG and above (what Hyprland prints by default here)
 #   trace  every line
 # Only lines in Hyprland's own format (`LEVEL ]:` or `LEVEL from <source> ]:`) are judged; every
@@ -9,9 +10,10 @@
 set -euo pipefail
 case ${1:-} in
   off) floor=4 ;;
+  warn) floor=3 ;;
   debug) floor=1 ;;
   trace) floor=0 ;;
-  *) echo "usage: filter-hypr-log off|debug|trace" >&2; exit 2 ;;
+  *) echo "usage: filter-hypr-log off|warn|debug|trace" >&2; exit 2 ;;
 esac
 exec awk -v floor="$floor" '
   BEGIN { rank["TRACE"] = 0; rank["DEBUG"] = 1; rank["LOG"] = 2; rank["INFO"] = 2; rank["WARN"] = 3; rank["ERR"] = 4; rank["CRIT"] = 5 }

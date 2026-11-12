@@ -1,0 +1,10 @@
+# Extended regular expressions, one per line, matched against qmllint warnings by tools/scripts/lint-qml.
+# Each is a gap in Quickshell's installed qmltypes, not a defect here:
+# types that derive from the unexposed PostReloadHook (GlobalShortcut and every type built on it)
+PostReloadHook was not found
+Type [A-Za-z.]+ is used but it is not resolved
+# anchor { item/edges/gravity } on PopupWindow, anchors/margins on PanelWindow
+Could not find property "(item|edges|gravity|top|right)"
+# the Mpris model and the Polkit flow are not described in the metadata
+Member "values" not found on type "UntypedObjectModel"
+Type "AuthFlow" of property "flow" not found

@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# The installed program (~/.local/bin/update-ui-shell). Steps 1-4, 8 and 10 of the update flow: lock,
+# refusals, shallow clone, `git verify-tag` against the pinned key, one update/run call per phase,
+# process recheck, rename of `current`, self-update. Also --rollback, --force and --dry-run.
+# Exit codes: 0 done or already current, 1 failed with state intact, 2 usage, 3 refused, 4 pending marker.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib" # inline-lib
+
+# The one place the repository is named. Tests may override it, and only with UI_SHELL_UPDATE_TEST=1.
+repository=https://github.com/djeddi-yacine/ui-shell.git
+[[ ${UI_SHELL_UPDATE_TEST-} == 1 && -n ${UI_SHELL_UPDATE_REPO-} ]] && repository=$UI_SHELL_UPDATE_REPO
+
+usage() {
+  printf '%s\n' 'Usage: update-ui-shell [--tag TAG | --dry-run | --rollback | --force]' >&2
+  exit "${1:-2}"
+}
+requested='' dry_run=0 rollback=0 force=0
+while (( $# )); do
+  case $1 in
+    --tag) (( $# >= 2 )) || usage; requested=$2; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    --rollback) rollback=1; shift ;;
+    --force) force=1; shift ;;
+    -h|--help) usage 0 ;;
+    *) usage ;;
+  esac
+done
+(( rollback + force + dry_run <= 1 )) || usage
+[[ -z $requested ]] || { (( rollback + force == 0 )) && ui_valid_tag "$requested"; } || usage
+
+cd /
+home=${HOME:?HOME required}
+data=${XDG_DATA_HOME:-$home/.local/share}/ui-shell
+config=${XDG_CONFIG_HOME:-$home/.config}/$ui_config_name
+state=${XDG_STATE_HOME:-$home/.local/state}/ui-shell
+cache=${XDG_CACHE_HOME:-$home/.cache}/ui-shell
+bin=$home/.local/bin/update-ui-shell
+for path in "$data" "$config" "$state" "$cache"; do
+  ui_valid_path "$path" || ui_die 2 "Not a usable directory path: $path"
+done
+export UI_SHELL_UPDATE_DATA=$data UI_SHELL_UPDATE_CONFIG=$config UI_SHELL_UPDATE_STATE=$state UI_SHELL_UPDATE_CACHE=$cache
+
+# Step 1: the lock, shared with scripts/start-session.
+mkdir -p -- "$state/update"
+exec 9>"$state/update/lock"
+flock -n 9 || ui_die 3 'Another update is running, or a session is starting.'
+pending=$state/update/pending
+
+work=$(mktemp -d)
+scratch=''
+cleanup() {
+  rm -rf -- "$work"
+  if [[ -n $scratch && -e $scratch ]]; then chmod -R u+w -- "$scratch"; rm -rf -- "$scratch"; fi
+  if [[ -n ${clone-} && -e ${clone-} && ${keep_clone-0} == 0 ]]; then rm -rf -- "$clone"; fi
+}
+trap cleanup EXIT
+clone=''
+keep_clone=0
+
+# git in an environment that reads no user or system configuration.
+isolated_git() {
+  env -i PATH="$PATH" HOME="$work" LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_TERMINAL_PROMPT=0 git -c core.hooksPath=/dev/null "$@"
+}
+
+# Refuse (exit 3) while the shell or a user of the release tree runs.
+guard() {
+  local output
+  output=$("$1" "$data") || { printf '%s\n' "$output" >&2; ui_die 3 'Refused: the shell or a release user is running (listed above). Log out to a TTY and try again.'; }
+}
+
+report_pending() {
+  ui_marker_read "$pending" || ui_die 4 "An update did not finish and its marker is unreadable: $pending"
+  printf 'An update did not finish: phase %s, target %s, previous %s.\n' "$marker_phase" "$marker_target" "${marker_previous:-none}" >&2
+  if [[ -d $state/migrations ]]; then
+    printf 'Migrations applied since it started:\n' >&2
+    find "$state/migrations" -type f -newermt "@$marker_start" -printf '  %f\n' | sort >&2
+  fi
+  printf '%s\n' 'Run `update-ui-shell --force` to restart it, or `update-ui-shell --rollback` to return to the previous release.' >&2
+}
+
+run_release() { # MODE TAG SOURCE: one update/run call
+  UI_SHELL_UPDATE_MODE=$1 UI_SHELL_UPDATE_TAG=$2 UI_SHELL_UPDATE_CLONE=$3 "$3/update/run"
+}
+
+# Delete a release directory that is neither active nor previous.
+remove_release() {
+  local name=$1 directory
+  [[ $name != "$(ui_link_tag "$data/current")" && $name != "$(ui_link_tag "$data/previous")" ]] || return 0
+  for directory in "$data/releases/$name" "$data/releases/$name.tmp"; do
+    if [[ -e $directory ]]; then chmod -R u+w -- "$directory"; rm -rf -- "$directory"; fi
+  done
+}
+
+# Steps 9-10 for a release already active: read-only checks, then repair `previous` from the marker.
+finish_active() {
+  local tag=$1 release
+  release=$data/releases/$tag
+  UI_SHELL_UPDATE_MODE=check UI_SHELL_UPDATE_TAG=$tag UI_SHELL_UPDATE_CLONE=$release "$release/update/run" || return 1
+  if [[ -n $marker_previous && $marker_previous != "$tag" && -d $data/releases/$marker_previous ]]; then
+    ui_link_set "$data/previous" "$marker_previous"
+  fi
+  rm -f -- "$pending"
+}
+
+# ---- rollback (runs from update/ of the active release) -------------------------------------
+if (( rollback )); then
+  active=$(ui_link_tag "$data/current")
+  if [[ -e $pending ]]; then
+    # A marker blocks a rollback unless the new release is already active (a failed update the
+    # user wants to undo) or an earlier rollback was interrupted; otherwise --force is the way.
+    ui_marker_read "$pending" || ui_die 4 "An update did not finish and its marker is unreadable: $pending"
+    [[ $marker_phase == rolling-back || $active == "$marker_target" ]] || { report_pending; exit 4; }
+  fi
+  [[ -n $active && -x $data/releases/$active/update/rollback ]] || ui_die 3 'No active release to roll back from.'
+  exec "$data/releases/$active/update/rollback"
+fi
+
+# ---- --force ------------------------------------------------------------------------------
+forced_tag=''
+if [[ -e $pending ]]; then
+  (( force )) || { (( dry_run )) && ui_die 3 'An update did not finish; --dry-run is refused until it is resolved.'; report_pending; exit 4; }
+  ui_marker_read "$pending" || ui_die 1 "The pending marker is unreadable; inspect and remove it by hand: $pending"
+  active=$(ui_link_tag "$data/current")
+  if [[ $marker_phase == rolling-back ]]; then
+    # The target is a complete older release: never delete it. A re-run of --rollback is idempotent.
+    if [[ $active == "$marker_target" ]]; then
+      finish_active "$active" || ui_die 1 'The post checks fail on the release now active; the marker stays. Run --rollback again.'
+      ui_log "Rollback to $active completed."
+    else
+      rm -f -- "$pending"
+      ui_log 'The rollback had not switched releases. The marker is cleared; run --rollback again.'
+    fi
+    exit 0
+  elif [[ $active == "$marker_target" ]]; then
+    finish_active "$active" || ui_die 1 'The post checks fail on the active release; the marker stays. Run `update-ui-shell --rollback`.'
+    ui_log "Update to $active completed."
+    exit 0
+  fi
+  forced_tag=$marker_target
+  remove_release "$marker_target"
+  rm -f -- "$pending"
+  ui_log "Restarting the update to $forced_tag."
+elif (( force )); then
+  ui_die 3 'Nothing to force: no update is pending.'
+fi
+
+# ---- update -------------------------------------------------------------------------------
+active=$(ui_link_tag "$data/current")
+rm -rf -- "${cache:?}/clone"
+for stray in "$data"/releases/*.tmp; do
+  [[ -e $stray ]] || continue
+  chmod -R u+w -- "$stray"; rm -rf -- "$stray"
+done
+
+# Step 2.
+[[ ! -x $data/current/update/process-guard ]] || guard "$data/current/update/process-guard"
+
+if [[ -n $forced_tag ]]; then
+  tag=$forced_tag
+elif [[ -n $requested ]]; then
+  tag=$requested
+else
+  tags=$(isolated_git ls-remote --tags --refs "$repository" 2>"$work/err") || { cat -- "$work/err" >&2; ui_die 1 'Could not list the tags of the repository.'; }
+  tag=''
+  while IFS= read -r name; do
+    name=${name##*/}
+    ui_valid_tag "$name" && tag=$(printf '%s\n%s\n' "$tag" "$name" | sed '/^$/d' | ui_version_sort | tail -n 1)
+  done <<<"$tags"
+  [[ -n $tag ]] || ui_die 1 'The repository has no tags.'
+fi
+if [[ -n $active ]]; then
+  [[ $tag != "$active" ]] || { ui_log "Already current: $active."; exit 0; }
+  [[ $(printf '%s\n%s\n' "$tag" "$active" | ui_version_sort | head -n 1) != "$tag" ]] ||
+    ui_die 3 "Refused: $tag is older than the active $active. Use --rollback."
+fi
+
+if (( dry_run )); then
+  scratch=$cache/.dry-$tag
+  rm -rf -- "${scratch:?}"
+  mkdir -p -- "$scratch/data"
+  clone=$scratch/clone
+  run_data=$scratch/data
+else
+  clone=$cache/clone
+  run_data=$data
+  ui_marker_write "$pending" "$tag" "$active" started
+  ui_crash_point started
+fi
+mkdir -p -- "$cache"
+
+# Steps 3-4: nothing from the clone runs before the signature verifies.
+fail_early() { # CODE MESSAGE: the marker is removed, nothing else exists
+  local code=$1; shift
+  rm -f -- "$pending"
+  ui_die "$code" "$*"
+}
+[[ -f $state/signer.asc ]] || fail_early 3 "No pinned signer key: $state/signer.asc. Run update/install-activator first."
+pinned_fingerprint=$(ui_key_load "$state/signer.asc" "$work/gnupg") ||
+  fail_early 3 "The pinned signer key $state/signer.asc is unusable. Run update/install-activator --repin from a current tag."
+# Only the pinned key is in this keyring, so it is trusted by construction.
+printf '%s\n' 'trust-model always' >"$work/gnupg/gpg.conf"
+isolated_git clone -q --depth 1 --no-checkout --branch "$tag" "$repository" "$clone" 2>"$work/err" ||
+  { cat -- "$work/err" >&2; fail_early 1 "Could not clone $tag."; }
+# The tag must carry a good signature by a valid subkey of the pinned primary key: an expired or
+# revoked signing key, a bad signature or another key all refuse.
+tag_verifies() {
+  env -i PATH="$PATH" HOME="$work" LC_ALL=C GNUPGHOME="$work/gnupg" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_TERMINAL_PROMPT=0 git -c core.hooksPath=/dev/null -c gpg.format=openpgp -c gpg.program=gpg \
+    -C "$clone" verify-tag --raw "$tag" 2>"$work/err" || return 1
+  # The signed tag object names itself: a signed tag republished under another name is refused.
+  [[ $(git -C "$clone" cat-file tag "$tag" 2>/dev/null | sed -n 's/^tag //p;/^$/q') == "$tag" ]] || return 1
+  awk -v pinned="$pinned_fingerprint" '$1 == "[GNUPG:]" && $2 ~ /^(BADSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|ERRSIG)$/ { bad = 1 }
+    $1 == "[GNUPG:]" && $2 == "VALIDSIG" && $NF == pinned { good = 1 }
+    END { exit !(good && !bad) }' "$work/err"
+}
+tag_verifies || { cat -- "$work/err" >&2; fail_early 3 "Refused: the signature of $tag does not verify."; }
+gpgconf --homedir "$work/gnupg" --kill all >/dev/null 2>&1 || true
+[[ $(isolated_git -C "$clone" rev-parse HEAD) == "$(isolated_git -C "$clone" rev-parse "$tag^{commit}")" ]] ||
+  fail_early 3 "Refused: $tag does not name the cloned commit."
+isolated_git -C "$clone" reset -q --hard HEAD
+[[ -x $clone/update/run ]] || fail_early 1 "$tag has no update/run."
+[[ -x $data/current/update/process-guard ]] || guard "$clone/update/process-guard"
+
+# Steps 5-6: build and rehearse. A failure here has changed nothing the shell reads.
+abandon() { # MESSAGE
+  (( dry_run )) || { remove_release "$tag"; rm -f -- "$pending"; }
+  ui_die 1 "$1"
+}
+UI_SHELL_UPDATE_DATA=$run_data run_release build "$tag" "$clone" || abandon "The build of $tag failed; nothing was changed."
+if (( ! dry_run )); then
+  ui_marker_write "$pending" "$tag" "$active" built
+  ui_crash_point built
+fi
+UI_SHELL_UPDATE_DATA=$run_data run_release check "$tag" "$clone" || abandon "The rehearsal of $tag failed; nothing was changed."
+
+if (( dry_run )); then
+  printf 'Release: %s (active: %s)\n' "$tag" "${active:-none}"
+  if [[ -n $active ]]; then
+    printf 'Files (from SHA256SUMS):\n'
+    diff <(sed 's/^[0-9a-f]*  //' "$data/releases/$active/SHA256SUMS" | sort) \
+         <(sed 's/^[0-9a-f]*  //' "$run_data/releases/$tag/SHA256SUMS" | sort) | sed -n 's/^< /  removed /p; s/^> /  added or changed /p' || true
+  fi
+  mkdir -p -- "$scratch/state"
+  if [[ -d $state/migrations ]]; then cp -a -- "$state/migrations" "$scratch/state/migrations"; fi
+  pending_list=$("$run_data/releases/$tag/update/run-migrations" --list "$run_data/releases/$tag" "$scratch/config" "$scratch/state" '' 2>/dev/null || true)
+  printf 'Migrations (name, shape):\n%s\n' "${pending_list:-  none}"
+  printf 'Rehearsal passed. Nothing the shell reads was changed.\n'
+  exit 0
+fi
+
+# Step 7.
+run_release migrate "$tag" "$clone" || ui_die 1 "A migration failed. The marker stays; run \`update-ui-shell --force\` or \`--rollback\`."
+
+# Step 8.
+guard "$data/releases/$tag/update/process-guard"
+ui_marker_write "$pending" "$tag" "$active" activating
+ui_crash_point activating
+ui_link_set "$data/current" "$tag"
+ui_crash_point renamed
+ui_marker_write "$pending" "$tag" "$active" checking
+ui_crash_point checking
+[[ -z $active ]] || ui_link_set "$data/previous" "$active"
+
+# Steps 9-10.
+marker_previous=$active
+finish_active "$tag" || ui_die 1 "The post checks fail. $tag is active and the marker stays; run \`update-ui-shell --rollback\`."
+ui_log "Updated to $tag."
+"$data/releases/$tag/update/prune" "$data" "$state" || ui_log 'Note: old releases were not pruned.'
+# Integration seeds run after the post checks; each writes only what the user has not made.
+"$data/releases/$tag/update/seed-menu-entry" "$data/releases/$tag" "$data/current/scripts/menu" "${XDG_DATA_HOME:-$home/.local/share}" ||
+  ui_log 'Note: the uuctl menu entry was not seeded.'
+if [[ -n ${XDG_RUNTIME_DIR-} ]]; then
+  "$data/releases/$tag/update/seed-cliphist-config" "$data/releases/$tag" "${XDG_CONFIG_HOME:-$home/.config}" || ui_log 'Note: the cliphist config was not seeded.'
+else
+  ui_log 'Note: XDG_RUNTIME_DIR is unset; the cliphist config is seeded by scripts/start-session.'
+fi
+
+# Self-update: replace the installed activator with the verified clone's, by rename.
+if [[ -e $bin && ! -L $bin ]]; then
+  ui_compose_activator "$clone/update" >"$bin.new"
+  chmod 0755 -- "$bin.new"
+  if cmp -s -- "$bin.new" "$bin"; then rm -f -- "$bin.new"; else mv -f -- "$bin.new" "$bin"; fi
+fi
+exit 0

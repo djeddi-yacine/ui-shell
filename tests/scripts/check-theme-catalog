@@ -18,7 +18,15 @@ with tempfile.TemporaryDirectory(prefix="theme-catalog-") as temporary:
     themes.mkdir()
     profiles = root / "saved profiles"
     profiles.mkdir(parents=True)
-    runtime = {"paths": {"themes": str(themes), "profiles": str(profiles)}, "theme": {"profile": ""}}
+    shipped_themes, shipped_profiles = root / "shipped themes", root / "shipped profiles"
+    for identity in ("theme-17", "shipped-only"):
+        (shipped_themes / identity).mkdir(parents=True)
+        (shipped_themes / identity / "config.ini").write_text("x\n")
+        (shipped_profiles / identity).mkdir(parents=True)
+        (shipped_profiles / identity / "profile.ini").write_text("x\n")
+    runtime = {"paths": {"themes": str(themes), "profiles": str(profiles),
+                         "shippedThemes": str(shipped_themes), "shippedProfiles": str(shipped_profiles)},
+               "theme": {"profile": ""}}
     size = 500
     for number in range(size):
         identity = f"theme-{number}"
@@ -44,7 +52,10 @@ with tempfile.TemporaryDirectory(prefix="theme-catalog-") as temporary:
             mock.patch("subprocess.run", side_effect=AssertionError("Catalog ran a validator")):
         result = discover(runtime)
     elapsed = time.perf_counter() - started
-    assert len(result["profiles"]) == size and len(result["palettes"]) == size
+    # The shipped store adds only ids the user store lacks; a user entry with the same id wins.
+    assert len(result["profiles"]) == size + 1 and len(result["palettes"]) == size + 1
+    assert next(entry for entry in result["palettes"] if entry["id"] == "theme-17")["path"] == str(themes / "theme-17" / "config.ini")
+    assert next(entry for entry in result["palettes"] if entry["id"] == "shipped-only")["path"] == str(shipped_themes / "shipped-only" / "config.ini")
     assert all(set(entry) == {"id", "label", "path"} for entry in result["profiles"] + result["palettes"])
     assert next(entry for entry in result["profiles"] if entry["id"] == "theme-17")["path"] == str(profiles / "theme-17" / "profile.ini")
     assert all(entry["id"] not in {"linked-profile", "linked-theme"} for entry in result["profiles"])
@@ -60,4 +71,15 @@ with tempfile.TemporaryDirectory(prefix="theme-catalog-") as temporary:
     manifest.write_text(json.dumps(runtime))
     output = subprocess.run([str(project / "scripts/theme-catalog"), str(manifest)], capture_output=True, text=True, check=True)
     assert json.loads(output.stdout) == result
+    # A missing shipped store is tolerated; a missing user store is an error.
+    gone = dict(runtime["paths"], shippedThemes=str(root / "absent"), shippedProfiles=str(root / "absent"))
+    assert len(discover(dict(runtime, paths=gone))["profiles"]) == size
+    for store in ("profiles", "themes"):
+        broken = dict(runtime, paths=dict(runtime["paths"], **{store: str(root / "no such store")}))
+        try:
+            discover(broken)
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError(f"a missing user {store} store was tolerated")
     print(f"Theme catalog passed: {size} direct metadata-only entries in {elapsed:.3f}s, stable IDs, symlink rejection, no asset reads or validators; invalid selection rejected.")

@@ -51,7 +51,7 @@ Item {
     }
     Component.onCompleted: {
         // Only a stack that has just arrived fades in; the rest are simply there.
-        if (Date.now() - group.items[0].time < Config.Notifications.arrivalWindowMs) entrance = 0
+        if (group.items.length > 0 && Date.now() - group.items[0].time < Config.Notifications.arrivalWindowMs) entrance = 0
         entering = true
         entrance = 1
     }

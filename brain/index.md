@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-11T00:17:48.364Z._
+_Auto-generated. Last updated 2026-11-12T00:54:09.428Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
@@ -8,6 +8,7 @@ _Auto-generated. Last updated 2026-11-11T00:17:48.364Z._
 - [contextual-shell-popups](pages/contextual-shell-popups.md) — category: decision | tags: [shell, ux, keyboard, configuration] | # Decision
 - [gui-test-viewport](pages/gui-test-viewport.md) — category: decision | tags: [tests, gui, viewport] | # Decision
 - [hyprland-native-composition](pages/hyprland-native-composition.md) — category: decision | tags: [hyprland, lua, workspaces, groups] | # Decision
+- [install-update-migration](pages/install-update-migration.md) — category: decision | tags: [install, update, migration] | # Decision (settled)
 - [isolated-nested-test-environment](pages/isolated-nested-test-environment.md) — category: decision | tags: [tests, isolation, xdg] | # Decision
 - [mpris-media-control](pages/mpris-media-control.md) — category: project | tags: [mpris, media, panel, keys] | The media control shows and controls the current MPRIS player. It is built (design: features/designs/mpris.md; contract: shell/modules/mpris
 - [notification-center](pages/notification-center.md) — category: decision | tags: [notifications, shell] | The shell replaces dunst as the only notification daemon (Quickshell NotificationServer).

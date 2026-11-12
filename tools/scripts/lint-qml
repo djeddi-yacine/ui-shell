@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Development only: lint the shell QML the way Quickshell sees it. The generated singletons and the
+# profile link exist only in a prepared runtime, so they are overlaid on a scratch copy of shell/.
+# Warnings listed in tools/qmllint-upstream.txt come from gaps in Quickshell's installed type
+# metadata (not from this code); any other warning fails.
+#   lint-qml SOURCE_ROOT RUNTIME_CONFIG_DIR QMLLINT
+set -euo pipefail
+[[ $# == 3 ]] || { printf '%s\n' 'Usage: lint-qml SOURCE_ROOT RUNTIME_CONFIG_DIR QMLLINT' >&2; exit 2; }
+root=$(realpath -e -- "$1") runtime_config=$(realpath -e -- "$2") qmllint=$3
+scratch=$(mktemp -d)
+trap 'rm -r -- "${scratch:?}"' EXIT
+cp -r -- "$root/shell" "$scratch/shell"
+cp -L -- "$runtime_config/qmldir" "$runtime_config"/Generated*.qml "$scratch/shell/config/"
+cp -a -- "$runtime_config/ProfileBundle" "$scratch/shell/config/"
+# PanelWindow and friends are declared uncreatable in Quickshell's metadata but are created in QML.
+printf '%s\n' '[Warnings]' 'UncreatableType=disable' >"$scratch/shell/.qmllint.ini"
+mapfile -t files < <(find "$scratch/shell" -name '*.qml' | sort)
+output=$("$qmllint" "${files[@]}" 2>&1 || true)
+found=$(grep -E '^(Warning|Error)' <<<"${output//$scratch\//}" | grep -Ev -f "$root/tools/qmllint-upstream.txt" || true)
+[[ -z $found ]] || { printf '%s\n' "$found" >&2; exit 1; }
+printf '%s\n' 'QML lint clean (apart from the known Quickshell metadata gaps).'

@@ -202,7 +202,7 @@ for n in $(seq 1 "$STREAMS"); do tone_id[$n]=$(snap | stream_id "$n"); done
 expect 'every stream has a distinct id' bash -c "[[ \$(printf '%s\n' ${tone_id[*]} | sort -u | wc -l) == $STREAMS ]]"
 times=()
 for i in $(seq 1 15); do times+=("$(timed_ms "$ag" snapshot)"); done
-sorted=($(printf '%s\n' "${times[@]}" | sort -n))
+mapfile -t sorted < <(printf '%s\n' "${times[@]}" | sort -n)
 printf 'snapshot latency over 15 runs: min %sms median %sms max %sms\n' "${sorted[0]}" "${sorted[7]}" "${sorted[14]}"
 expect 'snapshot median under 800ms with the graph loaded' test "${sorted[7]}" -lt 800
 

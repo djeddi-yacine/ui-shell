@@ -2,31 +2,33 @@
 SHELL_DIR := $(ROOT)/shell
 DEV_HOME ?= $(ROOT)/.build/home
 CONFIG_ROOT ?= $(DEV_HOME)/.config/ui-shell
-CONFIG_FILE ?= $(CONFIG_ROOT)/config.ini
+CONFIG_FILE ?= $(CONFIG_ROOT)/manifest.ini
+SETTINGS_FILE ?= $(CONFIG_ROOT)/settings.ini
 CONFIG_READER ?= $(ROOT)/scripts/read-shell-config
 INI_READER ?= $(ROOT)/scripts/read-ini
 RUNTIME_PREPARER ?= $(ROOT)/scripts/prepare-runtime
 RUNTIME_FILE ?= $(ROOT)/.build/runtime-path.log
 QMLLINT ?= /usr/lib/qt6/bin/qmllint
-QML_FILES := $(shell find "$(SHELL_DIR)" -type f -name '*.qml' -print)
 REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: dev-release dev-check-update dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-shellcheck dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
 
 dev-help:
 	@printf '%s\n' \
 		'Development (not the sandbox):' \
 		'  dev-shaders          Rebuild the notification spoiler shader (needs qsb from qt6-shadertools)' \
 		'  refs-pull             Pull reference repos; merges allowed, dirty repos skipped' \
-		'  dev-stage             Stage runtime files privately under .build/' \
+		'  dev-release           Build a release from the working tree under .build/release/dev (no updater needed)' \
+		'  dev-check-update      Build the dev release and rehearse it against a scratch copy of a clean user directory' \
+		'  dev-stage            Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
 		'  dev-seed-clipboard    Write ~/.config/cliphist/config (history in the runtime dir) only if absent' \
 		'  dev-seed-menu         Write ~/.local/share/applications/uuctl.desktop (asks through the shell menu) only if absent' \
 		'  dev-import-themes     Regenerate reference definitions; explicit POSITIVE/WARNING/NEGATIVE required' \
 		'  dev-bundle-themes     Maintainers: import, then refresh the checked-in bundled-themes/ (credit in CREDITS.md)' \
-		'  dev-lint              Check source QML (override QMLLINT explicitly)' \
+		'  dev-lint              Lint the shell QML with its generated files (override QMLLINT explicitly)' \
 		'  dev-verify-hypr       Validate the staged production Hyprland config' \
 		'  dev-build-phantomat   Build the reference plugin' \
 		'  dev-verify-phantomat  Check the plugin build artifact' \
@@ -46,22 +48,28 @@ refs-pull:
 	done; \
 	exit "$$status"
 
+dev-release:
+	@bash "$(ROOT)/tools/scripts/dev-release" "$(ROOT)" "$(ROOT)/.build"
+
+dev-check-update:
+	@bash "$(ROOT)/tools/scripts/dev-release" "$(ROOT)" "$(ROOT)/.build" --check
+
 dev-stage:
 	@bash "$(ROOT)/tools/scripts/stage-config" "$(ROOT)" "$(CONFIG_ROOT)"
 
 # Writes the user's own cliphist config, so it is never part of staging; an existing file is kept.
 dev-seed-clipboard:
-	@bash "$(ROOT)/tools/scripts/seed-cliphist-config" "$(ROOT)" "$${XDG_CONFIG_HOME:-$$HOME/.config}"
+	@bash "$(ROOT)/update/seed-cliphist-config" "$(ROOT)" "$${XDG_CONFIG_HOME:-$$HOME/.config}"
 
 # Writes the user's own uuctl entry (outside staging), pointing at the staged scripts/menu that
 # make dev-run uses; an existing file is kept.
 dev-seed-menu: dev-stage
-	@bash "$(ROOT)/tools/scripts/seed-menu-entry" "$(ROOT)" "$(DEV_HOME)/.config" "$${XDG_DATA_HOME:-$$HOME/.local/share}"
+	@bash "$(ROOT)/update/seed-menu-entry" "$(ROOT)" "$(CONFIG_ROOT)/scripts/menu" "$${XDG_DATA_HOME:-$$HOME/.local/share}"
 
 dev-configure: dev-stage
 	@mkdir -p "$(ROOT)/.build"
 	@resolved=$$(mktemp "$(ROOT)/.build/.paths.XXXXXX"); trap 'rm -f -- "$$resolved"' EXIT; \
-	env HOME="$(DEV_HOME)" XDG_CONFIG_HOME="$(DEV_HOME)/.config" XDG_CACHE_HOME="$(DEV_HOME)/.cache" XDG_DATA_HOME="$(DEV_HOME)/.local/share" XDG_STATE_HOME="$(DEV_HOME)/.local/state" "$(CONFIG_READER)" "$(CONFIG_FILE)" "$(INI_READER)" >"$$resolved"; \
+	env HOME="$(DEV_HOME)" XDG_CONFIG_HOME="$(DEV_HOME)/.config" XDG_CACHE_HOME="$(DEV_HOME)/.cache" XDG_DATA_HOME="$(DEV_HOME)/.local/share" XDG_STATE_HOME="$(DEV_HOME)/.local/state" "$(CONFIG_READER)" "$(CONFIG_FILE)" "$(SETTINGS_FILE)" "$(INI_READER)" >"$$resolved"; \
 	"$(RUNTIME_PREPARER)" "$$resolved" >"$(RUNTIME_FILE)"
 
 # Terminal slots are not automatically semantic status colors.
@@ -72,11 +80,15 @@ dev-import-themes: dev-stage
 	@test -n "$(POSITIVE)" -a -n "$(WARNING)" -a -n "$(NEGATIVE)" || { printf '%s\n' 'Set POSITIVE, WARNING and NEGATIVE explicitly.' >&2; exit 2; }
 	@mkdir -p "$(ROOT)/.build"
 	@resolved=$$(mktemp "$(ROOT)/.build/.import-paths.XXXXXX"); trap 'rm -f -- "$$resolved"' EXIT; \
-	env HOME="$(DEV_HOME)" XDG_CONFIG_HOME="$(DEV_HOME)/.config" XDG_CACHE_HOME="$(DEV_HOME)/.cache" XDG_DATA_HOME="$(DEV_HOME)/.local/share" XDG_STATE_HOME="$(DEV_HOME)/.local/state" "$(CONFIG_READER)" "$(CONFIG_FILE)" "$(INI_READER)" >"$$resolved"; \
+	env HOME="$(DEV_HOME)" XDG_CONFIG_HOME="$(DEV_HOME)/.config" XDG_CACHE_HOME="$(DEV_HOME)/.cache" XDG_DATA_HOME="$(DEV_HOME)/.local/share" XDG_STATE_HOME="$(DEV_HOME)/.local/state" "$(CONFIG_READER)" "$(CONFIG_FILE)" "$(SETTINGS_FILE)" "$(INI_READER)" >"$$resolved"; \
 	bash "$(ROOT)/tools/scripts/import-reference-themes" "$$resolved" "$(ROOT)/refs/100-themes" "$(POSITIVE)" "$(WARNING)" "$(NEGATIVE)"
 
-dev-lint:
-	@"$(QMLLINT)" $(QML_FILES)
+dev-lint: dev-configure
+	@runtime=$$(<"$(RUNTIME_FILE)"); bash "$(ROOT)/tools/scripts/lint-qml" "$(ROOT)" "$$(jq -r '.paths.runtime' "$$runtime")/config" "$(QMLLINT)"
+
+dev-shellcheck:
+	@files=$$(git -C "$(ROOT)" ls-files -co --exclude-standard | while read -r file; do [ -f "$(ROOT)/$$file" ] && head -n 1 "$(ROOT)/$$file" | grep -q '^#!.*bash' && printf '%s\n' "$$file"; done || true); \
+	cd "$(ROOT)" && shellcheck -x -S warning $$files
 
 dev-verify-hypr: dev-configure
 	@runtime=$$(<"$(RUNTIME_FILE)"); env UI_SHELL_RUNTIME="$$runtime" UI_SHELL_RUNTIME_LUA="$$(jq -r '.runtimeLua' "$$runtime")" Hyprland --verify-config --config "$$(jq -r '.paths.hypr' "$$runtime")/hyprland.lua"

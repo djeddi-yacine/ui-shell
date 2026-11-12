@@ -43,8 +43,8 @@ start_shell() { "$bin/quickshell" 600 & fakepid=$!; printf '%s\n' "$fakepid" > "
 stop_shell() { kill "$fakepid" 2>/dev/null || true; wait "$fakepid" 2>/dev/null || true; fakepid=""; }
 requests() { find "$spool" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\n' | sort; }
 wait_request() { # prints the name of the first request, waiting up to five seconds
-  local i name
-  for i in $(seq 50); do
+  local name
+  for _ in $(seq 50); do
     name=$(requests | head -n1)
     if [ -n "$name" ]; then printf '%s' "$name"; return 0; fi
     sleep 0.1
@@ -52,8 +52,7 @@ wait_request() { # prints the name of the first request, waiting up to five seco
   return 1
 }
 wait_gone() { # a request directory disappears within five seconds
-  local i
-  for i in $(seq 50); do [ -z "$(requests)" ] && return 0; sleep 0.1; done
+  for _ in $(seq 50); do [ -z "$(requests)" ] && return 0; sleep 0.1; done
   return 1
 }
 # Starts the client in the background with its output in files; $1.. are its arguments.
@@ -189,7 +188,7 @@ wait "$sub" || true
 "$script" -p first < "$scratch/items" > "$scratch/out.first" 2>&1 & first=$!
 sleep 0.3
 "$script" -p second < "$scratch/items" > "$scratch/out.second" 2>&1 & second=$!
-for i in $(seq 50); do [ "$(requests | wc -l)" -ge 2 ] && break; sleep 0.1; done
+for _ in $(seq 50); do [ "$(requests | wc -l)" -ge 2 ] && break; sleep 0.1; done
 mapfile -t names < <(requests)
 check "two requests are listed" 2 "${#names[@]}"
 check "requests sort in arrival order" "$first" "${names[0]#*-}"
@@ -224,7 +223,7 @@ clientpid=${name#*-}
 kill -KILL "$caller"
 wait "$caller" 2>/dev/null || true
 gone=no
-for i in $(seq 40); do
+for _ in $(seq 40); do
   kill -0 "$clientpid" 2>/dev/null || { gone=yes; break; }
   sleep 0.1
 done
@@ -245,21 +244,24 @@ check "a marker in the choices is in no argument" 0 "$(grep -c -- "$marker" "$lo
 check "a marker is in no message" 0 "$(grep -c -- "$marker" "$scratch/err" || true)"
 
 # --- the uuctl launcher entry ---------------------------------------------------------------------
-seed=$root/tools/scripts/seed-menu-entry
+seed=$root/update/seed-menu-entry
 config=$scratch/seed/config; data=$scratch/seed/data
 cp "$(command -v sleep)" "$bin/uuctl"
-bash "$seed" "$root" "$config" "$data"
+bash "$seed" "$root" "$config/ui-shell/scripts/menu" "$data"
 entry=$data/applications/uuctl.desktop
 check "the entry asks through the staged menu script" "Exec=uuctl $config/ui-shell/scripts/menu -p" "$(grep '^Exec=' "$entry")"
-check "the entry keeps the rest of the package's" "$(grep -vc '^Exec=' "$root/tools/uuctl.desktop")" "$(grep -vc '^Exec=' "$entry")"
+check "the entry keeps the rest of the package's" "$(grep -vc '^Exec=' "$root/update/uuctl.desktop")" "$(grep -vc '^Exec=' "$entry")"
 check "the entry has no placeholder left" 0 "$(grep -c '@' "$entry" || true)"
+sed -i 's|^Exec=.*|Exec=uuctl /old/place/scripts/menu -p|' "$entry"
+bash "$seed" "$root" "$config/ui-shell/scripts/menu" "$data"
+check "a stale entry is rewritten" "Exec=uuctl $config/ui-shell/scripts/menu -p" "$(grep '^Exec=' "$entry")"
 printf 'mine\n' > "$entry"
-bash "$seed" "$root" "$config" "$data"
+bash "$seed" "$root" "$config/ui-shell/scripts/menu" "$data"
 check "an existing entry is kept" mine "$(cat "$entry")"
 check "no temporary file is left" "uuctl.desktop" "$(ls -A "$data/applications")"
 mkdir -p "$scratch/nouuctl"
 for tool in realpath mkdir mktemp mv rm bash dirname; do ln -s "$(command -v "$tool")" "$scratch/nouuctl/$tool"; done
-code=0; PATH=$scratch/nouuctl bash "$seed" "$root" "$config" "$scratch/seed/other" || code=$?
+code=0; PATH=$scratch/nouuctl bash "$seed" "$root" "$config/ui-shell/scripts/menu" "$scratch/seed/other" || code=$?
 check "without uuctl nothing is written and it exits 0" "0 absent" "$code $([ -e "$scratch/seed/other" ] && echo present || echo absent)"
 code=0; bash "$seed" "$root" "$scratch/with space" "$scratch/seed/other2" 2> /dev/null || code=$?
 check "a staged path with a space is refused" 1 "$code"

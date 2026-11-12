@@ -15,7 +15,7 @@ scrim=$(sed -n 's/.*property string scrimNamespace: "\(ui-shell-[a-z-]*\)".*/\1/
 [[ $scrim == "$namespace-scrim" ]] || { echo "check-auth: scrim namespace '$scrim' is not $namespace-scrim" >&2; exit 1; }
 grep -q "^  match = { namespace = \"^$namespace\\$\" }," "$rules" \
   || { echo "check-auth: hypr/rules.lua has no exact rule for $namespace" >&2; exit 1; }
-grep -q "|$short|$short-scrim)\\$\" }" "$rules" \
+grep -Eq "namespace = \"\\^ui-shell-\\(([a-z-]+\\|)*$short\\|$short-scrim(\\|[a-z-]+)*\\)\\$\"" "$rules" \
   || { echo "check-auth: $short and $short-scrim must both be in the shell-owns-motion pattern" >&2; exit 1; }
 grep -q 'no_screen_share = true' "$rules" || { echo "check-auth: no_screen_share missing" >&2; exit 1; }
 printf '%s\n' "Authentication namespace check passed ($namespace)."

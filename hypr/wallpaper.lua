@@ -1,7 +1,7 @@
 -- Resolve the chosen compiled bundle without regenerating wallpaper outputs.
 local runtime = require("runtime")
 local selections = dofile(runtime.bundle.wallpaperRegistry)
-local outputs_policy = require("user.monitors")
+local outputs_policy = require("userlua").load("monitors")
 local folders = {}
 
 for _, folder in ipairs(runtime.wallpaperFolders) do

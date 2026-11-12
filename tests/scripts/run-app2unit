@@ -42,8 +42,15 @@ if [[ ${0##*/} == systemd-run ]]; then
   exit 1
 fi
 
-[[ $# == 2 && $1 == -- && $2 == *.desktop && $2 != */* ]] || {
-  printf '%s\n' 'Test runner expects -- desktop-entry-id.desktop.' >&2; exit 2;
+# A dry run (--test) starts nothing and needs no transport: the real app2unit answers it.
+for argument in "$@"; do
+  [[ $argument != --test ]] || exec /usr/bin/app2unit "$@"
+done
+# Installed as `app2unit` on the test session's PATH: the shipped launcher arguments (transport mode,
+# slice) are accepted and ignored; the test always runs its own scope below.
+desktop=${!#}
+[[ $# -ge 2 && ${*: -2:1} == -- && $desktop == *.desktop && $desktop != */* ]] || {
+  printf '%s\n' 'Test runner expects ... -- desktop-entry-id.desktop.' >&2; exit 2;
 }
 [[ -n ${UI_SHELL_TEST_MANAGER_BUS-} && -n ${UI_SHELL_TEST_APP_SLICE-} ]] || {
   printf '%s\n' 'Test runner has no session-owned manager transport.' >&2; exit 1;
@@ -56,4 +63,4 @@ export UI_SHELL_TEST_APP_PATH=$PATH
 export PATH="$test_runtime/app2unit-bin:$PATH"
 exec /usr/bin/app2unit -t scope -c -x -s "$UI_SHELL_TEST_APP_SLICE" \
   -p "TimeoutStopSec=${test_cleanup_seconds}s" \
-  -u "$UI_SHELL_TEST_APP_UNIT" -- "$2"
+  -u "$UI_SHELL_TEST_APP_UNIT" -- "$desktop"

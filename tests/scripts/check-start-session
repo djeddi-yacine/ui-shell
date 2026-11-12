@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# scripts/start-session: shared lock, pending marker, settings validation, stamp-driven regeneration.
+set -euo pipefail
+fail() { printf 'Start session: %s\n' "$*" >&2; exit 1; }
+project=${test_project:-/project}
+scratch=$(mktemp -d "${XDG_CACHE_HOME:?}/start-session.XXXXXX")
+trap 'rm -rf -- "${scratch:?}"' EXIT
+export HOME=$scratch/home XDG_CONFIG_HOME=$scratch/config XDG_CACHE_HOME=$scratch/cache XDG_DATA_HOME=$scratch/data XDG_STATE_HOME=$scratch/state
+mkdir -p "$HOME" "$XDG_CONFIG_HOME/user-wm-shell" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$scratch/bin" "$XDG_DATA_HOME/ui-shell/releases"
+release=$XDG_DATA_HOME/ui-shell/releases/r1
+bash "$project/tools/scripts/stage-config" "$project" "$release" >/dev/null
+# A real release carries update/ (start-session sources its lib); staging does not.
+mkdir -p "$release/update" && cp -- "$project/update/lib" "$release/update/lib"
+# The user directory holds what an install seeds (settings, themes, profiles); the release holds the rest.
+for part in settings.ini themes profiles; do mv -- "$release/$part" "$XDG_CONFIG_HOME/user-wm-shell/$part"; done
+ln -s -- releases/r1 "$XDG_DATA_HOME/ui-shell/current"
+current=$XDG_DATA_HOME/ui-shell/current
+settings=$XDG_CONFIG_HOME/user-wm-shell/settings.ini
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" >"${START_SESSION_ARGS:?}"' >"$scratch/bin/start-hyprland"
+chmod +x "$scratch/bin/start-hyprland"
+export PATH=$scratch/bin:$PATH START_SESSION_ARGS=$scratch/hypr.args
+runtime=$XDG_CACHE_HOME/ui-shell/runtime
+start() { rm -f -- "$START_SESSION_ARGS"; bash "$current/scripts/start-session" 2>"$scratch/err"; }
+
+start || fail "first start failed: $(<"$scratch/err")"
+[[ $(<"$START_SESSION_ARGS") == $'--config\n'"$current/hypr/hyprland.lua" ]] || fail 'Hyprland was not started through current'
+[[ $(<"$runtime/RELEASE") == dev ]] || fail 'the runtime was not generated'
+jq -e --arg current "$current" '.paths.scripts == ($current + "/scripts") and .paths.shell == ($current + "/shell")' "$runtime/config.json" >/dev/null ||
+  fail 'generated paths do not stay under current'
+
+# Same stamp: nothing is regenerated.
+before=$(stat -c '%Y.%y' "$runtime/config.json")
+sleep 1
+start || fail "second start failed: $(<"$scratch/err")"
+[[ $(stat -c '%Y.%y' "$runtime/config.json") == "$before" ]] || fail 'an unchanged release regenerated the runtime'
+
+# A different release id regenerates before Hyprland starts.
+printf 'r2\n' >"$release/RELEASE"
+start || fail "start after a release change failed: $(<"$scratch/err")"
+[[ $(<"$runtime/RELEASE") == r2 ]] || fail 'a changed release did not regenerate the runtime'
+
+# An edited settings.ini regenerates too, without a release change.
+before=$(stat -c '%Y.%y' "$runtime/config.json"); sleep 1; touch -- "$settings"
+start || fail "start after a settings change failed: $(<"$scratch/err")"
+[[ $(stat -c '%Y.%y' "$runtime/config.json") != "$before" ]] || fail 'an edited settings.ini did not regenerate the runtime'
+
+# A pending marker refuses with exit 4 and never starts Hyprland.
+mkdir -p "$XDG_STATE_HOME/ui-shell/update"
+printf 'phase=started\n' >"$XDG_STATE_HOME/ui-shell/update/pending"
+code=0; start || code=$?
+[[ $code == 4 && ! -e $START_SESSION_ARGS && $(<"$scratch/err") == *update-ui-shell* ]] || fail "pending marker: exit $code"
+rm -f -- "$XDG_STATE_HOME/ui-shell/update/pending"
+
+# An update holding the lock refuses with exit 3.
+flock -x "$XDG_STATE_HOME/ui-shell/update/lock" sleep 5 & holder=$!
+sleep 0.5
+code=0; start || code=$?
+kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
+[[ $code == 3 && ! -e $START_SESSION_ARGS ]] || fail "held lock: exit $code"
+
+# Missing and invalid settings stop the start.
+cp -- "$settings" "$scratch/settings.good"
+printf '[wallpaper_folders]\ndefault = elsewhere\n' >>"$settings"
+code=0; start || code=$?
+[[ $code != 0 && ! -e $START_SESSION_ARGS ]] || fail 'a settings.ini that redefines a shipped folder was accepted'
+rm -f -- "$settings"
+code=0; start || code=$?
+[[ $code == 1 && ! -e $START_SESSION_ARGS && $(<"$scratch/err") == *settings.ini* ]] || fail "missing settings: exit $code"
+printf '%s\n' 'Start session passed: current-relative paths, stamp-driven regeneration, pending marker, held lock and settings validation.'

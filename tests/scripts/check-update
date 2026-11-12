@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# update/: build-release, check-release, process-guard and update/run (build and check modes) in a
+# private HOME and XDG roots. The activator, migrations and rollback have their own checks.
+set -euo pipefail
+fail() { printf 'Update: %s\n' "$*" >&2; exit 1; }
+project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+scratch=$(mktemp -d /tmp/ui-shell-update.XXXXXX)
+cleanup() {
+  local status=$?
+  trap - EXIT
+  [[ $scratch == /tmp/ui-shell-update.* ]] || exit 1
+  chmod -R u+w -- "$scratch" 2>/dev/null || true
+  rm -rf -- "$scratch"
+  exit "$status"
+}
+trap cleanup EXIT
+export HOME=$scratch/home XDG_CONFIG_HOME=$scratch/home/.config XDG_CACHE_HOME=$scratch/home/.cache
+export XDG_DATA_HOME=$scratch/home/.local/share XDG_STATE_HOME=$scratch/home/.local/state XDG_RUNTIME_DIR=$scratch/runtime
+# shellcheck disable=SC2174 # every listed directory is a leaf; the parents are private already
+mkdir -m 0700 -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+
+# The clone holds only what a release is built from, plus things it must leave out.
+clone=$scratch/clone
+mkdir -p "$clone/tools" "$clone/tests" "$clone/features" "$clone/brain" "$clone/refs"
+for part in update scripts shell hypr migrations default bundled-themes wallpapers; do cp -a -- "$project/$part" "$clone/$part"; done
+cp -- "$project/tools/manifest.ini" "$project/tools/settings.ini" "$clone/tools/"
+printf 'x\n' >"$clone/tests/leak" && printf 'x\n' >"$clone/features/leak" && printf 'x\n' >"$clone/brain/leak" && printf 'x\n' >"$clone/refs/leak"
+data=$XDG_DATA_HOME/ui-shell config=$XDG_CONFIG_HOME/user-wm-shell state=$XDG_STATE_HOME/ui-shell cache=$XDG_CACHE_HOME/ui-shell
+tag=v0.0.1-test
+run() {
+  local mode=$1 name=${2:-$tag}
+  env UI_SHELL_UPDATE_MODE="$mode" UI_SHELL_UPDATE_TAG="$name" UI_SHELL_UPDATE_CLONE="$clone" UI_SHELL_UPDATE_DATA="$data" \
+    UI_SHELL_UPDATE_CONFIG="$config" UI_SHELL_UPDATE_STATE="$state" UI_SHELL_UPDATE_CACHE="$cache" bash "$clone/update/run" 2>"$scratch/err"
+}
+code() { local status=0; "$@" || status=$?; printf '%s' "$status"; }
+tree_hash() { (cd -- "$1" && find . -printf '%p %y %m %s %l\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) | paste -sd' '; }
+
+# ---- build ----
+run build || fail "build failed: $(<"$scratch/err")"
+release=$data/releases/$tag
+[[ -d $release && ! -e $release.tmp ]] || fail 'the release directory is missing or a .tmp is left'
+[[ $(<"$release/RELEASE") == "$tag" ]] || fail 'RELEASE does not name the tag'
+for kept in update scripts shell hypr migrations default shipped wallpapers manifest.ini settings.baseline.ini SHA256SUMS; do
+  [[ -e $release/$kept ]] || fail "release lacks $kept"
+done
+for leaked in tests tools features brain refs; do [[ ! -e $release/$leaked ]] || fail "release holds $leaked"; done
+[[ -z $(find "$release" -type l -print -quit) ]] || fail 'release holds a symlink'
+[[ -z $(find "$release" -perm /222 -print -quit) ]] || fail 'release has a writable entry'
+if (printf x >"$release/scripts/injected") 2>/dev/null; then fail 'a file could be created in the release'; fi
+[[ -x $release/update/run && -x $release/scripts/start-session && -x $release/update/process-guard ]] || fail 'executable bits were lost'
+(cd -- "$release" && sha256sum --check --strict --quiet SHA256SUMS) || fail 'SHA256SUMS does not verify'
+! rg -q 'SHA256SUMS' "$release/SHA256SUMS" || fail 'SHA256SUMS lists itself'
+[[ $(sed 's/^[^ ]* [ *]//' "$release/SHA256SUMS" | LC_ALL=C sort -c 2>&1; echo $?) == 0 ]] || fail 'SHA256SUMS is not sorted'
+newest_source=$(find "$clone/shell" -type f -printf '%T@\n' | sort -n | tail -1)
+oldest_release=$(find "$release/shell" -type f -printf '%T@\n' | sort -n | head -1)
+awk -v a="$oldest_release" -v b="$newest_source" 'BEGIN { exit !(a >= b) }' || fail 'release files kept source mtimes'
+cmp -s "$clone/tools/manifest.ini" "$release/manifest.ini" || fail 'manifest.ini differs from the source'
+
+# ---- refusals of build ----
+[[ $(code run build) == 1 ]] || fail 'a second build of the same tag was not refused'
+[[ $(code run build 'bad/tag') == 2 && $(code run build '.hidden') == 2 && $(code run build 'x.tmp') == 2 ]] || fail 'an invalid tag was accepted'
+[[ $(code env -u UI_SHELL_UPDATE_CACHE UI_SHELL_UPDATE_MODE=check UI_SHELL_UPDATE_TAG="$tag" UI_SHELL_UPDATE_CLONE="$clone" UI_SHELL_UPDATE_DATA="$data" UI_SHELL_UPDATE_CONFIG="$config" UI_SHELL_UPDATE_STATE="$state" bash "$clone/update/run" 2>/dev/null) == 2 ]] || fail 'a missing variable was accepted'
+[[ $(code env UI_SHELL_UPDATE_MODE=check UI_SHELL_UPDATE_TAG="$tag" UI_SHELL_UPDATE_CLONE="$clone" UI_SHELL_UPDATE_DATA=relative UI_SHELL_UPDATE_CONFIG="$config" UI_SHELL_UPDATE_STATE="$state" UI_SHELL_UPDATE_CACHE="$cache" bash "$clone/update/run" 2>/dev/null) == 2 ]] || fail 'a relative path was accepted'
+[[ $(code env UI_SHELL_UPDATE_MODE=check UI_SHELL_UPDATE_TAG="$tag" UI_SHELL_UPDATE_CLONE="$clone" UI_SHELL_UPDATE_DATA="$data/../x" UI_SHELL_UPDATE_CONFIG="$config" UI_SHELL_UPDATE_STATE="$state" UI_SHELL_UPDATE_CACHE="$cache" bash "$clone/update/run" 2>/dev/null) == 2 ]] || fail 'a dot segment was accepted'
+# A symlink in the source stops the build and leaves no target.
+ln -s /etc/passwd "$clone/scripts/leaked-link"
+[[ $(code run build v0.0.2-link) == 1 && ! -e $data/releases/v0.0.2-link && ! -e $data/releases/v0.0.2-link.tmp ]] || fail 'a symlink in the source did not stop the build cleanly'
+rm -f -- "$clone/scripts/leaked-link"
+# A leftover partial build is replaced.
+mkdir -p "$data/releases/v0.0.3-partial.tmp/junk"
+run build v0.0.3-partial || fail "build over a leftover .tmp failed: $(<"$scratch/err")"
+[[ ! -e $data/releases/v0.0.3-partial.tmp && -f $data/releases/v0.0.3-partial/RELEASE ]] || fail 'the leftover .tmp survived'
+chmod -R u+w -- "$data/releases/v0.0.3-partial" && rm -rf -- "$data/releases/v0.0.3-partial"
+
+# ---- check (rehearsal) with user data ----
+mkdir -p "$config/lua" "$config/components"
+cat -- "$release/settings.baseline.ini" >"$config/settings.ini"
+cat -- "$release/hypr/default/monitors.lua" >"$config/lua/monitors.lua"
+before=$(tree_hash "$config")
+run check || fail "the rehearsal failed: $(<"$scratch/err")"
+[[ $(tree_hash "$config") == "$before" ]] || fail 'the rehearsal changed the user data'
+[[ ! -e $cache/.check-$tag ]] || fail 'the rehearsal copy was not removed'
+[[ -z $(find "$state" -type f -print -quit 2>/dev/null) ]] || fail 'the rehearsal wrote state'
+[[ $(tree_hash "$release") == "$(tree_hash "$release")" ]] || fail 'unstable hash'
+
+# The rehearsal catches a user file the release rejects.
+cp -- "$config/settings.ini" "$scratch/settings.good"
+printf '\n[paths]\nscripts = /tmp/evil\n' >>"$config/settings.ini"
+[[ $(code run check) == 1 ]] || fail 'a settings file redefining a shipped address was accepted'
+cp -- "$scratch/settings.good" "$config/settings.ini"
+
+# ---- check refuses a tampered release ----
+chmod u+w -- "$release/scripts" "$release/scripts/read-ini"
+printf '# tamper\n' >>"$release/scripts/read-ini"
+[[ $(code run check) == 1 ]] || fail 'a changed file passed the rehearsal'
+rg -q 'SHA256SUMS' "$scratch/err" || fail 'the tamper message does not name SHA256SUMS'
+sed -i '$d' "$release/scripts/read-ini"
+printf 'x\n' >"$release/scripts/extra-file"
+[[ $(code run check) == 1 ]] || fail 'an unlisted file passed the rehearsal'
+rg -q extra-file "$scratch/err" || fail "the unlisted-file message does not name the file: $(<"$scratch/err")"
+rm -f -- "$release/scripts/extra-file"
+chmod a-w -- "$release/scripts" "$release/scripts/read-ini"
+run check || fail "the restored release failed: $(<"$scratch/err")"
+
+# ---- check against an active release (step 9) ----
+ln -s -- "releases/$tag" "$data/current"
+run check || fail "the post check failed: $(<"$scratch/err")"
+[[ ! -e $cache/.check-$tag ]] || fail 'the post check made a rehearsal copy'
+rm -f -- "$data/current"
+
+# ---- process-guard ----
+guard=$release/update/process-guard
+fake=$scratch/proc
+mkdir -p "$fake"
+fake_process() { # pid name cwd [cmdline]
+  mkdir -p "$fake/$1/fd"
+  printf '%s\n' "$2" >"$fake/$1/comm"
+  ln -sfn "$3" "$fake/$1/cwd"
+  printf '%s\0' ${4:-$2} >"$fake/$1/cmdline"
+  : >"$fake/$1/maps"
+}
+guard_fake() { env UI_SHELL_UPDATE_TEST=1 UI_SHELL_GUARD_PROC="$fake" bash "$guard" "$data" 2>&1; }
+[[ -z $(guard_fake) ]] || fail 'an empty process table was not clear'
+fake_process 100 bash "$HOME"
+[[ -z $(guard_fake) ]] || fail 'an unrelated process was reported'
+fake_process 101 Hyprland "$HOME"
+out=$(guard_fake) && fail 'Hyprland was not reported'; [[ $out == *'101 Hyprland'* ]] || fail "Hyprland report: $out"
+rm -rf -- "$fake/101"
+fake_process 102 qs "$HOME"; fake_process 103 quickshell "$HOME"
+out=$(guard_fake) && fail 'qs and quickshell were not reported'; [[ $out == *'102 qs'* && $out == *'103 quickshell'* ]] || fail "qs report: $out"
+rm -rf -- "$fake/102" "$fake/103"
+fake_process 104 editor "$data/releases/$tag/scripts"
+out=$(guard_fake) && fail 'a process with cwd in the release tree was not reported'; [[ $out == *'104 editor'*'working directory'* ]] || fail "cwd report: $out"
+rm -rf -- "$fake/104"
+fake_process 105 viewer "$HOME"; ln -s -- "$data/releases/$tag/shell/shell.qml" "$fake/105/fd/3"
+out=$(guard_fake) && fail 'an open file in the release tree was not reported'; [[ $out == *'105 viewer'*'open file'* ]] || fail "fd report: $out"
+rm -rf -- "$fake/105"
+fake_process 106 mapper "$HOME"; printf '7f00-7f01 r--p 00000000 08:01 1 %s/releases/%s/lib.so\n' "$data" "$tag" >"$fake/106/maps"
+out=$(guard_fake) && fail 'a mapped file in the release tree was not reported'; [[ $out == *'106 mapper'*'mapped file'* ]] || fail "maps report: $out"
+rm -rf -- "$fake/106"
+# An entry with an unreadable name counts as in use; one with unreadable details only when its command line names the tree.
+fake_process 107 shy "$HOME"; chmod 000 "$fake/107/comm"
+if [[ ! -r $fake/107/comm ]]; then out=$(guard_fake) && fail 'an unreadable name was not reported'; [[ $out == *'107'* ]] || fail "name report: $out"; fi
+chmod 600 "$fake/107/comm"; rm -rf -- "$fake/107"
+fake_process 108 daemon "$HOME"; chmod 000 "$fake/108/fd"
+if [[ ! -r $fake/108/fd ]]; then [[ -z $(guard_fake) ]] || fail 'a daemon with an unreadable fd directory was reported'; fi
+chmod 700 "$fake/108/fd"; rm -rf -- "$fake/108"
+fake_process 109 daemon "$HOME" "daemon $data/releases/$tag/scripts/x"; chmod 000 "$fake/109/fd"
+if [[ ! -r $fake/109/fd ]]; then out=$(guard_fake) && fail 'an unreadable entry naming the release tree was not reported'; [[ $out == *'109 daemon'* ]] || fail "unreadable report: $out"; fi
+chmod 700 "$fake/109/fd"; rm -rf -- "$fake/109"
+# The fake table is ignored outside the test mode.
+[[ $(env -u UI_SHELL_UPDATE_TEST UI_SHELL_GUARD_PROC="$fake" bash "$guard" "$data" >/dev/null 2>&1; echo $?) =~ ^[01]$ ]] || fail 'the guard misbehaved on the real table'
+[[ $(code bash "$guard" 2>/dev/null) == 2 ]] || fail 'the guard accepted a call without arguments'
+# The real table: a process working inside the release tree is found, and gone when it exits.
+(cd -- "$release/scripts" && exec sleep 30) &
+holder=$!
+sleep 0.3
+out=$(bash "$guard" "$data") && fail 'a real process inside the release was not reported'
+[[ $out == *"$holder sleep"* ]] || fail "real report: $out"
+kill "$holder"; wait "$holder" 2>/dev/null || true
+out=$(bash "$guard" "$data" | rg -v 'Hyprland|session process' || true)
+[[ $out != *"$holder"* ]] || fail 'the stopped process is still reported'
+# The guard run from inside the release does not report itself.
+out=$(cd -- "$release/scripts" && bash "$guard" "$data" | rg -c " sleep| bash " || true)
+[[ ${out:-0} == 0 ]] || fail 'the guard reported itself'
+
+# ---- static ----
+for script in update/lib update/run update/build-release update/check-release update/process-guard; do bash -n "$project/$script" || fail "bash -n $script"; done
+printf '%s\n' 'Update checks passed: build, SHA256SUMS, read-only release, rehearsal, tamper refusal, process guard.'

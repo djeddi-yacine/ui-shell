@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Rehearse a built release against a scratch copy of the user data: check-release RELEASE_DIR SCRATCH_DIR.
+# RELEASE_DIR holds SHA256SUMS and manifest.ini; SCRATCH_DIR holds settings.ini and the user stores
+# (themes, profiles, lua, components) as the update would leave them. Everything generated goes under
+# SCRATCH_DIR/{cache,home}; nothing the running release reads is written.
+set -euo pipefail
+[[ $# == 2 ]] || { printf '%s\n' 'Usage: check-release RELEASE_DIR SCRATCH_DIR' >&2; exit 2; }
+release=$1 scratch=$2
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib"
+ui_valid_path "$release" && ui_valid_path "$scratch" || ui_die 2 'check-release needs absolute paths.'
+[[ -f $release/SHA256SUMS && -f $release/manifest.ini && -f $release/RELEASE && -f $scratch/settings.ini ]] || ui_die 1 'Release or scratch settings incomplete.'
+
+# Integrity: every listed file matches and no file is unlisted.
+(cd -- "$release" && sha256sum --check --strict --quiet SHA256SUMS) >&2 || ui_die 1 'SHA256SUMS does not verify.'
+unlisted=$(cd -- "$release" && LC_ALL=C comm -13 <(sed 's/^[^ ]* [ *]//' SHA256SUMS | LC_ALL=C sort) \
+  <(find . -type f ! -path ./SHA256SUMS -printf '%P\n' | LC_ALL=C sort))
+[[ -z $unlisted ]] || ui_die 1 "Files outside SHA256SUMS: ${unlisted%%$'\n'*}"
+
+home=$scratch/home
+mkdir -p -- "$home" "$scratch/cache" "$scratch/state" "$scratch/data"
+export HOME=$home XDG_CONFIG_HOME=$home/.config XDG_CACHE_HOME=$scratch/cache XDG_STATE_HOME=$scratch/state XDG_DATA_HOME=$scratch/data
+resolved=$scratch/resolved.json
+"$release/scripts/read-shell-config" "$release/manifest.ini" "$scratch/settings.ini" "$release/scripts/read-ini" >"$resolved" ||
+  ui_die 1 'read-shell-config rejects the release with the scratch settings.'
+runtime=$("$release/scripts/prepare-runtime" "$resolved") || ui_die 1 'prepare-runtime failed against the scratch data.'
+export UI_SHELL_RUNTIME=$runtime UI_SHELL_RUNTIME_LUA
+UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$runtime")
+(cd -- "$home" && Hyprland --verify-config --config "$release/hypr/hyprland.lua") >"$scratch/verify-config.log" 2>&1 ||
+  ui_die 1 "Hyprland --verify-config failed: $scratch/verify-config.log"

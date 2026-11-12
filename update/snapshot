@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Copy all of the user directory to STATE/snapshots/NAME (cp --reflink=auto) before a migration that
+# raises the shape beyond what the previous release reads, and restore it for a rollback.
+#   snapshot save NAME CONFIG STATE      refuses when free space on STATE is below the size of CONFIG
+#   snapshot restore NAME CONFIG STATE   replaces CONFIG by the snapshot; idempotent
+# Exit 0 done, 1 failed, 2 usage, 3 refused (no space, no snapshot).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib"
+[[ $# == 4 && $1 =~ ^(save|restore)$ && $2 =~ ^[0-9]+-[a-z0-9][a-z0-9-]*$ ]] || ui_die 2 'Usage: snapshot save|restore NAME CONFIG STATE'
+verb=$1 name=$2 config=$3 state=$4
+ui_valid_path "$config" && ui_valid_path "$state" || ui_die 2 'snapshot needs absolute paths.'
+snapshot=$state/snapshots/$name
+case $verb in
+  save)
+    [[ -d $config ]] || ui_die 1 "No user directory to snapshot: $config"
+    # A snapshot taken before the migration started is kept: a re-run must not capture a half-migrated tree.
+    [[ ! -d $snapshot ]] || exit 0
+    mkdir -p -- "$state/snapshots"
+    need=$(du -sb -- "$config" | cut -f1)
+    if [[ ${UI_SHELL_UPDATE_TEST-} == 1 && -n ${UI_SHELL_FREE_BYTES-} ]]; then free=$UI_SHELL_FREE_BYTES
+    else free=$(df -P -B1 -- "$state/snapshots" | awk 'NR == 2 { print $4 }'); fi
+    (( free >= need )) || ui_die 3 "Refused: a snapshot of $config needs $need bytes and $free are free."
+    rm -rf -- "$snapshot.partial"
+    cp -a --reflink=auto -- "$config" "$snapshot.partial"
+    sync -- "$snapshot.partial" 2>/dev/null || true
+    mv -T -- "$snapshot.partial" "$snapshot"
+    ;;
+  restore)
+    [[ -d $snapshot ]] || ui_die 3 "Refused: no snapshot $name."
+    rm -rf -- "${config:?}.restoring"
+    cp -a --reflink=auto -- "$snapshot" "$config.restoring"
+    [[ ! -e $config ]] || mv -T -- "$config" "$config.replaced"
+    mv -T -- "$config.restoring" "$config"
+    rm -rf -- "${config:?}.replaced"
+    ;;
+esac

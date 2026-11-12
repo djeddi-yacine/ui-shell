@@ -9,22 +9,25 @@ done
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 bash "$test_project/tools/scripts/stage-config" "$test_project" "$test_config_root"
 # The clipboard panel reads the package's own cliphist store; seed its config in the private home.
-bash "$test_project/tools/scripts/seed-cliphist-config" "$test_project" "$XDG_CONFIG_HOME"
+bash "$test_project/update/seed-cliphist-config" "$test_project" "$XDG_CONFIG_HOME"
 # uuctl asks through the shell's menu in this private home.
-bash "$test_project/tools/scripts/seed-menu-entry" "$test_project" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
+bash "$test_project/update/seed-menu-entry" "$test_project" "$test_config_root/scripts/menu" "$XDG_DATA_HOME"
 if [[ -n ${UI_SHELL_TEST_MANAGER_BUS-} ]]; then
   mkdir -p "$test_runtime/app2unit-bin"
   ln -s "$test_project/$test_app_runner" "$test_runtime/app2unit-bin/systemd-run"
   chmod +x "$test_project/$test_app_runner"
-  # Override only the staged user configuration. Production QML is untouched.
-  sed -i \
-    -e 's|readonly property string runnerExecutable: .*|readonly property string runnerExecutable: "/usr/bin/bash"|' \
-    -e "s|readonly property list<string> runnerArguments: .*|readonly property list<string> runnerArguments: [\"$test_project/$test_app_runner\"]|" \
-    -e 's|// Service mode hands off promptly; scope mode waits for the application.|// Test session adapter acknowledges a registered scope without waiting for app exit.|' \
-    "$test_config_root/quickshell/config/AppLauncher.qml"
+  # The shell runs the real `app2unit` from PATH; this session's PATH reaches a stand-in that hands the
+  # launch to the session-owned manager. Production QML and configuration are untouched.
+  mkdir -p "$test_runtime/launcher-bin"
+  ln -s "$test_project/$test_app_runner" "$test_runtime/launcher-bin/app2unit"
+  export PATH="$test_runtime/launcher-bin:$PATH"
+fi
+# The Phantomat library is an optional user setting; the plugin test mounts it, so opt in once.
+if [[ ${UI_SHELL_TEST_PHANTOMAT-} == 1 ]] && ! rg -q '^\[phantomat\]$' "$test_config_root/settings.ini"; then
+  printf '\n[phantomat]\nlibrary = plugins/spatialoverview.so\n' >>"$test_config_root/settings.ini"
 fi
 resolved=$(mktemp "$XDG_CACHE_HOME/.ui-shell-paths.XXXXXX")
-bash "$test_config_root/scripts/read-shell-config" "$test_config_root/config.ini" "$test_config_root/scripts/read-ini" >"$resolved"
+bash "$test_config_root/scripts/read-shell-config" "$test_config_root/manifest.ini" "$test_config_root/settings.ini" "$test_config_root/scripts/read-ini" >"$resolved"
 export UI_SHELL_RUNTIME
 if [[ $mode == import-themes ]]; then
   # Definitions only: no profile compilation or native bootstrap writes.
@@ -46,15 +49,17 @@ if [[ $mode == theme ]]; then
   recipe=$("$(jq -er '.commands.publishThemeBundle' "$resolved")" "$resolved" default "$XDG_CACHE_HOME/test-policy.json" "$XDG_CACHE_HOME/test-wallpaper.json")
   "$(jq -er '.commands.selectThemeProfile' "$resolved")" persist "$recipe" "$revision" ''
   rm -f -- "$recipe"
-  bash "$test_config_root/scripts/read-shell-config" "$test_config_root/config.ini" "$test_config_root/scripts/read-ini" >"$resolved"
+  bash "$test_config_root/scripts/read-shell-config" "$test_config_root/manifest.ini" "$test_config_root/settings.ini" "$test_config_root/scripts/read-ini" >"$resolved"
 fi
 UI_SHELL_RUNTIME=$(bash "$test_config_root/scripts/prepare-runtime" "$resolved")
 export UI_SHELL_RUNTIME_LUA
 UI_SHELL_RUNTIME_LUA=$(jq -r '.runtimeLua' "$UI_SHELL_RUNTIME")
 rm -f -- "$resolved"
-# Existing source-relative unit imports test the installed QML, not a second copy.
+# Existing source-relative unit imports test the generated tree Quickshell loads, not a second copy.
 mv -- "$test_project/shell" "$test_project/source-shell"
-ln -s -- "$test_config_root/quickshell" "$test_project/shell"
+ln -s -- "$(jq -er '.paths.quickshell' "$UI_SHELL_RUNTIME")" "$test_project/shell"
+# Tests that stage or copy the shipped QML again read it from here, never from the generated tree.
+export UI_SHELL_STAGE_SHELL=$test_project/source-shell
 
 case $mode in
   run|smoke|snapshot|theme|profiles|motion|launcher|notifications|apps|app-launch|app-close|phantomat|borders) exec dbus-run-session --config-file="$test_project/$test_dbus_config" -- bash "$test_project/tests/scripts/run-session" "$mode" ;;

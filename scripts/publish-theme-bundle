@@ -10,6 +10,7 @@ source=$(jq -er '.source | select(.=="wallpaper" or .=="file")' "$policy")
 root=$(jq -er '.configRoot' "$runtime")
 profiles=$(jq -er '.paths.profiles' "$runtime")
 themes=$(jq -er '.paths.themes' "$runtime")
+"$(dirname -- "$0")/ensure-user-profile" "$runtime" "$id"
 base="$profiles/$id"
 current=$base
 while [[ $current != "$root" ]]; do

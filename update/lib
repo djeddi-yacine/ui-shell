@@ -1,0 +1,155 @@
+# Shared by update/activator and update/run (sourced, never executed): one definition of the
+# pending marker and of the validated UI_SHELL_UPDATE_* environment, so they cannot disagree.
+
+ui_log() { printf '%s\n' "$*" >&2; }
+ui_die() { local code=$1; shift; printf '%s\n' "$*" >&2; exit "$code"; }
+
+# The user's configuration directory name under XDG_CONFIG_HOME (settings.ini, themes, profiles).
+ui_config_name=user-wm-shell
+
+# Version-sort filter: a pre-release suffix (`-rc1`) ranks below its release, as `~` does in dpkg.
+ui_version_sort() { sed 's/-/~/g' | sort -V | sed 's/~/-/g'; }
+
+# Phases in the order a marker passes through them; `migrating n/m` carries a counter after the name.
+ui_phases=(started built migrating activating checking rolling-back)
+
+# An absolute, single-line path without dot segments.
+ui_valid_path() {
+  local value=$1
+  [[ $value == /* && $value != *$'\n'* && $value != *$'\r'* && $value != *//* && $value != */ && $value != */./* && $value != */../* && $value != */. && $value != */.. ]]
+}
+
+# A tag names a directory: no separators, no leading dot or dash, no `.tmp` suffix.
+ui_valid_tag() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ && $1 != *.tmp && $1 != *..* ]]; }
+
+# Validate the four user-visible roots the updater works in (used by update/run and update/rollback).
+ui_load_directories() {
+  local name
+  for name in UI_SHELL_UPDATE_DATA UI_SHELL_UPDATE_CONFIG UI_SHELL_UPDATE_STATE UI_SHELL_UPDATE_CACHE; do
+    [[ -n ${!name-} ]] || ui_die 2 "$name is required."
+    ui_valid_path "${!name}" || ui_die 2 "$name must be an absolute single-line path without dot segments."
+  done
+}
+
+# Validate and export the environment the activator hands to update/run.
+ui_load_environment() {
+  local name value
+  for name in UI_SHELL_UPDATE_MODE UI_SHELL_UPDATE_TAG UI_SHELL_UPDATE_CLONE; do
+    value=${!name-}
+    [[ -n $value ]] || ui_die 2 "$name is required."
+  done
+  case $UI_SHELL_UPDATE_MODE in build|migrate|check) ;; *) ui_die 2 'UI_SHELL_UPDATE_MODE must be build, migrate or check.' ;; esac
+  ui_valid_tag "$UI_SHELL_UPDATE_TAG" || ui_die 2 "Invalid tag: $UI_SHELL_UPDATE_TAG"
+  ui_valid_path "$UI_SHELL_UPDATE_CLONE" || ui_die 2 'UI_SHELL_UPDATE_CLONE must be an absolute single-line path without dot segments.'
+  ui_load_directories
+}
+
+# Test-only fault injection: kill this process at a named point. Inert unless UI_SHELL_UPDATE_TEST=1.
+ui_crash_point() {
+  if [[ ${UI_SHELL_UPDATE_TEST-} == 1 && ${UI_SHELL_UPDATE_CRASH_AT-} == "$1" ]]; then kill -9 $$; fi
+  return 0
+}
+
+# The release a link such as `current` or `previous` names, as a tag; empty when the link is absent.
+ui_link_tag() {
+  local target
+  target=$(readlink -- "$1" 2>/dev/null) || return 0
+  target=${target##*/}
+  ui_valid_tag "$target" && printf '%s\n' "$target"
+  return 0
+}
+
+# Atomically point link `path` at the relative target `releases/<tag>`.
+ui_link_set() {
+  local path=$1 tag=$2
+  ln -s -- "releases/$tag" "$path.new"
+  mv -Tf -- "$path.new" "$path"
+}
+
+# The release's accepted shape range from its manifest: prints "MIN MAX".
+ui_manifest_reads() {
+  awk -F' *= *' '/^\[/ { in_header = ($0 == "[ui_shell]") } in_header && $1 == "reads_min" { lo = $2 } in_header && $1 == "reads_max" { hi = $2 } END { if (lo == "" || hi == "") exit 1; print lo, hi }' "$1"
+}
+
+# Highest `shape=` over the applied-migration markers in STATE/migrations; 0 when none.
+ui_current_shape() {
+  local directory=$1/migrations highest=0 value file
+  [[ -d $directory ]] || { printf '0\n'; return 0; }
+  for file in "$directory"/*; do
+    [[ -f $file ]] || continue
+    value=$(awk -F= '$1 == "shape" { print $2 }' "$file")
+    [[ $value =~ ^[0-9]+$ ]] && (( value > highest )) && highest=$value
+  done
+  printf '%s\n' "$highest"
+}
+
+# Print the activator at SOURCE_DIR (a checked-out update/) as one self-contained file: the single
+# `source "$here/lib"` line is replaced by lib itself, so the installed copy and the runner share one definition.
+ui_compose_activator() {
+  awk -v lib="$1/lib" '$0 == "source \"$here/lib\" # inline-lib" { while ((getline line < lib) > 0) print line; next } { print }' "$1/activator"
+}
+
+# Write stdin to `destination` atomically: temp file in the same directory, fsync, rename, fsync of the directory.
+ui_write_atomic() {
+  local destination=$1 directory temporary
+  directory=${destination%/*}
+  temporary=$(mktemp "$destination.XXXXXX")
+  if ! { cat >"$temporary" && sync -- "$temporary" && mv -f -- "$temporary" "$destination" && sync -- "$directory"; }; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
+# OpenPGP signer keys. Every call uses its own GnuPG home (never the user's keyring).
+# Import KEYFILE into HOME and print the primary fingerprint (40 uppercase hex). Fails unless the file
+# holds exactly one public primary key that is neither expired, revoked nor secret. Calling it twice
+# with the same HOME merges the two files (a revocation in either one is kept).
+ui_key_load() { # KEYFILE HOME
+  local file=$1 home=$2 listing
+  [[ -f $file && ! -L $file ]] || return 1
+  mkdir -p -m 700 -- "$home"
+  gpg --homedir "$home" --batch --no-tty --import -- "$file" >/dev/null 2>&1 || return 1
+  listing=$(gpg --homedir "$home" --batch --no-tty --with-colons --list-keys 2>/dev/null) || return 1
+  awk -F: '$1 == "pub" { n++; if ($2 ~ /^[erid]$/) bad = 1 }
+           $1 == "fpr" && n == 1 && !fingerprint { fingerprint = $10 }
+           END { if (n == 1 && !bad && fingerprint ~ /^[0-9A-F]{40}$/) print fingerprint; else exit 1 }' <<<"$listing"
+}
+# Succeeds when the key in HOME has a usable (not expired, not revoked) signing key or subkey.
+ui_key_signs() { # HOME
+  gpg --homedir "$1" --batch --no-tty --with-colons --list-keys 2>/dev/null |
+    awk -F: '($1 == "pub" || $1 == "sub") && $2 !~ /^[erid]$/ && tolower($12) ~ /s/ { found = 1 } END { exit !found }'
+}
+# Print FINGERPRINT written as the README shows it: ten groups of four, a wider gap in the middle.
+ui_key_format() {
+  local f=$1
+  printf '%s %s %s %s %s  %s %s %s %s %s\n' "${f:0:4}" "${f:4:4}" "${f:8:4}" "${f:12:4}" "${f:16:4}" "${f:20:4}" "${f:24:4}" "${f:28:4}" "${f:32:4}" "${f:36:4}"
+}
+# Print the pinned-key text for FINGERPRINT from HOME: one armored public key.
+ui_key_export() { # HOME FINGERPRINT
+  gpg --homedir "$1" --batch --no-tty --armor --export "$2" 2>/dev/null
+}
+
+# Marker: four key=value lines. Values are single-line and never contain a newline.
+ui_marker_write() {
+  local file=$1 target=$2 previous=$3 phase=$4 start=${5:-$(date +%s)}
+  ui_valid_tag "$target" && { [[ -z $previous ]] || ui_valid_tag "$previous"; } || ui_die 1 'Marker holds an invalid tag.'
+  [[ $phase =~ ^(started|built|migrating\ [0-9]+/[0-9]+|activating|checking|rolling-back)$ ]] || ui_die 1 "Invalid phase: $phase"
+  printf 'target=%s\nprevious=%s\nstart=%s\nphase=%s\n' "$target" "$previous" "$start" "$phase" | ui_write_atomic "$file"
+}
+
+# Read a marker into marker_target, marker_previous, marker_start and marker_phase without evaluating it.
+ui_marker_read() {
+  local file=$1 line key
+  marker_target='' marker_previous='' marker_start='' marker_phase=''
+  while IFS= read -r line || [[ -n $line ]]; do
+    key=${line%%=*}
+    case $key in
+      target) marker_target=${line#*=} ;;
+      previous) marker_previous=${line#*=} ;;
+      start) marker_start=${line#*=} ;;
+      phase) marker_phase=${line#*=} ;;
+      *) return 1 ;;
+    esac
+  done <"$file"
+  [[ -n $marker_target && -n $marker_start && -n $marker_phase ]]
+}

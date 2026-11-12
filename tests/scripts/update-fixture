@@ -1,0 +1,71 @@
+# Sourced by tests/scripts/check-activator and check-crash: a private HOME and XDG roots, throwaway
+# OpenPGP keys, a work tree and a local bare remote with tags v0.1.0 and v0.2.0 signed at run time. The caller
+# sets check_name first. Nothing signed is committed; the process guard reads a fake /proc.
+set -euo pipefail
+fail() { printf '%s: %s\n' "${check_name:-Update}" "$*" >&2; exit 1; }
+project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+scratch=$(mktemp -d /tmp/ui-shell-updatefx.XXXXXX)
+cleanup() {
+  local status=$?
+  trap - EXIT
+  gpgconf --homedir "$scratch/gpg" --kill all >/dev/null 2>&1 || true
+  [[ $scratch == /tmp/ui-shell-updatefx.* ]] || exit 1
+  chmod -R u+w -- "$scratch" 2>/dev/null || true
+  rm -rf -- "$scratch"
+  exit "$status"
+}
+trap cleanup EXIT
+export HOME=$scratch/home XDG_CONFIG_HOME=$scratch/home/.config XDG_CACHE_HOME=$scratch/home/.cache
+export XDG_DATA_HOME=$scratch/home/.local/share XDG_STATE_HOME=$scratch/home/.local/state XDG_RUNTIME_DIR=$scratch/runtime
+mkdir -m 0700 -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+data=$XDG_DATA_HOME/ui-shell config=$XDG_CONFIG_HOME/user-wm-shell state=$XDG_STATE_HOME/ui-shell cache=$XDG_CACHE_HOME/ui-shell
+bin=$HOME/.local/bin/update-ui-shell
+fakeproc=$scratch/proc
+mkdir -p "$fakeproc"
+export UI_SHELL_UPDATE_TEST=1 UI_SHELL_GUARD_PROC=$fakeproc UI_SHELL_UPDATE_REPO=file://$scratch/remote.git
+code() { local status=0; "$@" || status=$?; printf '%s' "$status"; }
+tree_hash() { (cd -- "$1" 2>/dev/null && find . -printf '%p %y %m %s %l\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) | paste -sd' '; }
+world() { printf '%s|%s|%s|%s' "$(tree_hash "$data")" "$(tree_hash "$config")" "$(tree_hash "$state")" "$(tree_hash "$cache")"; }
+update() { bash "$bin" "$@" 2>"$scratch/err" >"$scratch/out"; }
+
+# ---- fixture: keys, a work tree, a bare remote ----
+# Throwaway OpenPGP identities in a private GnuPG home (primary [C] + signing subkey), never the user's keyring.
+install -d -m 700 "$scratch/gpg"
+gpg_in() { gpg --homedir "$scratch/gpg" --batch --no-tty --pinentry-mode loopback --passphrase '' "$@" 2>/dev/null; }
+new_identity() { # NAME [faked system time and subkey lifetime]: prints the primary fingerprint
+  local name=$1 when=${2-} life=${3:-2y} fp
+  if [[ -n $when ]]; then gpg_in --faked-system-time "$when" --quick-generate-key "$name <$name@example.invalid>" ed25519 cert never
+  else gpg_in --quick-generate-key "$name <$name@example.invalid>" ed25519 cert never; fi
+  fp=$(gpg --homedir "$scratch/gpg" --with-colons --list-keys "$name@example.invalid" 2>/dev/null | awk -F: '$1=="fpr"{print $10; exit}')
+  if [[ -n $when ]]; then gpg_in --faked-system-time "$when" --quick-add-key "$fp" ed25519 sign "$life"
+  else gpg_in --quick-add-key "$fp" ed25519 sign "$life"; fi
+  printf '%s' "$fp"
+}
+sign_fp() { # PRIMARY: fingerprint of its newest signing subkey
+  gpg --homedir "$scratch/gpg" --with-colons --with-subkey-fingerprint --list-keys "$1" 2>/dev/null |
+    awk -F: '$1=="sub"{s=($12 ~ /s/)} $1=="fpr"&&s{f=$10} END{print f}'
+}
+key_fp=$(new_identity test)
+other_fp=$(new_identity other)
+gpg_in --armor --export "$key_fp" >"$scratch/key.asc"
+gpg_in --armor --export "$other_fp" >"$scratch/other.asc"
+[[ -s $scratch/key.asc && -s $scratch/other.asc ]] || fail 'could not create the test keys'
+work=$scratch/work
+mkdir -p "$work/tools"
+for part in update scripts shell hypr migrations default bundled-themes wallpapers; do cp -a -- "$project/$part" "$work/$part"; done
+cp -- "$project/tools/manifest.ini" "$project/tools/settings.ini" "$work/tools/"
+cp -- "$scratch/key.asc" "$work/update/signer.asc"
+git_in() { git -C "$work" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+git_in init -q -b main
+git_in add -A >/dev/null
+git_in commit -q -m base
+git init -q --bare "$scratch/remote.git"
+git_in remote add origin "$scratch/remote.git"
+# sign PRIMARY TAG signs with that identity's newest signing subkey (GNUPGHOME only for this call).
+sign() { GNUPGHOME=$scratch/gpg git_in -c gpg.format=openpgp -c "user.signingkey=$(sign_fp "$1")!" tag -s -m "$2" "$2"; }
+release_change() { printf '%s\n' "$1" >>"$work/migrations/README.md"; git_in add -A >/dev/null; git_in commit -q -m "$1"; }
+sign "$key_fp" v0.1.0
+release_change second
+sign "$key_fp" v0.2.0
+git_in push -q origin main --tags
+

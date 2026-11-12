@@ -23,17 +23,18 @@ ShellRoot {
         Notif.NotifPopupSurface {}
     }
 
-    // A real drawer stack, as the drawer builds it, for the "stack" phase.
+    // A real drawer stack, as the drawer builds it, for the "stack" phase (counts only; see stackHost).
     Theme.MonitorStyle {
         id: stackStyle
         palette: Theme.ActivePalettes.forOutput(Quickshell.screens[0].name)
     }
     Controls.InputState { id: stackInput; pointerActive: false }
-    FloatingWindow {
-        id: stackWindow
-        visible: true
-        implicitWidth: 420
-        implicitHeight: 600
+    // Not a window: nothing is drawn or mapped. The stack is only here to read its counts.
+    Item {
+        id: stackHost
+        visible: false
+        width: 420
+        height: 600
         Notif.NotifStack {
             id: stack
             width: parent.width

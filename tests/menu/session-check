@@ -9,7 +9,7 @@ client=/source/scripts/menu
 spool=$XDG_RUNTIME_DIR/ui-shell/menu
 fail=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (expected '$2', got '$3')"; fail=1; fi; }
-wait_for() { local i; for i in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+wait_for() { local _; for _ in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
 # check-runtime exports these in its own process; take them from the one nested instance.
 instances=$(hyprctl -j instances)
 export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
@@ -40,10 +40,10 @@ check "menu scrim mapped" 1 "$(grep -c "namespace: ui-shell-menu-scrim," <<<"$la
 grim /artifacts/menu.png 2>/artifacts/menu-grim.err; check "screenshot taken" yes "$([ -s /artifacts/menu.png ] && echo yes || echo no)"
 
 kill "$first"; wait "$first" 2>/dev/null
-for i in $(seq 40); do [ "$(requests)" -le 1 ] && break; sleep 0.1; done
+for _ in $(seq 40); do [ "$(requests)" -le 1 ] && break; sleep 0.1; done
 check "request of a killed client is dropped" 1 "$(requests)"
 kill "$second"; wait "$second" 2>/dev/null
-for i in $(seq 40); do [ "$(requests)" -eq 0 ] && break; sleep 0.1; done
+for _ in $(seq 40); do [ "$(requests)" -eq 0 ] && break; sleep 0.1; done
 check "spool empty again" 0 "$(requests)"
 sleep 1
 layers=$(hyprctl layers)

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Build one release directory from a clone: build-release CLONE TARGET TAG.
+# TARGET must not exist; it is made read-only last. The release holds no symlink, and every copied
+# file takes the build time (no source mtimes), so a compiled-QML cache keyed on size and mtime
+# cannot match a file of another release.
+set -euo pipefail
+[[ $# == 3 ]] || { printf '%s\n' 'Usage: build-release CLONE TARGET TAG' >&2; exit 2; }
+clone=$1 target=$2 tag=$3
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib"
+ui_valid_path "$clone" && ui_valid_path "$target" && ui_valid_tag "${tag%.tmp}" || ui_die 2 'build-release needs absolute paths and a valid tag.'
+[[ -d $clone && -f $clone/tools/manifest.ini && -f $clone/tools/settings.ini ]] || ui_die 1 "Not a source tree: $clone"
+[[ ! -e $target && ! -L $target && -d ${target%/*} ]] || ui_die 1 "Release target exists or has no parent: $target"
+
+parts=(update scripts shell hypr migrations default wallpapers)
+for part in "${parts[@]}" bundled-themes; do
+  [[ -d $clone/$part ]] || ui_die 1 "Source tree lacks $part/."
+  if [[ -n $(find "$clone/$part" -type l -print -quit) ]]; then ui_die 1 "A release holds no symlink: $part/ has one."; fi
+  if [[ -n $(find "$clone/$part" -name '*'$'\n''*' -print -quit) ]]; then ui_die 1 "A file name in $part/ contains a newline."; fi
+done
+
+mkdir -- "$target"
+for part in "${parts[@]}"; do
+  cp -R --preserve=mode --no-preserve=timestamps,ownership -- "$clone/$part" "$target/$part"
+done
+# bundled-themes/ is not shipped as is: it is assembled with the default into shipped/.
+"$(dirname -- "${BASH_SOURCE[0]}")/assemble-shipped" "$clone" "$target/shipped"
+# The manifest is the release's address book; its wallpaper entries are relative to it, so they
+# already name the release's own default/ and wallpapers/. The baseline settings seed a clean install.
+cp --no-preserve=timestamps,ownership -- "$clone/tools/manifest.ini" "$target/manifest.ini"
+cp --no-preserve=timestamps,ownership -- "$clone/tools/settings.ini" "$target/settings.baseline.ini"
+# Migration names, headers, executability and unique timestamps are validated before anything ships.
+check_state=$(mktemp -d)
+"$(dirname -- "${BASH_SOURCE[0]}")/run-migrations" --list "$target" "$check_state/config" "$check_state/state" '' >/dev/null || {
+  rm -rf -- "${check_state:?}"; rm -rf -- "${target:?}"; ui_die 1 'The migrations of this tree are invalid.'
+}
+rm -rf -- "${check_state:?}"
+printf '%s\n' "${tag%.tmp}" >"$target/RELEASE"
+# Sorted, relative, excluding itself, so `sha256sum -c` from the release root verifies it.
+(cd -- "$target" && find . -type f ! -path ./SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -- >SHA256SUMS)
+chmod -R a-w -- "$target"

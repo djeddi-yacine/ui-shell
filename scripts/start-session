@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# The only supported session start. Hyprland reads the generated runtime while it parses its
+# configuration, before any shell code could regenerate it, so this runs first: it takes the
+# lock shared with the updater, refuses while an update is pending, validates settings.ini,
+# regenerates the cache runtime when its RELEASE stamp differs, then execs Hyprland.
+set -euo pipefail
+# The release root is kept logical: started through `current`, every generated path stays under it.
+release=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+home=${HOME:?HOME required}
+config_home=${XDG_CONFIG_HOME-$home/.config}
+state_home=${XDG_STATE_HOME-$home/.local/state}
+# shellcheck source=../update/lib
+source "$release/update/lib"
+settings=$config_home/$ui_config_name/settings.ini
+update_state=$state_home/ui-shell/update
+[[ -f $release/manifest.ini && -f $release/RELEASE && -x $release/scripts/read-shell-config ]] || {
+  printf 'Not a release directory: %s\n' "$release" >&2; exit 1;
+}
+[[ -f $settings ]] || { printf 'Missing %s; run update-ui-shell to install.\n' "$settings" >&2; exit 1; }
+mkdir -p -- "$update_state"
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+(
+  flock -s -n 9 || { printf '%s\n' 'An update is running; start the session after it finishes.' >&2; exit 3; }
+  [[ ! -e $update_state/pending ]] || {
+    printf 'An update did not finish (%s). Run update-ui-shell --force or --rollback.\n' "$update_state/pending" >&2; exit 4;
+  }
+  "$release/scripts/read-shell-config" "$release/manifest.ini" "$settings" "$release/scripts/read-ini" >"$work/resolved.json"
+  runtime=$(jq -er '.paths.runtime' "$work/resolved.json")
+  if [[ ! -f $runtime/RELEASE || ! -f $runtime/config.lua || $(<"$runtime/RELEASE") != "$(<"$release/RELEASE")" || $settings -nt $runtime/RELEASE ]]; then
+    "$release/scripts/prepare-runtime" "$work/resolved.json" >/dev/null
+  fi
+) 9>"$update_state/lock"
+# The clipboard history needs its cliphist config; it is written only when absent and needs a
+# runtime directory, which the updater may have lacked on a TTY.
+if [[ -n ${XDG_RUNTIME_DIR-} && -x $release/update/seed-cliphist-config ]]; then
+  "$release/update/seed-cliphist-config" "$release" "$config_home" || printf '%s\n' 'Note: the cliphist config was not seeded.' >&2
+fi
+# exec skips the EXIT trap.
+rm -rf -- "$work"
+trap - EXIT
+exec start-hyprland --config "$release/hypr/hyprland.lua"

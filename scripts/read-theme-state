@@ -8,7 +8,8 @@ trap 'rm -rf -- "$work"' EXIT
 reader=$(jq -er '.commands.readIni' "$input")
 profile_reader=$(jq -er '.commands.readThemeProfile' "$input")
 "$profile_reader" "$(jq -er '.theme.profile' "$input")" "$(jq -er '.configRoot' "$input")" \
-  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$reader" >"$work/profile.json"
+  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$reader" \
+  "$(jq -er '.paths.shippedProfiles' "$input")" "$(jq -er '.paths.shippedThemes' "$input")" >"$work/profile.json"
 jq --slurpfile profile "$work/profile.json" '. + ($profile|first)' "$input" >"$work/runtime.json"
 runtime="$work/runtime.json"
 export UI_SHELL_RUNTIME="$runtime"
@@ -19,7 +20,9 @@ namespace=$(jq -er '.cacheNamespace' "$work/selections.json")
 renderer=$(jq -er '.commands.renderThemeColors' "$runtime")
 cache=$(jq -er '.commands.cacheWallpaperColors' "$runtime")
 jq -r '.recipeHash' "$runtime" >"$work/revision"
-sha256sum <"$(jq -er '.paths.hypr+"/user/monitors.lua"' "$runtime")" >>"$work/revision"
+policy=$(jq -er '.paths.userLua+"/monitors.lua"' "$runtime")
+[[ -f $policy ]] || policy=$(jq -er '.paths.hypr+"/default/monitors.lua"' "$runtime")
+sha256sum <"$policy" >>"$work/revision"
 if [[ $source == file ]]; then
   jq -e '.profileColors' "$runtime" >"$work/palettes.json"
   while IFS= read -r palette; do

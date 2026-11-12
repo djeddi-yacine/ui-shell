@@ -53,6 +53,7 @@ input=${1-}
 [[ $# -le 1 ]] || usage 'only one input is allowed'
 
 [[ -n $dir && $dir == /* ]] || usage '--dir must be an absolute path'
+# shellcheck disable=SC2174 # the cache directory is the only one created here
 mkdir -p -m 700 -- "$dir" 2>/dev/null || true
 [[ -d $dir && ! -L $dir && -O $dir ]] || json_fail bad-input "the cache directory is not usable: $dir"
 

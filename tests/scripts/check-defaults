@@ -25,24 +25,22 @@ expect_seed() {
 expect_seed "$default"
 [[ $(stat -c '%a' "$default/theme.ini") == 644 && $(stat -c '%a' "$default/profile.ini") == 644 ]] ||
   fail 'generated default INI files must be mode 0644'
-jq -e '.wallpaper_folders.default == "default"' <<<"$("$reader" "$project/tools/config.ini")" >/dev/null ||
-  fail 'config.ini must map the default folder ID to default/'
-lua - "$project/hypr/user/monitors.lua" <<'LUA'
+jq -e '.wallpaper_folders.default == "default"' <<<"$("$reader" "$project/tools/manifest.ini")" >/dev/null ||
+  fail 'manifest.ini must map the default folder ID to default/'
+lua - "$project/hypr/default/monitors.lua" <<'LUA'
 local policy = dofile(arg[1])
 assert(type(policy.overrides) == "table" and next(policy.overrides) == nil,
   "the shipped monitor policy must not contain host-specific overrides")
 LUA
 
-# Staging refreshes runtime code and the default seed but preserves the
-# user-owned monitor policy across restages.
+# Staging refreshes runtime code and the default seed. User Lua lives outside
+# the staged tree, so staging never creates or reads a hypr/user directory.
 stage=$scratch/stage
 bash "$project/tools/scripts/stage-config" "$project" "$stage" >/dev/null
-printf 'return { marker = "user policy" }\n' >"$stage/hypr/user/monitors.lua"
 printf 'stale\n' >"$stage/hypr/appearance.lua"
 printf 'stale\n' >"$stage/default/.stale"
 bash "$project/tools/scripts/stage-config" "$project" "$stage" >/dev/null
-[[ $(<"$stage/hypr/user/monitors.lua") == 'return { marker = "user policy" }' ]] ||
-  fail 'restaging rewrote the user monitor policy'
+[[ ! -e $stage/hypr/user ]] || fail 'staging created a hypr/user directory'
 cmp -- "$project/hypr/appearance.lua" "$stage/hypr/appearance.lua" ||
   fail 'restaging did not refresh runtime Hyprland files'
 expect_seed "$stage/default"
@@ -92,17 +90,18 @@ jq -e --arg install "$install" --arg key "$expected_key" --argjson theme "$theme
 # The active recipe path is constrained to Profiles, even though a Theme
 # definition also lives under the same installation root.
 mkdir -p -- "$scratch/home"
-cp -- "$project/tools/config.ini" "$install/config.ini"
+cp -- "$project/tools/manifest.ini" "$install/manifest.ini"
+cp -- "$project/tools/settings.ini" "$install/settings.ini"
 sed 's|profile = profiles/default/profile.ini|profile = themes/default/config.ini|' \
-  "$install/config.ini" >"$install/.cross-store.ini"
+  "$install/settings.ini" >"$install/.cross-store.ini"
 if env HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/home/.config" \
     XDG_CACHE_HOME="$scratch/home/.cache" XDG_DATA_HOME="$scratch/home/.local/share" \
     XDG_STATE_HOME="$scratch/home/.local/state" \
-    "$project/scripts/read-shell-config" "$install/.cross-store.ini" "$reader" \
+    "$project/scripts/read-shell-config" "$install/manifest.ini" "$install/.cross-store.ini" "$reader" \
     >"$scratch/cross-store.json" 2>/dev/null; then
-  fail 'manifest accepted a Theme definition as its active Profile'
+  fail 'settings accepted a Theme definition as its active Profile'
 fi
-[[ ! -s $scratch/cross-store.json ]] || fail 'invalid cross-store manifest emitted partial data'
+[[ ! -s $scratch/cross-store.json ]] || fail 'invalid cross-store settings emitted partial data'
 
 # Every staging replaces default/ cleanly but never rewrites user stores.
 printf 'stale\n' >"$install/default/.stale"

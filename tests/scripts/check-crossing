@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# update/crossing/0001-from-dev-stage against a fixture of the development layout (see update-fixture):
+# user files arrive byte-identical, the old tree is untouched, a second run is a no-op, and a clean
+# install writes the baseline. The shipped migration of the fixture is marked, never run.
+# shellcheck disable=SC2034 # read by the sourced fixture
+check_name=Crossing
+source "$(dirname -- "${BASH_SOURCE[0]}")/update-fixture"
+
+fingerprint=$key_fp
+printf '%s\n' "$fingerprint" | bash "$work/update/install-activator" >/dev/null 2>&1 || fail 'install-activator failed'
+printf '#!/usr/bin/env bash\n# shape: 1\nset -euo pipefail\nprintf ran >"$UI_SHELL_CONFIG_HOME/ran"\n' >"$work/migrations/1000-only-here"
+chmod +x "$work/migrations/1000-only-here"
+git_in add -A >/dev/null; git_in commit -q -m migration; sign "$key_fp" v0.3.0; git_in push -q origin main v0.3.0
+
+# ---- the development layout of today ----
+old=$XDG_CONFIG_HOME/ui-shell
+mkdir -p "$old/scripts" "$old/themes/mine" "$old/profiles/mine" "$old/components/launcher" "$old/hypr/user" "$old/wallpapers-mine"
+printf 'echo old\n' >"$old/scripts/marker"
+cp -- "$project/default/theme.ini" "$old/themes/mine/config.ini"
+sed 's/^id = default$/id = mine/' "$project/default/profile.ini" >"$old/profiles/mine/profile.ini"
+cp -- "$project/default/theme.ini" "$old/themes/default.config.ini" && mkdir -p "$old/themes/default" && mv "$old/themes/default.config.ini" "$old/themes/default/config.ini"
+printf '[x]\nk = 1\n' >"$old/components/launcher/settings.ini"
+{ cat -- "$project/hypr/default/monitors.lua"; printf -- '-- custom\n'; } >"$old/hypr/user/monitors.lua"
+cp -- "$project/hypr/default/canvas.lua" "$old/hypr/user/canvas.lua"
+printf '%s\n' '[ui_shell]' 'schema = 2' '[theme]' 'profile = profiles/mine/profile.ini' '[wallpaper_folders]' \
+  'default = default' 'project = wallpapers' "personal = $old/wallpapers-mine" '[phantomat]' 'library = plugins/spatialoverview.so' >"$old/config.ini"
+before=$(tree_hash "$old")
+
+update --tag v0.3.0 --dry-run || fail "dry-run over the old layout failed: $(<"$scratch/err")"
+[[ ! -e $config ]] || fail 'the dry-run created the user directory'
+update --tag v0.3.0 || fail "crossing update failed: $(<"$scratch/err")"
+[[ $(tree_hash "$old") == "$before" ]] || fail 'the old directory changed'
+for file in themes/mine/config.ini profiles/mine/profile.ini components/launcher/settings.ini; do
+  cmp -s -- "$old/$file" "$config/$file" || fail "$file did not arrive byte-identical"
+done
+cmp -s -- "$old/hypr/user/monitors.lua" "$config/lua/monitors.lua" || fail 'monitors.lua did not arrive in lua/'
+[[ ! -e $config/lua/canvas.lua ]] || fail "an unedited default crossed and would shadow later defaults"
+cmp -s -- <(printf '%s\n' '[theme]' 'profile = profiles/mine/profile.ini' '' '[wallpaper_folders]' "personal = $old/wallpapers-mine" '' '[phantomat]' "library = $old/plugins/spatialoverview.so") "$config/settings.ini" ||
+  fail "settings.ini is not the translation: $(<"$config/settings.ini")"
+[[ ! -e $config/ran && -f $state/migrations/1000-only-here ]] || fail 'the shipped migration ran instead of being marked'
+[[ $(readlink "$data/current") == releases/v0.3.0 && ! -e $state/update/pending ]] || fail 'the crossing update did not finish'
+after=$(tree_hash "$config")
+update --tag v0.3.0 || fail 'a second run failed'
+[[ $(tree_hash "$config") == "$after" && $(tree_hash "$old") == "$before" ]] || fail 'a second run was not a no-op'
+
+# ---- a clean install: no old directory ----
+hash_state=$(tree_hash "$state/migrations")
+chmod -R u+w -- "$data" "$config" "$state" "$cache"; rm -rf -- "${data:?}" "${config:?}" "${state:?}/migrations" "${state:?}/update" "${cache:?}" "${old:?}"
+update --tag v0.3.0 || fail "clean install failed: $(<"$scratch/err")"
+cmp -s -- "$data/releases/v0.3.0/settings.baseline.ini" "$config/settings.ini" || fail 'a clean install did not write the baseline'
+[[ ! -e $config/lua && ! -e $config/themes && ! -e $config/ran && $(tree_hash "$state/migrations") == "$hash_state" ]] || fail 'a clean install left wrong files or markers'
+
+printf 'Crossing checks passed: byte-identical copy, settings translation, old tree untouched, no-op repeat, baseline on a clean install, shipped migrations marked.\n'

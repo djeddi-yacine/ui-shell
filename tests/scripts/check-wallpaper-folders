@@ -12,7 +12,7 @@ source /project/tests/nested.conf
 [[ -n ${UI_SHELL_HOST_PROJECT-} && ! -e $UI_SHELL_HOST_PROJECT && ! -w /source/hypr ]] || fail 'host project must be absent and source read-only'
 original=${UI_SHELL_RUNTIME:?resolved runtime required}
 original_registry=$(jq -er '.bundle.wallpaperRegistry' "$original")
-original_manifest=$(jq -er '.configFile' "$original")
+original_manifest=$(jq -er '.settingsFile' "$original")
 original_profile=$(jq -er '.theme.profile' "$original")
 original_before=$(sha256sum -- "$original" "$original_manifest" "$original_profile" "$original_registry")
 scratch=$(mktemp -d "$XDG_CACHE_HOME/wallpaper-folders.XXXXXX")
@@ -57,24 +57,34 @@ sed -e 's/^id = default$/id = folders/' \
   -e 's/^path = default\.png$/path = same.png/' \
   -e "s/^palette_key = .*/palette_key = $first_key/" \
   "$package/profiles/default/profile.ini" >"$package/profiles/folders/profile.ini"
-manifest=$package/config.ini
+manifest=$package/manifest.ini
+settings_file=$package/settings.ini
 # Put second first: the default image's explicit folder must win over list order.
 awk '
   /^\[/ { section = $0 }
   section == "[paths]" && /^runtime =/ { print "runtime = runtime"; next }
+  section == "[paths]" && /^quickshell =/ { print "quickshell = runtime"; next }
+  section == "[bootstrap]" && /\/config\// { sub(/= .*\/config\//, "= runtime/config/") }
+  # The fixture defines every folder itself, so drop the shipped entries.
+  section == "[wallpaper_folders]" { if ($0 == section) print "[wallpaper_folders]"; next }
+  { print }
+' "$manifest" >"$scratch/manifest.ini"
+mv -- "$scratch/manifest.ini" "$manifest"
+awk '
+  /^\[/ { section = $0 }
   section == "[theme]" && /^profile =/ { print "profile = profiles/folders/profile.ini"; next }
   section == "[wallpaper_folders]" {
     if ($0 == section) print "[wallpaper_folders]\nsecond = second-link\nfirst = first"
     next
   }
   { print }
-' "$manifest" >"$scratch/manifest.ini"
-mv -- "$scratch/manifest.ini" "$manifest"
+' "$settings_file" >"$scratch/settings.ini"
+mv -- "$scratch/settings.ini" "$settings_file"
 resolver=$(jq -er '.commands.readShellConfig' "$original")
 reader=$(jq -er '.commands.readIni' "$original")
 prepare_runtime=$(jq -er '.commands.prepareRuntime' "$original")
 project_runtime() {
-  "$resolver" "$manifest" "$reader" >"$scratch/resolved.json"
+  "$resolver" "$manifest" "$settings_file" "$reader" >"$scratch/resolved.json"
   runtime=$("$prepare_runtime" "$scratch/resolved.json")
   runtime_lua=$(jq -er '.runtimeLua' "$runtime")
   registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
@@ -189,8 +199,8 @@ awk '
   folders && /^second =/ { second = $0; next }
   { print }
   folders && /^first =/ { print second }
-' "$manifest" >"$scratch/manifest.ini"
-mv -- "$scratch/manifest.ini" "$manifest"
+' "$settings_file" >"$scratch/settings.ini"
+mv -- "$scratch/settings.ini" "$settings_file"
 project_runtime
 check_catalog
 check_resolution "$second_root"
@@ -205,8 +215,8 @@ awk '
   /^\[/ { folders = ($0 == "[wallpaper_folders]") }
   folders && /^second =/ { print "second = relocated-second"; next }
   { print }
-' "$manifest" >"$scratch/manifest.ini"
-mv -- "$scratch/manifest.ini" "$manifest"
+' "$settings_file" >"$scratch/settings.ini"
+mv -- "$scratch/settings.ini" "$settings_file"
 project_runtime
 jq -e --slurpfile before "$scratch/before-move.json" '
   ($before | first) as $old |
@@ -221,7 +231,7 @@ check_resolution "$second_root"
 
 # Exercise the production native resolver with invalid default AND output entries.
 # Each fresh process uses a separate registry fixture; persisted state stays intact.
-native_before=$(sha256sum -- "$manifest" "$runtime" "$runtime_lua" "$registry" "$catalog")
+native_before=$(sha256sum -- "$settings_file" "$runtime" "$runtime_lua" "$registry" "$catalog")
 for selection in default monitor; do
   for invalid in missing empty unknown; do
     lua - "$runtime_lua" "$registry" "$scratch/invalid-registry.lua" "$target" "$selection" "$invalid" <<'LUA'
@@ -241,17 +251,17 @@ local ok, err = pcall(require, "wallpaper")
 assert(not ok, "native resolver substituted a folder for " .. arg[5] .. "/" .. arg[6])
 assert(tostring(err):lower():find("folder", 1, true), "native resolver failed for an unrelated reason: " .. tostring(err))
 LUA
-    [[ $(sha256sum -- "$manifest" "$runtime" "$runtime_lua" "$registry" "$catalog") == "$native_before" ]] || fail 'native rejection changed manifest/runtime/registry/catalog'
+    [[ $(sha256sum -- "$settings_file" "$runtime" "$runtime_lua" "$registry" "$catalog") == "$native_before" ]] || fail 'native rejection changed manifest/runtime/registry/catalog'
   done
 done
 
 reject_selection() {
   local before profile
   profile=$(jq -er '.theme.profile' "$runtime")
-  before=$(sha256sum -- "$manifest" "$profile" "$runtime" "$runtime_lua" "$registry" "$catalog")
+  before=$(sha256sum -- "$settings_file" "$profile" "$runtime" "$runtime_lua" "$registry" "$catalog")
   if bash "$select_wallpaper" "$@" >"$scratch/rejected.out" 2>"$scratch/rejected.err"; then fail 'invalid selection accepted'; fi
   [[ ! -s $scratch/rejected.out && -s $scratch/rejected.err ]] || fail 'selection failure needs an error and no success key'
-  [[ $(sha256sum -- "$manifest" "$profile" "$runtime" "$runtime_lua" "$registry" "$catalog") == "$before" ]] || fail 'rejected selection overwrote manifest/profile/runtime/registry/catalog'
+  [[ $(sha256sum -- "$settings_file" "$profile" "$runtime" "$runtime_lua" "$registry" "$catalog") == "$before" ]] || fail 'rejected selection overwrote manifest/profile/runtime/registry/catalog'
 }
 reject_selection "$target" unknown "$name"
 reject_selection
@@ -269,14 +279,14 @@ reject_selection 'bad"output' second "$name"
 reject_selection 'bad\output' second "$name"
 reject_selection $'bad\noutput' second "$name"
 reject_selection "$target" second missing.png
-cp -- "$manifest" "$scratch/good.ini"
+cp -- "$settings_file" "$scratch/good.ini"
 awk '
   /^\[/ { folders = ($0 == "[wallpaper_folders]") }
   folders && /^second =/ { print "second = missing-directory"; next }
   { print }
-' "$manifest" >"$scratch/manifest.ini"
-mv -- "$scratch/manifest.ini" "$manifest"
-"$resolver" "$manifest" "$reader" >"$scratch/missing-folder.json"
+' "$settings_file" >"$scratch/settings.ini"
+mv -- "$scratch/settings.ini" "$settings_file"
+"$resolver" "$manifest" "$settings_file" "$reader" >"$scratch/missing-folder.json"
 invalid_before=$(sha256sum -- "$runtime" "$runtime_lua" "$registry" "$catalog")
 if "$prepare_runtime" "$scratch/missing-folder.json" >"$scratch/rejected.out" 2>"$scratch/rejected.err"; then
   fail 'missing folder profile compilation accepted'
@@ -285,10 +295,10 @@ fi
   fail 'missing folder preparation changed the valid runtime generation'
 export UI_SHELL_RUNTIME=$scratch/missing-folder.json
 reject_selection "$target" second "$name"
-catalog_before=$(sha256sum -- "$manifest" "$runtime" "$registry" "$catalog")
+catalog_before=$(sha256sum -- "$settings_file" "$runtime" "$registry" "$catalog")
 if bash "$render_catalog" "$scratch/missing-folder.json" "$catalog" >"$scratch/rejected.out" 2>"$scratch/rejected.err"; then fail 'missing folder catalog accepted'; fi
-[[ -s $scratch/rejected.err && $(sha256sum -- "$manifest" "$runtime" "$registry" "$catalog") == "$catalog_before" ]] || fail 'missing folder changed manifest/runtime/registry/catalog or omitted error'
-cp -- "$scratch/good.ini" "$manifest"
+[[ -s $scratch/rejected.err && $(sha256sum -- "$settings_file" "$runtime" "$registry" "$catalog") == "$catalog_before" ]] || fail 'missing folder changed manifest/runtime/registry/catalog or omitted error'
+cp -- "$scratch/good.ini" "$settings_file"
 project_runtime
 [[ $(sha256sum -- "$baseline_registry") == "$baseline_before" ]] || fail 'selection rewrote the baseline bundle registry'
 [[ $(sha256sum -- "$original" "$original_manifest" "$original_profile" "$original_registry") == "$original_before" ]] || fail 'isolated folder test changed installed config/profile/registry'

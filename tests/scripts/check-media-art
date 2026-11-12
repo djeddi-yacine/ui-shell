@@ -146,7 +146,7 @@ EXPECT=too-large
 FAKE_MODE=large expect_error art fetch --max-bytes 1000000 https://x.test/big
 EXPECT=bad-input
 FAKE_MODE=html expect_error art fetch --max-bytes 1000000 https://x.test/page
-EXPECT=tool-failed
+EXPECT='tool-failed'
 FAKE_MODE=fail expect_error art fetch --max-bytes 1000000 https://x.test/down
 [[ $(field detail) == *connect* ]] || fail 'the failure detail must carry the tool message'
 FAKE_MODE=empty expect_error art fetch --max-bytes 1000000 https://x.test/empty
@@ -163,7 +163,7 @@ expect_ok art shrink --tool ffmpeg --size 128 "$png"
 [[ $(calls ffmpeg) == 1 ]] || fail 'ffmpeg was not used'
 rejects art shrink --tool magick --size 128 "$png"
 rejects art shrink --tool vips "$png"
-EXPECT=tool-failed
+EXPECT='tool-failed'
 FAKE_MODE=fail expect_error art shrink --tool vips --size 64 "$png"
 FAKE_MODE=fail expect_error art shrink --tool ffmpeg --size 64 "$png"
 FAKE_MODE=nothing expect_error art shrink --tool vips --size 32 "$png"
@@ -206,7 +206,7 @@ chmod +x "$fake/vips"
 
 # --- blurhash
 FAKE_MODE=ok expect_ok art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 32 "$png"
-EXPECT=tool-failed
+EXPECT='tool-failed'
 FAKE_MODE=badhash expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 33 "$png"
 FAKE_MODE=nohash expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 34 "$png"
 FAKE_MODE=fail expect_error art blurhash --encoder blurhash_encoder --decoder blurhash_decoder --components 4,3 --size 35 "$png"

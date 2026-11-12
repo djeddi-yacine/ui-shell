@@ -61,7 +61,7 @@ return {
   },
 
   -- Opt-in native plugin. Canvas replaces workspace/layout/group controls;
-  -- its editable presentation lives in user/canvas.lua.
+  -- its editable presentation lives in default/canvas.lua (override: the user Lua directory).
   phantomat = {
     enabled = false,
     mode = "canvas", -- Canvas config is ready before the toggle bind.

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# The crossing: first creation of the user directory, from the development layout when it exists,
+# otherwise from the shipped baseline (a clean install). Frozen: it handles shape 1 only.
+#   0001-from-dev-stage RELEASE CONFIG STATE OLD_DIR
+# With OLD_DIR/config.ini and OLD_DIR/scripts it copies themes/, profiles/, components/ and
+# hypr/user/*.lua (to lua/) once, and translates config.ini into settings.ini. The old directory
+# is only read. settings.ini is written last, so an interrupted run repeats; once it exists the
+# script does nothing. Every migration shipped in the release then gets a marker without running.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$here/lib"
+[[ $# == 4 ]] && ui_valid_path "$1" && ui_valid_path "$2" && ui_valid_path "$3" && ui_valid_path "$4" ||
+  ui_die 2 'Usage: 0001-from-dev-stage RELEASE CONFIG STATE OLD_DIR (absolute paths)'
+release=$1 config=$2 state=$3 old=$4
+[[ ! -e $config/settings.ini ]] || exit 0
+mkdir -p -- "$config"
+settings=$(mktemp "$config/.settings.XXXXXX")
+trap 'rm -f -- "$settings"' EXIT
+if [[ -f $old/config.ini && -d $old/scripts ]]; then
+  ui_log "Crossing from the development layout $old (it is not changed)."
+  for name in themes profiles components; do
+    [[ ! -d $old/$name ]] || cp -a --no-clobber -- "$old/$name" "$config/"
+  done
+  # A file identical to the shipped default is unedited: copying it would shadow later defaults.
+  for file in "$old"/hypr/user/*.lua; do
+    [[ -f $file ]] || continue
+    ! cmp -s -- "$file" "$release/hypr/default/${file##*/}" || continue
+    mkdir -p -- "$config/lua"
+    cp -a --no-clobber -- "$file" "$config/lua/"
+  done
+  # Only user choices cross: the theme profile, extra wallpaper folders and the Phantomat library.
+  # A relative path was relative to the old directory; settings.ini lives elsewhere, so it is made absolute.
+  "$release/scripts/read-ini" "$old/config.ini" | jq -r --arg old "$old" '
+    def abs: if startswith("/") or startswith("~") then . else "\($old)/\(.)" end;
+    def line: "\(.key) = \(.value | abs)";
+    ([ "[theme]", "profile = \(.theme.profile // "profiles/default/profile.ini")", "" ]
+     + [ "[wallpaper_folders]" ]
+     + [ (.wallpaper_folders // {}) | to_entries[] | select(.key != "default" and .key != "project") | line ]
+     + (if .phantomat.library then [ "", "[phantomat]", "library = \(.phantomat.library | abs)" ] else [] end))[]' >"$settings"
+else
+  cat -- "$release/settings.baseline.ini" >"$settings"
+fi
+chmod 0644 -- "$settings"
+mv -T -- "$settings" "$config/settings.ini"
+"$here/run-migrations" --baseline "$release" "$config" "$state" ''

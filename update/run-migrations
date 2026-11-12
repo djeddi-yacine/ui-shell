@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Apply the migrations of a release that have no marker yet, in timestamp order.
+#   run-migrations [--list|--baseline] RELEASE CONFIG STATE PREVIOUS_READS_MAX [PENDING_FILE]
+# PREVIOUS_READS_MAX is the highest shape the previously active release reads, or empty when there
+# is none (a clean install): a migration whose shape exceeds it is snapshotted first.
+# --baseline marks every pending migration without running it. With PENDING_FILE the phase `migrating n/m` is written before each migration. --list only prints
+# `name shape` for each pending migration. Markers: STATE/migrations/NAME with checksum= and shape=.
+# Exit 0 done, 1 stopped (phase marker left), 2 usage.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib"
+list=0 baseline=0
+[[ ${1-} != --list ]] || { list=1; shift; }
+[[ ${1-} != --baseline ]] || { baseline=1; shift; }
+[[ $# == 4 || $# == 5 ]] || ui_die 2 'Usage: run-migrations [--list] RELEASE CONFIG STATE PREVIOUS_READS_MAX [PENDING_FILE]'
+release=$1 config=$2 state=$3 previous_max=$4 pending=${5-}
+ui_valid_path "$release" && ui_valid_path "$config" && ui_valid_path "$state" || ui_die 2 'run-migrations needs absolute paths.'
+[[ -z $previous_max || $previous_max =~ ^[1-9][0-9]*$ ]] || ui_die 2 'PREVIOUS_READS_MAX must be a positive integer or empty.'
+scripts=$release/migrations markers=$state/migrations
+mkdir -p -- "$markers"
+
+name_pattern='^[0-9]+-[a-z0-9][a-z0-9-]*$'
+declare -A shape_of checksum_of
+names=()
+seen_stamps=' '
+while IFS= read -r file; do
+  name=${file##*/}
+  [[ $name =~ $name_pattern ]] || continue
+  [[ -f $file && -x $file ]] || ui_die 1 "Migration $name is not an executable regular file."
+  stamp=${name%%-*}
+  [[ $seen_stamps != *" $stamp "* ]] || ui_die 1 "Two migrations share the timestamp $stamp."
+  seen_stamps+="$stamp "
+  header=$(head -n 10 -- "$file" | sed -n 's/^# shape: \([1-9][0-9]*\)$/\1/p' | head -n 1)
+  [[ -n $header ]] || ui_die 1 "Migration $name has no '# shape: N' header."
+  shape_of[$name]=$header
+  checksum_of[$name]=$(sha256sum -- "$file" | cut -d' ' -f1)
+  names+=("$name")
+done < <(find "$scripts" -mindepth 1 -maxdepth 1 -print 2>/dev/null | LC_ALL=C sort)
+# Timestamp order, numerically.
+((${#names[@]})) && mapfile -t names < <(printf '%s\n' "${names[@]}" | sort -t- -k1,1n)
+
+# Markers against scripts: a marker without a script is reported and kept; a changed script stops.
+highest_applied=0
+while IFS= read -r marker; do
+  [[ -n $marker ]] || continue
+  name=${marker##*/}
+  (( 10#${name%%-*} <= highest_applied )) || highest_applied=$((10#${name%%-*}))
+  if [[ -z ${shape_of[$name]-} ]]; then
+    ui_log "Note: applied migration $name is not in this release; its marker is kept."
+    continue
+  fi
+  recorded=$(awk -F= '$1 == "checksum" { print $2 }' "$marker")
+  [[ $recorded == "${checksum_of[$name]}" ]] || ui_die 1 "Migration $name changed after it was applied. Fix a mistake with a new migration."
+done < <(find "$markers" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+
+todo=()
+for name in "${names[@]}"; do
+  [[ -f $markers/$name ]] && continue
+  (( 10#${name%%-*} > highest_applied )) || ui_die 1 "Migration $name is older than an applied one (out of order); add a new migration instead."
+  todo+=("$name")
+done
+
+if (( list )); then
+  for name in "${todo[@]}"; do printf '%s %s\n' "$name" "${shape_of[$name]}"; done
+  exit 0
+fi
+
+if (( baseline )); then
+  # A crossing or clean install writes the current shape directly: mark, never run.
+  for name in "${todo[@]}"; do
+    printf 'checksum=%s\nshape=%s\n' "${checksum_of[$name]}" "${shape_of[$name]}" | ui_write_atomic "$markers/$name"
+  done
+  exit 0
+fi
+
+count=${#todo[@]} index=0
+for name in "${todo[@]}"; do
+  index=$((index + 1))
+  if [[ -n $pending ]]; then
+    ui_marker_read "$pending" || ui_die 1 "Unreadable pending marker: $pending"
+    ui_marker_write "$pending" "$marker_target" "$marker_previous" "migrating $index/$count" "$marker_start"
+  fi
+  ui_crash_point migrating
+  if [[ -n $previous_max ]] && (( ${shape_of[$name]} > previous_max )); then
+    "$here/snapshot" save "$name" "$config" "$state" || ui_die 1 "Migration $name needs a snapshot and none could be made."
+  fi
+  ui_log "Migrating: $name (shape ${shape_of[$name]})"
+  (cd / && UI_SHELL_CONFIG_HOME=$config UI_SHELL_STATE_HOME=$state UI_SHELL_RELEASE=$release UI_SHELL_DRY_RUN=0 "$scripts/$name") ||
+    ui_die 1 "Migration $name failed. The marker stays."
+  ui_crash_point migrated
+  printf 'checksum=%s\nshape=%s\n' "${checksum_of[$name]}" "${shape_of[$name]}" | ui_write_atomic "$markers/$name"
+done

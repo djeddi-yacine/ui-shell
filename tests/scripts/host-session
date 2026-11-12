@@ -19,6 +19,7 @@ if running=$(pgrep -af '^(qs|quickshell) ' | rg -i 'ui-shell|--path' | head -n 1
 fi
 
 state=$project_root/.test-state/host
+# shellcheck disable=SC2174 # every listed directory is a leaf; the parents are private already
 mkdir -p -m 0700 -- "$state"/{config,cache,data,state,videos,pictures}
 config=$state/config
 # Recordings and screenshots follow the user directories; point them at the private state.
@@ -45,9 +46,9 @@ bwrap "${args[@]}" -- bash -c '
   bash "$root/tools/scripts/stage-config" "$root" "$dest"
   # The clipboard panel reads the cliphist store named by the (private) cliphist config; seed it
   # and, when no copy watcher runs for this user, run one for the length of this session.
-  bash "$root/tools/scripts/seed-cliphist-config" "$root" "$XDG_CONFIG_HOME"
+  bash "$root/update/seed-cliphist-config" "$root" "$XDG_CONFIG_HOME"
   # uuctl asks through the menu of this shell, in this private home.
-  bash "$root/tools/scripts/seed-menu-entry" "$root" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
+  bash "$root/update/seed-menu-entry" "$root" "$dest/scripts/menu" "$XDG_DATA_HOME"
   watchers=()
   if ! pgrep -u "$(id -u)" -f -- "^([^ ]*/)?wl-paste .*--watch .*cliphist .*store" >/dev/null; then
     wl-paste --type text --watch cliphist store & watchers+=($!)
@@ -55,7 +56,7 @@ bwrap "${args[@]}" -- bash -c '
   fi
   trap "kill \"\${watchers[@]}\" 2>/dev/null || true" EXIT
   resolved=$(mktemp "$XDG_CACHE_HOME/.ui-shell-paths.XXXXXX")
-  bash "$dest/scripts/read-shell-config" "$dest/config.ini" "$dest/scripts/read-ini" >"$resolved"
+  bash "$dest/scripts/read-shell-config" "$dest/manifest.ini" "$dest/settings.ini" "$dest/scripts/read-ini" >"$resolved"
   export UI_SHELL_RUNTIME
   UI_SHELL_RUNTIME=$(bash "$dest/scripts/prepare-runtime" "$resolved")
   rm -f -- "$resolved"

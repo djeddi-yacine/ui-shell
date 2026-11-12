@@ -110,4 +110,11 @@ wait_for recording; sleep 2; "$script" stop; wait_for finished
 acodec=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$("$script" status | jq -r .output)")
 [[ $acodec == aac ]] || fail "expected aac audio, got '$acodec'"
 echo "   ok: $acodec"
+# The real recorder with no Wayland session fails with a readable message (needs the real binary,
+# so it belongs here and not in the deterministic fake-recorder suite).
+echo "== no Wayland session"
+env -u WAYLAND_DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE "$script" start "monitor:$monitor" --desktop-audio no
+wait_for failed
+"$script" status | jq -r .message | grep -qi 'wayland' || fail "the recorder's error did not reach the state: $("$script" status | jq -r .message)"
+echo "   ok: $("$script" status | jq -r .message)"
 echo 'live recording ok'

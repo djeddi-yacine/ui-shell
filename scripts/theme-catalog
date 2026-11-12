@@ -14,29 +14,36 @@ def records(directory, filename):
                 yield entry.path
 
 
-def catalog(runtime):
-    profiles = pathlib.Path(runtime["paths"]["profiles"])
-    themes = pathlib.Path(runtime["paths"]["themes"])
-    saved = []
-    with os.scandir(profiles) as entries:
-        for entry in entries:
-            if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", entry.name) or not entry.is_dir(follow_symlinks=False):
-                continue
-            candidates = list(records(entry.path, "profile.ini"))
-            if candidates:
-                path = candidates[0]
-                saved.append({"id": entry.name,
-                              "label": " ".join(part[:1].upper() + part[1:] for part in entry.name.split("-")),
-                              "path": path})
+def scan(directory, filename, seen, optional=False):
+    """Entries of one store, skipping ids an earlier (user) store already supplied."""
+    found = []
+    try:
+        entries = list(os.scandir(directory))
+    except FileNotFoundError:
+        if optional:
+            return found
+        raise
+    for entry in entries:
+        if entry.name in seen or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", entry.name) \
+                or not entry.is_dir(follow_symlinks=False):
+            continue
+        for path in records(entry.path, filename):
+            seen.add(entry.name)
+            found.append({"id": entry.name,
+                          "label": " ".join(part[:1].upper() + part[1:] for part in entry.name.split("-")),
+                          "path": path})
+            break
+    return found
 
-    palettes = []
-    with os.scandir(themes) as entries:
-        for entry in entries:
-            if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", entry.name) and entry.is_dir(follow_symlinks=False):
-                for path in records(entry.path, "config.ini"):
-                    palettes.append({"id": entry.name,
-                                     "label": " ".join(part[:1].upper() + part[1:] for part in entry.name.split("-")),
-                                     "path": path})
+
+def catalog(runtime):
+    paths = runtime["paths"]
+    # The user store comes first and wins; the shipped store is a read-only second search root.
+    saved, palettes, seen_profiles, seen_themes = [], [], set(), set()
+    for key in ("profiles", "shippedProfiles"):
+        saved += scan(paths[key], "profile.ini", seen_profiles, key.startswith("shipped"))
+    for key in ("themes", "shippedThemes"):
+        palettes += scan(paths[key], "config.ini", seen_themes, key.startswith("shipped"))
     return {"profiles": sorted(saved, key=lambda item: item["id"]),
             "palettes": sorted(palettes, key=lambda item: item["id"])}
 

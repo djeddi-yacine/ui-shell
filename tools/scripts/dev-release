@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Development only: build a release from the working tree into BUILD_DIR/release/dev (read-only,
+# no updater involved), and with --check rehearse it against a scratch copy of a clean user directory.
+#   dev-release SOURCE_ROOT BUILD_DIR [--check]
+set -euo pipefail
+[[ $# == 2 || $# == 3 && ${3-} == --check ]] || { printf '%s\n' 'Usage: dev-release SOURCE_ROOT BUILD_DIR [--check]' >&2; exit 2; }
+source_root=$(realpath -e -- "$1")
+build=$(realpath -m -- "$2")
+[[ $build == "$source_root"/* ]] || { printf '%s\n' 'BUILD_DIR must be inside SOURCE_ROOT.' >&2; exit 2; }
+target=$build/release/dev
+mkdir -p -- "$build/release"
+if [[ -d $target ]]; then
+  chmod -R u+w -- "$target"
+  rm -rf -- "${target:?}"
+fi
+bash "$source_root/update/build-release" "$source_root" "$target" dev
+[[ ${3-} == --check ]] || exit 0
+scratch=$(mktemp -d "$build/.check-update.XXXXXX")
+trap 'chmod -R u+w -- "$scratch"; rm -rf -- "${scratch:?}"' EXIT
+cp -- "$target/settings.baseline.ini" "$scratch/settings.ini"
+bash "$target/update/check-release" "$target" "$scratch"

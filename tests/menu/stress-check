@@ -97,7 +97,6 @@ done
 
 # --- malformed request directories: each must be removed, none may map the card -----------------
 mk() { mkdir -m 700 -- "$spool/$1"; }
-good_name=$(date +%s%N)-$$
 mk "not-a-request-name"
 mk "123-456";                      printf 'not json' > "$spool/123-456/meta";  printf 'a\n' > "$spool/123-456/items"
 mk "124-456";                                                                  printf 'a\n' > "$spool/124-456/items"

@@ -1,4 +1,4 @@
-local settings = require("user.monitors")
+local settings = require("userlua").load("monitors")
 
 local default = assert(settings.default, "Monitors: explicit default settings are required")
 assert(default.output == "", "Monitors: the default must use the native all-output target")

@@ -67,7 +67,7 @@ This list records approved scope; it does not claim that every feature is shippe
 
 ## Composition and configuration
 
-- standard XDG runtime layout with explicit paths and command roles — `$XDG_CONFIG_HOME/ui-shell/config.ini` and generated native QML/Lua projections
+- standard XDG runtime layout with explicit paths and command roles — `$XDG_CONFIG_HOME/ui-shell/{manifest,settings}.ini` and generated native QML/Lua projections
 - declarative module enablement — Quickshell QML and shell configuration
 - configurable bar composition — Quickshell QML
 - per-monitor overrides — shell configuration

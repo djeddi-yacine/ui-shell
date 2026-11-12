@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Crash injection: UI_SHELL_UPDATE_CRASH_AT kills the updater at each phase point (read only when
+# UI_SHELL_UPDATE_TEST=1). The next run must refuse with 4 and the right text, and --force or
+# --rollback must end consistent without ever deleting what current or previous resolves to.
+# shellcheck disable=SC2034 # read by the sourced fixture
+check_name=Crash
+source "$(dirname -- "${BASH_SOURCE[0]}")/update-fixture"
+
+fingerprint=$key_fp
+printf '%s\n' "$fingerprint" | bash "$work/update/install-activator" >/dev/null 2>&1 || fail 'could not install the activator'
+update --tag v0.1.0 || fail "baseline install failed: $(<"$scratch/err")"
+base=$scratch/base
+mkdir -p "$base"
+snapshot() { for d in data config state cache; do cp -a -- "${!d}" "$base/$d"; done; }
+restore() {
+  for d in data config state cache; do
+    chmod -R u+w -- "${!d}" 2>/dev/null || true
+    rm -rf -- "${!d:?}"
+    cp -a -- "$base/$d" "${!d}"
+  done
+}
+snapshot
+survives() { [[ -f $data/releases/v0.1.0/SHA256SUMS ]] || fail "$1: the previous release directory is gone"; }
+
+# Killed at each point of an update to v0.2.0.
+for point in started built activating renamed checking; do
+  restore
+  status=0; UI_SHELL_UPDATE_CRASH_AT=$point update --tag v0.2.0 || status=$?
+  [[ $status == 137 ]] || fail "$point: the crash was not injected (status $status)"
+  [[ -f $state/update/pending ]] || fail "$point: no pending marker"
+  survives "$point"
+  expected=$point; [[ $point == renamed ]] && expected=activating
+  rg -q "^phase=$expected\$" "$state/update/pending" || fail "$point: marker holds the wrong phase: $(<"$state/update/pending")"
+  before=$(world)
+  [[ $(code update) == 4 ]] || fail "$point: the next run did not refuse with 4"
+  rg -q "phase $expected, target v0.2.0" "$scratch/err" || fail "$point: the recovery text is wrong: $(<"$scratch/err")"
+  [[ $(world) == "$before" ]] || fail "$point: a refused run changed something"
+  update --force || fail "$point: --force failed: $(<"$scratch/err")"
+  [[ ! -e $state/update/pending && $(readlink "$data/current") == releases/v0.2.0 && $(readlink "$data/previous") == releases/v0.1.0 ]] ||
+    fail "$point: --force left inconsistent state"
+  (cd -- "$data/releases/v0.2.0" && sha256sum --check --strict --quiet SHA256SUMS) || fail "$point: the final release does not verify"
+  survives "$point"
+done
+
+# current already on the target but the post checks fail: --force keeps the marker and names --rollback,
+# then --rollback returns to the previous release and clears the marker.
+restore
+status=0; UI_SHELL_UPDATE_CRASH_AT=checking update --tag v0.2.0 || status=$?
+chmod u+w "$data/releases/v0.2.0/scripts" "$data/releases/v0.2.0/scripts/read-ini"
+printf 'tampered\n' >>"$data/releases/v0.2.0/scripts/read-ini"
+[[ $(code update --force) == 1 ]] || fail 'failing post checks did not end --force with 1'
+rg -q -- '--rollback' "$scratch/err" && [[ -f $state/update/pending ]] || fail 'failing post checks lost the marker or the hint'
+survives 'failed checks'
+update --rollback || fail "rollback over a failed update failed: $(<"$scratch/err")"
+[[ $(readlink "$data/current") == releases/v0.1.0 && ! -e $state/update/pending ]] || fail 'rollback over a failed update left wrong state'
+
+# A rollback killed before and after the swap.
+for point in rolling-back rolled-back; do
+  restore
+  update --tag v0.2.0 || fail 'update before the rollback crash failed'
+  status=0; UI_SHELL_UPDATE_CRASH_AT=$point update --rollback || status=$?
+  [[ $status == 137 ]] || fail "$point: the rollback crash was not injected (status $status)"
+  rg -q '^phase=rolling-back$' "$state/update/pending" || fail "$point: marker holds the wrong phase"
+  survives "$point"; [[ -f $data/releases/v0.2.0/SHA256SUMS ]] || fail "$point: the active release is gone"
+  [[ $(code update) == 4 ]] || fail "$point: the next run did not refuse with 4"
+  update --force || fail "$point: --force failed: $(<"$scratch/err")"
+  if [[ $point == rolling-back ]]; then
+    [[ $(readlink "$data/current") == releases/v0.2.0 && ! -e $state/update/pending ]] || fail "$point: --force changed the active release"
+    update --rollback || fail "$point: the repeated rollback failed"
+  fi
+  [[ $(readlink "$data/current") == releases/v0.1.0 && $(readlink "$data/previous") == releases/v0.2.0 && ! -e $state/update/pending ]] ||
+    fail "$point: wrong links after recovery"
+done
+printf 'Crash checks passed: update killed at every phase, rollback killed before and after the swap, recovery text, --force and --rollback, no release lost.\n'

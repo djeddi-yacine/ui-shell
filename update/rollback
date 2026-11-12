@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# --rollback, run by update/activator from update/ of the active release with the lock held, so it
+# needs neither network nor clone. Exit 0 done, 1 failed with the marker left, 3 refused.
+# A pending marker is accepted only when the activator allowed it (see update/activator).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib"
+ui_load_directories
+data=$UI_SHELL_UPDATE_DATA state=$UI_SHELL_UPDATE_STATE config=$UI_SHELL_UPDATE_CONFIG
+pending=$state/update/pending
+
+active=$(ui_link_tag "$data/current")
+previous=$(ui_link_tag "$data/previous")
+# A failed update records its previous release in the marker, which `previous` may not yet name.
+if [[ -e $pending ]] && ui_marker_read "$pending" && [[ $marker_phase != rolling-back && -n $marker_previous ]]; then
+  previous=$marker_previous
+fi
+[[ -n $active ]] || ui_die 3 'No active release.'
+[[ -n $previous && $previous != "$active" && -f $data/releases/$previous/SHA256SUMS ]] || ui_die 3 'Refused: there is no previous release to return to.'
+guard() {
+  local output
+  output=$("$here/process-guard" "$data") || { printf '%s\n' "$output" >&2; ui_die 3 'Refused: the shell or a release user is running (listed above).'; }
+}
+guard
+
+# Steps 4-5: shape compatibility, checked before the marker so a refusal changes nothing.
+read -r reads_min reads_max < <(ui_manifest_reads "$data/releases/$previous/manifest.ini") ||
+  ui_die 1 "The previous release $previous has no readable shape range."
+shape=$(ui_current_shape "$state")
+if (( shape != 0 && (shape < reads_min || shape > reads_max) )); then
+  # The earliest applied migration whose shape the previous release cannot read names the snapshot.
+  restore_from=''
+  while IFS= read -r name; do
+    marker_shape=$(awk -F= '$1 == "shape" { print $2 }' "$state/migrations/$name")
+    if (( marker_shape > reads_max )); then restore_from=$name; break; fi
+  done < <(ls -1 -- "$state/migrations" 2>/dev/null | sort -t- -k1,1n)
+  [[ -n $restore_from && -d $state/snapshots/$restore_from ]] ||
+    ui_die 3 "Refused: user data has shape $shape; $previous reads shapes $reads_min to $reads_max and no snapshot exists."
+fi
+
+# Step 3, 6: marker, recheck, restore of the snapshot when needed, swap.
+ui_marker_write "$pending" "$previous" "$active" rolling-back
+ui_crash_point rolling-back
+guard
+if [[ -n ${restore_from-} ]]; then
+  "$here/snapshot" restore "$restore_from" "$config" "$state" || ui_die 1 'The snapshot could not be restored; the marker stays.'
+  while IFS= read -r marker; do
+    (( 10#$(basename -- "$marker" | cut -d- -f1) < 10#${restore_from%%-*} )) || rm -f -- "$marker"
+  done < <(find "$state/migrations" -mindepth 1 -maxdepth 1 -type f -print)
+  restored=1
+fi
+ui_link_set "$data/current" "$previous"
+ui_crash_point rolled-back
+ui_link_set "$data/previous" "$active"
+
+# Step 7.
+UI_SHELL_UPDATE_MODE=check UI_SHELL_UPDATE_TAG=$previous UI_SHELL_UPDATE_CLONE=$data/releases/$previous \
+  "$data/releases/$previous/update/run" || ui_die 1 "$previous is active but its checks fail; the marker stays. Run --rollback again to return."
+rm -f -- "$pending"
+if [[ -n ${restored-} ]]; then
+  printf 'Rolled back from %s to %s. The configuration was restored from the snapshot taken before %s; edits made since then are lost.\n' "$active" "$previous" "$restore_from" >&2
+else
+  printf 'Rolled back from %s to %s. Edits made since the update to %s are not undone by this command.\n' "$active" "$previous" "$active" >&2
+fi

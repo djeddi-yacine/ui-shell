@@ -8,7 +8,7 @@ work=$(mktemp -d)
 profile=''
 trap 'rm -rf -- "$work"; if [[ -n $profile ]]; then rm -f -- "$profile"; fi' EXIT
 runtime="$work/runtime.json"
-"$(jq -er '.commands.readShellConfig' "$bootstrap")" "$(jq -er '.configFile' "$bootstrap")" "$(jq -er '.commands.readIni' "$bootstrap")" >"$runtime"
+"$(jq -er '.commands.readShellConfig' "$bootstrap")" "$(jq -er '.configFile' "$bootstrap")" "$(jq -er '.settingsFile' "$bootstrap")" "$(jq -er '.commands.readIni' "$bootstrap")" >"$runtime"
 export UI_SHELL_RUNTIME="$runtime"
 expected=$("$(jq -er '.commands.readThemeState' "$runtime")" "$runtime" | jq -er '.revision')
 fit=$(jq -er --arg target "$target" '(.wallpaper.monitors[$target] // .wallpaper.default).fit_mode' "$runtime")

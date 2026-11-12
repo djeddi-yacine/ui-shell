@@ -11,10 +11,11 @@ jq -en --arg target "$target" '$target|test("[=\u0000-\u001f\u007f]|^\\s|\\s$")|
 selected=0
 trap 'status=$?; if [[ $selected == 1 ]]; then printf "%s\n" "Profile selected and valid; runtime/native apply incomplete." >&2; exit 4; fi; exit "$status"' ERR
 bootstrap=${UI_SHELL_RUNTIME:?resolved runtime data required}
-manifest=$(jq -er '.configFile' "$bootstrap")
+release_manifest=$(jq -er '.configFile' "$bootstrap")
+settings=$(jq -er '.settingsFile' "$bootstrap")
 resolver=$(jq -er '.commands.readShellConfig' "$bootstrap")
 reader=$(jq -er '.commands.readIni' "$bootstrap")
-lock="$manifest.theme.lock"
+lock="$settings.theme.lock"
 [[ ! -L $lock ]] || { printf '%s\n' 'Theme lock is a symlink.' >&2; exit 1; }
 if [[ -n ${UI_SHELL_THEME_LOCK_FD-} ]]; then
   lock_fd=$UI_SHELL_THEME_LOCK_FD
@@ -24,11 +25,11 @@ else
 fi
 flock -x "$lock_fd"
 work=$(mktemp -d)
-recipe_temp='' manifest_temp=''
-trap 'rm -rf -- "$work"; if [[ -n $recipe_temp ]]; then rm -f -- "$recipe_temp"; fi; if [[ -n $manifest_temp ]]; then rm -f -- "$manifest_temp"; fi' EXIT
-before=$(sha256sum -- "$manifest")
+recipe_temp='' settings_temp=''
+trap 'rm -rf -- "$work"; if [[ -n $recipe_temp ]]; then rm -f -- "$recipe_temp"; fi; if [[ -n $settings_temp ]]; then rm -f -- "$settings_temp"; fi' EXIT
+before=$(sha256sum -- "$settings")
 runtime="$work/active.json"
-"$resolver" "$manifest" "$reader" >"$runtime"
+"$resolver" "$release_manifest" "$settings" "$reader" >"$runtime"
 root=$(jq -er '.configRoot' "$runtime")
 profiles=$(jq -er '.paths.profiles' "$runtime")
 themes=$(jq -er '.paths.themes' "$runtime")
@@ -38,6 +39,7 @@ state_reader=$(jq -er '.commands.readThemeState' "$runtime")
 [[ $(jq -er '.revision' "$work/state.json") == "$expected" ]] || { printf '%s\n' 'Stale theme revision.' >&2; exit 3; }
 profile=$profile_input
 [[ $profile == /* ]] || profile="$root/$profile"
+"$(dirname -- "$0")/ensure-user-profile" "$runtime" "$profile"
 [[ -f $profile && $(realpath -e -- "$profile") == "$(realpath -e -- "$profiles")/"* ]] || { printf '%s\n' 'Selected profile must be in configured profiles.' >&2; exit 1; }
 "$profile_reader" "$profile" "$root" "$profiles" "$themes" "$reader" >"$work/profile.json"
 while IFS= read -r definition; do
@@ -72,26 +74,26 @@ done < <(jq -c '.wallpapers[]' "$work/selections.json")
 if [[ $action == activate ]]; then
   "$(jq -er '.commands.compileThemeProfile' "$runtime")" "$work/candidate.json" >"$work/bundle.json"
 fi
-[[ ! -L $manifest && $(sha256sum -- "$manifest") == "$before" ]] || { printf '%s\n' 'Manifest changed during selection.' >&2; exit 3; }
+[[ ! -L $settings && $(sha256sum -- "$settings") == "$before" ]] || { printf '%s\n' 'Settings changed during selection.' >&2; exit 3; }
 "$state_reader" "$runtime" >"$work/current-state.json"
 [[ $(jq -er '.revision' "$work/current-state.json") == "$expected" ]] || { printf '%s\n' 'Stale theme revision.' >&2; exit 3; }
 relative="${base#"$root/"}/profile.ini"
-manifest_temp=$(mktemp "${manifest%/*}/.theme-manifest.XXXXXX")
+settings_temp=$(mktemp "${settings%/*}/.theme-manifest.XXXXXX")
 UI_SHELL_SELECTED_PROFILE="$relative" awk '
   /^[[:space:]]*\[/ {section=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", section)}
   section=="[theme]" && /^[[:space:]]*profile[[:space:]]*=/ {print "profile = " ENVIRON["UI_SHELL_SELECTED_PROFILE"]; count++; next}
   {print}
   END {if(count!=1) exit 1}
-' "$manifest" >"$manifest_temp"
-chmod --reference="$manifest" "$manifest_temp"
+' "$settings" >"$settings_temp"
+chmod --reference="$settings" "$settings_temp"
 mv -f -- "$recipe_temp" "$base/profile.ini"
 recipe_temp=''
 selected=1
-mv -f -- "$manifest_temp" "$manifest"
-manifest_temp=''
+mv -f -- "$settings_temp" "$settings"
+settings_temp=''
 [[ $action == activate ]] || exit 0
 # From here failures report honest partial native application of valid saved policy.
-"$resolver" "$manifest" "$reader" >"$work/committed.json"
+"$resolver" "$release_manifest" "$settings" "$reader" >"$work/committed.json"
 UI_SHELL_RUNTIME=$("$(jq -er '.commands.prepareRuntime' "$runtime")" "$work/committed.json")
 export UI_SHELL_RUNTIME
 UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$UI_SHELL_RUNTIME")

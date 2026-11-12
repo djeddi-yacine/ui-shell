@@ -8,11 +8,32 @@ qs --path "$quickshell_directory" kill --any-display
 timeout --kill-after=2 60 qs --path "$quickshell_directory/notifications-test.qml" >/artifacts/notifications-test.log 2>&1 &
 shell_pid=$!
 layer_seen=false
+popup_width=$(rg -o 'popupWidth: *[0-9]+' "$UI_SHELL_ROOT/shell/config/Notifications.qml" | rg -o '[0-9]+$')
+[[ $popup_width =~ ^[0-9]+$ ]] || { printf '%s\n' 'Could not read popupWidth.' >&2; exit 1; }
+# A real application window (foot) is open and focused while the notifications arrive. The popups
+# are layer surfaces: they must not change its focus, size or position.
+hyprctl dispatch 'hl.dsp.exec_cmd("foot")' >/dev/null
+foot_window() { hyprctl -j clients | jq -c '[.[] | select(.class == "foot")] | first // empty | {address, size, at}'; }
+for _ in $(seq 1 50); do
+  [[ -n $(foot_window) ]] && break
+  kill -0 "$shell_pid" 2>/dev/null || break
+  sleep 0.2
+done
+foot_before=$(foot_window)
+[[ -n $foot_before ]] || { printf '%s\n' 'The foot window never mapped.' >&2; kill "$shell_pid" 2>/dev/null || true; exit 1; }
+sleep 0.5
+foot_before=$(foot_window)
 focus_before=$(hyprctl -j activewindow | jq -r '.address // ""')
+[[ $focus_before == "$(jq -r .address <<<"$foot_before")" ]] || { printf 'foot is not focused before the popups: %s\n' "$(hyprctl -j activewindow | jq -c '{address, class}')" >&2; kill "$shell_pid" 2>/dev/null || true; exit 1; }
 while kill -0 "$shell_pid" 2>/dev/null; do
   if hyprctl -j layers | jq -e '[.. | objects | .namespace? // empty] | any(startswith("ui-shell-notif"))' >/dev/null; then
     layer_seen=true
-    [[ $(hyprctl -j activewindow | jq -r '.address // ""') == "$focus_before" ]] || { printf '%s\n' 'A notification popup changed the active window.' >&2; kill "$shell_pid"; exit 1; }
+    # The popup surface is a fixed-width column: its layer must never be wider than popupWidth.
+    popup_wide=$(hyprctl -j layers | jq -r --argjson width "$popup_width" '[.. | objects | select((.namespace? // "") == "ui-shell-notif" and .w != $width)] | first | if . then "\(.w)x\(.h)" else empty end')
+    [[ -z $popup_wide ]] || { printf 'A notification popup layer is %s, not %s wide.\n' "$popup_wide" "$popup_width" >&2; kill "$shell_pid"; exit 1; }
+    [[ $(foot_window) == "$foot_before" ]] || { printf 'A popup moved or resized the foot window: before %s, now %s\n' "$foot_before" "$(foot_window)" >&2; kill "$shell_pid"; exit 1; }
+    focus_now=$(hyprctl -j activewindow | jq -c '{address, class, title}')
+    [[ $(jq -r '.address // ""' <<<"$focus_now") == "$focus_before" ]] || { printf 'A notification popup changed the active window: before %s, now %s\n' "$focus_before" "$focus_now" >&2; kill "$shell_pid"; exit 1; }
   fi
   sleep 0.2
 done
@@ -23,4 +44,4 @@ if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:|NOTIF_FAIL' /
   printf '%s\n' 'Notifications produced a QML warning/error.' >&2
   exit 1
 fi
-printf '%s\n' 'Notifications passed: urgency/ordering, in-place progress update, burst newest-wins, DND, unread, clear; popup layer mapped without changing focus.'
+printf '%s\n' 'Notifications passed: urgency/ordering, in-place progress update, burst newest-wins, DND, unread, clear; popups stayed 360 wide and left a focused foot window unchanged.'

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Remove releases other than `current` and `previous`, leftover *.tmp releases and snapshots whose
+# migration marker is gone. Refuses (exit 3) while a process uses the release tree and when the user
+# data's shape would lie outside every remaining release's range.   prune DATA_DIR STATE_DIR
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib"
+[[ $# == 2 ]] && ui_valid_path "$1" && ui_valid_path "$2" || ui_die 2 'Usage: prune DATA_DIR STATE_DIR'
+data=$1 state=$2
+current=$(ui_link_tag "$data/current") previous=$(ui_link_tag "$data/previous")
+[[ -n $current ]] || ui_die 3 'Refused: there is no active release.'
+output=$("$here/process-guard" "$data") || { printf '%s\n' "$output" >&2; ui_die 3 'Refused: a process uses the release tree.'; }
+shape=$(ui_current_shape "$state")
+fits=0
+for kept in "$current" "$previous"; do
+  [[ -n $kept && -f $data/releases/$kept/manifest.ini ]] || continue
+  read -r low high < <(ui_manifest_reads "$data/releases/$kept/manifest.ini") || continue
+  (( shape == 0 || shape >= low && shape <= high )) && fits=1
+done
+(( fits )) || ui_die 3 "Refused: shape $shape would lie outside the ranges of the remaining releases."
+for directory in "$data"/releases/*; do
+  [[ -d $directory ]] || continue
+  name=${directory##*/}
+  [[ $name != "$current" && $name != "$previous" ]] || continue
+  chmod -R u+w -- "$directory"
+  rm -rf -- "$directory"
+  ui_log "Removed release $name."
+done
+for snapshot in "$state"/snapshots/*; do
+  [[ -d $snapshot ]] || continue
+  [[ -e $state/migrations/${snapshot##*/} ]] || { rm -rf -- "$snapshot"; ui_log "Removed orphan snapshot ${snapshot##*/}."; }
+done
+exit 0

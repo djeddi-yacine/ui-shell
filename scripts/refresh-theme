@@ -5,16 +5,17 @@ shopt -s inherit_errexit
 [[ $# == 0 ]] || { printf '%s\n' 'Usage: refresh-theme' >&2; exit 2; }
 trap 'printf "%s\n" "Wallpaper applied/saved, but colors refresh failed." >&2; exit 4' ERR
 bootstrap=$UI_SHELL_RUNTIME
-manifest=$(jq -er '.configFile' "$bootstrap")
+release_manifest=$(jq -er '.configFile' "$bootstrap")
+settings=$(jq -er '.settingsFile' "$bootstrap")
 resolver=$(jq -er '.commands.readShellConfig' "$bootstrap")
 reader=$(jq -er '.commands.readIni' "$bootstrap")
-lock="$manifest.theme.lock"
+lock="$settings.theme.lock"
 [[ ! -L $lock ]]
 exec {lock_fd}>"$lock"
 flock -x "$lock_fd"
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-"$resolver" "$manifest" "$reader" >"$work/runtime.json"
+"$resolver" "$release_manifest" "$settings" "$reader" >"$work/runtime.json"
 prepare_runtime=$(jq -er '.commands.prepareRuntime' "$work/runtime.json")
 editor=$(jq -er '.commands.readThemeEditor' "$work/runtime.json")
 "$prepare_runtime" "$work/runtime.json" >&2

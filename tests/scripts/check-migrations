@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# update/run-migrations, snapshot, prune and rollback across a shape change. The migrations exist
+# only in the fixture repository (see update-fixture): none ships with the project yet.
+# shellcheck disable=SC2034 # read by the sourced fixture
+check_name=Migrations
+source "$(dirname -- "${BASH_SOURCE[0]}")/update-fixture"
+
+fingerprint=$key_fp
+printf '%s\n' "$fingerprint" | bash "$work/update/install-activator" >/dev/null 2>&1 || fail 'install-activator failed'
+# cut_tag TAG: commit the work tree, sign TAG and publish it.
+cut_tag() { git_in add -A >/dev/null; git_in commit -q -m "$1"; sign "$key_fp" "$1"; git_in push -q origin main "$1"; }
+# migration STAMP-SLUG SHAPE BODY: an executable migration with a shape header.
+migration() { printf '#!/usr/bin/env bash\n# shape: %s\nset -euo pipefail\n%s\n' "$2" "$3" >"$work/migrations/$1"; chmod +x "$work/migrations/$1"; }
+lines() { wc -l <"$config/m.log" 2>/dev/null || printf 0; }
+append() { printf 'printf "%%s\\n" %s >>"$UI_SHELL_CONFIG_HOME/m.log"' "$1"; }
+
+update --tag v0.2.0 || fail "install of v0.2.0 failed: $(<"$scratch/err")"
+migration 1000-first 1 "$(append a)"
+migration 2000-second 1 "$(append b)"
+cut_tag v0.3.0
+update --tag v0.3.0 --dry-run || fail "dry-run failed: $(tail -n 5 "$scratch/err")"
+rg -q '1000-first 1' "$scratch/out" || fail 'the dry-run does not list the pending migrations'
+[[ ! -e $config/m.log && ! -e $state/migrations/1000-first ]] || fail 'the dry-run ran or recorded a migration'
+update --tag v0.3.0 || fail "update with migrations failed: $(<"$scratch/err")"
+[[ $(paste -sd, "$config/m.log") == a,b ]] || fail "migrations did not run in order: $(paste -sd, "$config/m.log")"
+rg -q '^shape=1$' "$state/migrations/1000-first" && rg -q '^checksum=' "$state/migrations/2000-second" || fail 'markers are incomplete'
+[[ ! -e $state/snapshots/1000-first ]] || fail 'a snapshot was taken for a shape the old release reads'
+update --tag v0.3.0 || fail 'a second run failed'
+[[ $(lines) == 2 ]] || fail 'applied migrations ran again'
+
+# Refusals: each is caught in the rehearsal, so nothing the shell reads changes.
+refuses() { # TAG WORDS
+  local before; before=$(tree_hash "$data/releases/$(basename "$(readlink "$data/current")")")
+  [[ $(code update --tag "$1") == 1 ]] || fail "$2: the update was not refused with 1"
+  rg -q -- "$2" "$scratch/err" || fail "$2: the message does not say why: $(<"$scratch/err")"
+  [[ $(readlink "$data/current") == releases/v0.3.0 && ! -e $state/update/pending ]] || fail "$2: state changed"
+  [[ $(tree_hash "$data/releases/v0.3.0") == "$before" ]] || fail "$2: the active release changed"
+}
+migration 1500-late 1 "$(append c)"; cut_tag v0.3.1
+refuses v0.3.1 'out of order'
+rm "$work/migrations/1500-late"
+migration 3000-one 1 "$(append d)"; migration 3000-two 1 "$(append e)"; cut_tag v0.3.2
+refuses v0.3.2 'timestamp'
+rm "$work/migrations/3000-one" "$work/migrations/3000-two"
+printf '#!/usr/bin/env bash\nset -euo pipefail\n' >"$work/migrations/3500-noheader"; chmod +x "$work/migrations/3500-noheader"; cut_tag v0.3.3
+refuses v0.3.3 'shape: N'
+rm "$work/migrations/3500-noheader"
+printf '# edited\n' >>"$work/migrations/1000-first"; cut_tag v0.3.4
+refuses v0.3.4 'changed after'
+git_in checkout -q v0.3.0 -- migrations/1000-first
+migration 3600-bad 1 'exit 7'; cut_tag v0.3.5
+refuses v0.3.5 'fails'
+rm "$work/migrations/3600-bad"
+rm "$work/migrations/2000-second"; cut_tag v0.3.6
+update --tag v0.3.6 || fail "a removed script with a marker stopped the update: $(<"$scratch/err")"
+rg -q 'not in this release' "$scratch/err" && [[ -f $state/migrations/2000-second ]] || fail 'the marker of a removed script was not kept and reported'
+git_in checkout -q v0.3.0 -- migrations/2000-second
+
+# A migration to shape 2: snapshot first, then a rollback that restores it.
+sed -i 's/^reads_max = 1$/reads_max = 2/' "$work/tools/manifest.ini"
+migration 4000-widen 2 "$(append s2)"; cut_tag v0.4.0
+update --tag v0.4.0 || fail "shape-2 update failed: $(<"$scratch/err")"
+[[ -d $state/snapshots/4000-widen && $(paste -sd, "$state/snapshots/4000-widen/m.log") == a,b ]] || fail 'the snapshot before the shape change is missing or wrong'
+[[ ! -e $data/releases/v0.2.0 && -d $data/releases/v0.3.6 && $(readlink "$data/previous") == releases/v0.3.6 ]] || fail 'prune kept the wrong releases'
+printf 'user edit\n' >>"$config/m.log"
+free=$(UI_SHELL_FREE_BYTES=0 bash "$data/current/update/snapshot" save 9999-probe "$config" "$state" >/dev/null 2>&1; echo $?)
+[[ $free == 3 && ! -e $state/snapshots/9999-probe ]] || fail 'a snapshot with too little free space was not refused with 3'
+update --rollback || fail "rollback with a snapshot failed: $(<"$scratch/err")"
+[[ $(readlink "$data/current") == releases/v0.3.6 ]] || fail 'rollback did not return to v0.3.6'
+[[ $(paste -sd, "$config/m.log") == a,b && ! -e $state/migrations/4000-widen && -f $state/migrations/1000-first ]] || fail 'the snapshot was not restored with its markers'
+rg -q 'lost' "$scratch/err" || fail 'the rollback does not warn about lost edits'
+# The rolled-back update can be taken again; without its snapshot a rollback is refused.
+printf 'again\n' >>"$work/migrations/README.md"; cut_tag v0.4.1
+update --tag v0.4.1 || fail "second shape-2 update failed: $(<"$scratch/err")"
+rm -rf -- "${state:?}/snapshots/4000-widen"
+before=$(world)
+[[ $(code update --rollback) == 3 ]] || fail 'a rollback outside the range without a snapshot was not refused with 3'
+rg -q 'shape 2' "$scratch/err" || fail 'the refusal does not name the shape'
+[[ $(world) == "$before" ]] || fail 'the refused rollback changed something'
+
+# Prune never removes current or previous, and refuses while a process uses the tree.
+mkdir -p "$fakeproc/4242"; ln -s "$data/current/scripts" "$fakeproc/4242/cwd"; printf 'x\0' >"$fakeproc/4242/cmdline"
+[[ $(code bash "$data/current/update/prune" "$data" "$state" 2>/dev/null) == 3 ]] || fail 'prune ran while a process used the tree'
+rm -rf -- "${fakeproc:?}/4242"
+bash "$data/current/update/prune" "$data" "$state" 2>/dev/null || fail 'prune failed'
+[[ -d $data/releases/v0.4.1 && -d $data/releases/v0.3.6 ]] || fail 'prune removed current or previous'
+
+# A crash around a migration: killed after the script and before its marker, the script runs again on --force.
+migration 7000-once 2 "$(append m)"; cut_tag v0.5.0
+status=0; UI_SHELL_UPDATE_CRASH_AT=migrated update --tag v0.5.0 || status=$?
+[[ $status == 1 && $(tail -n 1 "$config/m.log") == m && ! -e $state/migrations/7000-once ]] || fail "migrated: crash not injected or marker written (status $status): $(tail -n 3 "$scratch/err")"
+rg -q '^phase=migrating 1/1$' "$state/update/pending" || fail 'the marker does not record the migration phase'
+update --force || fail "migrated: --force failed: $(<"$scratch/err")"
+[[ $(rg -c '^m$' "$config/m.log") == 2 && -f $state/migrations/7000-once && ! -e $state/update/pending ]] || fail 'migrated: the script did not run again exactly once'
+migration 8000-twice 2 "$(append n)"; cut_tag v0.5.1
+status=0; UI_SHELL_UPDATE_CRASH_AT=migrating update --tag v0.5.1 || status=$?
+[[ $status == 1 && ! -e $state/migrations/8000-twice ]] || fail "migrating: crash not injected (status $status)"
+update --force || fail "migrating: --force failed: $(<"$scratch/err")"
+[[ $(rg -c '^n$' "$config/m.log") == 1 && $(readlink "$data/current") == releases/v0.5.1 ]] || fail 'migrating: the script did not run exactly once'
+
+printf 'Migration checks passed: order, markers, refusals, snapshot and restore, free space, prune, crash around a migration.\n'

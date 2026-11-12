@@ -35,7 +35,7 @@ jq -er '
     elif type == "string" or type == "number" or type == "boolean" then tojson
     elif type == "null" then "nil"
     else error("unsupported runtime value") end;
-  "-- Generated installation bootstrap. Edit config.ini and profiles, not this projection.\nreturn " + lua + "\n"
+  "-- Generated installation bootstrap. Edit settings.ini and profiles, not this projection.\nreturn " + lua + "\n"
 ' "$input" >"$lua_temp"
 mv -f -- "$qml_temp" "$qml"
 mv -f -- "$lua_temp" "$lua"

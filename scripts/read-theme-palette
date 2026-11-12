@@ -3,8 +3,8 @@
 set -euo pipefail
 [[ $# == 1 ]] || { printf '%s\n' 'Usage: read-theme-palette INPUT_INI' >&2; exit 2; }
 input=$1 runtime=$UI_SHELL_RUNTIME
-themes=$(jq -er '.paths.themes' "$runtime")
-[[ -f $input && $(realpath -e -- "$input") == "$(realpath -e -- "$themes")/"* ]] || { printf '%s\n' 'Theme definition must exist inside configured theme storage.' >&2; exit 1; }
+themes=$(jq -er '.paths.themes' "$runtime") shipped=$(jq -er '.paths.shippedThemes' "$runtime")
+[[ -f $input ]] && canonical=$(realpath -e -- "$input") && [[ $canonical == "$(realpath -m -- "$themes")/"* || $canonical == "$(realpath -m -- "$shipped")/"* ]] || { printf '%s\n' 'Theme definition must exist inside configured theme storage.' >&2; exit 1; }
 directory=$(jq -er '.paths.runtime + "/theme-palettes"' "$runtime")
 normalizer=$(jq -er '.commands.normalizeCustomColors' "$runtime")
 reader=$(jq -er '.commands.readIni' "$runtime")

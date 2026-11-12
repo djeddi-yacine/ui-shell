@@ -17,6 +17,7 @@ trap cleanup EXIT
 
 config_root=$test_home/.config/ui-shell
 runtime_dir=$test_home/runtime
+# shellcheck disable=SC2174 # every listed directory is a leaf; the parents are private already
 mkdir -m 0700 -p -- "$runtime_dir"
 export HOME=$test_home
 export XDG_CONFIG_HOME=$test_home/.config
@@ -27,8 +28,8 @@ export XDG_RUNTIME_DIR=$runtime_dir
 
 bash "$project_root/tools/scripts/stage-config" "$project_root" "$config_root" >/dev/null
 resolved=$test_home/resolved.json
-bash "$config_root/scripts/read-shell-config" "$config_root/config.ini" \
-  "$config_root/scripts/read-ini" >"$resolved"
+bash "$config_root/scripts/read-shell-config" "$config_root/manifest.ini" \
+  "$config_root/settings.ini" "$config_root/scripts/read-ini" >"$resolved"
 export UI_SHELL_RUNTIME
 UI_SHELL_RUNTIME=$(bash "$config_root/scripts/prepare-runtime" "$resolved")
 export UI_SHELL_RUNTIME_LUA
@@ -37,4 +38,37 @@ UI_SHELL_RUNTIME_LUA=$(jq -er '.runtimeLua' "$UI_SHELL_RUNTIME")
 for config in "$config_root/hypr/hyprland.lua" "$config_root/hypr/nested.lua"; do
   (cd -- "$test_home" && Hyprland --verify-config --config "$config")
 done
+# A missing or mismatched RELEASE stamp fails closed and names scripts/start-session.
+stamp=$(dirname -- "$UI_SHELL_RUNTIME_LUA")/RELEASE
+cp -- "$stamp" "$test_home/RELEASE.good"
+for damage in 'printf "other\n" >"$stamp"' 'rm -f -- "$stamp"'; do
+  eval "$damage"
+  if output=$(cd -- "$test_home" && Hyprland --verify-config --config "$config_root/hypr/hyprland.lua" 2>&1); then
+    printf '%s\n' 'A stale runtime stamp was accepted.' >&2; exit 1
+  fi
+  [[ $output == *scripts/start-session* ]] || { printf '%s\n' 'The stale-stamp error does not name scripts/start-session.' >&2; exit 1; }
+  cp -- "$test_home/RELEASE.good" "$stamp"
+done
+# userlua: the user file wins, the shipped default otherwise, no merging, bad
+# names and broken user files fail with the path.
+user_lua=$test_home/user-lua
+mkdir -p -- "$user_lua"
+printf 'return { marker = "user" }\n' >"$user_lua/nested.lua"
+printf 'return {\n' >"$user_lua/monitors.lua"
+lua - "$config_root/hypr" "$user_lua" <<'LUA'
+local hypr, user = arg[1], arg[2]
+package.path = hypr .. "/?.lua;" .. package.path
+package.loaded.runtime = { paths = { hypr = hypr, userLua = user } }
+local userlua = require("userlua")
+assert(userlua.load("nested").marker == "user", "user file must win")
+local shipped = dofile(hypr .. "/default/canvas.lua")
+assert(userlua.load("canvas").navigator and shipped.navigator, "missing user file must use the shipped default")
+local ok, err = pcall(userlua.load, "monitors")
+assert(not ok and err:find(user .. "/monitors.lua", 1, true), "a broken user file must fail naming its path")
+for _, bad in ipairs({ "../x", "Nested", "a.b", "" }) do
+  assert(not pcall(userlua.load, bad), "name must be rejected: " .. bad)
+end
+package.loaded.runtime.paths.userLua = "relative"
+assert(not pcall(userlua.load, "nested"), "relative userLua must be rejected")
+LUA
 printf '%s\n' 'Production and nested Hyprland configs passed in private XDG state.'

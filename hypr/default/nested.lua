@@ -37,7 +37,7 @@ return {
   },
   exit_bind = main .. " + ESCAPE",
   output = {
-    output = "",
+    output = "WAYLAND-1", -- the only output of the nested session; "" logs "No rule found"
     mode = "1280x720@60",
     position = "auto",
     scale = 1,

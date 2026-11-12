@@ -81,5 +81,5 @@ if rg -n ' (WARN|ERROR|CRITICAL)|Error:|ReferenceError:|TypeError:' /artifacts/t
   printf '%s\n' 'Theme editor produced a QML warning/error.' >&2
   exit 1
 fi
-cp "$(jq -er '.configFile' "$UI_SHELL_RUNTIME")" /artifacts/theme-manifest.log
+cp "$(jq -er '.settingsFile' "$UI_SHELL_RUNTIME")" /artifacts/theme-manifest.log
 printf '%s\n' 'Theme editor passed: flat saved definition, separate committed profile, combined activation, draft/cancel preservation, and scoped copyable read/save failures.'

@@ -17,7 +17,6 @@
 set -euo pipefail
 
 temporary=
-here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 fail() { printf 'screen-shot: %s\n' "$*" >&2; exit 1; }
 # The user's XDG directory: the environment variable if set, else `xdg-user-dir`, else the XDG
 # default under $HOME.
@@ -47,8 +46,8 @@ window_handle() {
 # the compositor: speed x 100 ms, each leaf falling back to its parent when not overridden).
 wait_for_layers_gone() {
   command -v hyprctl >/dev/null || return 0
-  local tries milliseconds
-  for tries in $(seq 20); do
+  local milliseconds
+  for _ in $(seq 20); do
     timeout 2 hyprctl -j layers 2>/dev/null | jq -e '[.. | objects | select(.namespace? == "ui-shell-shot") ] | length == 0' >/dev/null && break
     sleep 0.05
   done

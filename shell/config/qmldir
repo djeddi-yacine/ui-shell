@@ -13,9 +13,6 @@ singleton Clipboard 1.0 Clipboard.qml
 singleton ComponentSpec 1.0 ComponentSpec.qml
 singleton WallpaperPicker 1.0 WallpaperPicker.qml
 singleton Outputs 1.0 Outputs.qml
-singleton GeneratedLauncherOutput 1.0 GeneratedLauncherOutput.qml
-singleton GeneratedWallpapers 1.0 GeneratedWallpapers.qml
-singleton GeneratedRuntime 1.0 GeneratedRuntime.qml
 singleton ThemeEditor 1.0 ThemeEditor.qml
 singleton Auth 1.0 Auth.qml
 singleton Mpris 1.0 Mpris.qml

@@ -107,7 +107,7 @@ case $action in
     config_path() {
       "$project_root/scripts/read-ini" "$1" | jq -er --arg role "$2" \
         --arg root "$test_config_root" --arg testHome "$test_home" '
-        .paths[$role] | select(type == "string" and length > 0)
+        .user_paths[$role] | select(type == "string" and length > 0)
         | if startswith("${HOME}/") then $testHome + .[7:]
           elif startswith("${XDG_CONFIG_HOME}/") then $testHome + "/.config" + .[18:]
           elif startswith("${XDG_CACHE_HOME}/") then $testHome + "/.cache" + .[17:]
@@ -126,14 +126,14 @@ case $action in
     [[ $(realpath -m -- "$private_config") == "$private_config" && -d $private_config ]] || {
       printf '%s\n' 'Private configuration is missing or redirected; refusing reset.' >&2; exit 1;
     }
-    [[ -f $private_config/config.ini && ! -L $private_config/config.ini ]] || {
-      printf '%s\n' 'Private manifest is missing or redirected; refusing reset.' >&2; exit 1;
+    [[ -f $private_config/settings.ini && ! -L $private_config/settings.ini ]] || {
+      printf '%s\n' 'Private settings are missing or redirected; refusing reset.' >&2; exit 1;
     }
-    saved_themes="$private_config/$(config_path "$private_config/config.ini" themes)"
+    saved_themes="$private_config/$(config_path "$project_root/tools/manifest.ini" themes)"
     [[ $(realpath -m -- "$saved_themes") == "$saved_themes" && -d $saved_themes ]] || {
       printf '%s\n' 'Theme definitions are missing or redirected; refusing reset.' >&2; exit 1;
     }
-    default_themes=$(config_path "$project_root/tools/config.ini" themes)
+    default_themes=$(config_path "$project_root/tools/manifest.ini" themes)
     # Prepare the replacement before touching existing data. Keep every palette,
     # including invalid definitions and user edits; validation belongs to selection.
     reset_work=$(mktemp -d "$state_parent/.clean-XXXXXX")
@@ -145,7 +145,7 @@ case $action in
     # The clean default seed refreshes default/ and seeds the standard runtime
     # stores only when the retained definitions do not already provide them.
     bash "$project_root/tools/scripts/stage-defaults" "$project_root" "$replacement_config"
-    cp -- "$project_root/tools/config.ini" "$replacement_config/config.ini"
+    cp -- "$project_root/tools/settings.ini" "$replacement_config/settings.ini"
     printf 'ui-shell-test-state:%s\n' "$test_state_schema" >"$replacement/.owner"
     mv -- "$state_dir" "$reset_work/old-state"
     if ! mv -- "$replacement" "$state_dir"; then

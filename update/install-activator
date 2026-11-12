@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Run once by the user from a checked-out tag. Prints the primary fingerprint of the release signer
+# key, waits for the user to type the one the README shows, pins the key (mode 0600) and installs
+# ~/.local/bin/update-ui-shell. Running it again with a key of the same primary refreshes the pinned
+# subkeys without a prompt; a different primary is refused unless --repin is given, and then the
+# fingerprint is typed again. Exit 0 done, 1 failed, 2 usage, 3 refused.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/lib"
+repin=0
+case ${1-} in
+  '') ;;
+  --repin) repin=1 ;;
+  *) ui_die 2 'Usage: update/install-activator [--repin]' ;;
+esac
+[[ $# -le 1 ]] || ui_die 2 'Usage: update/install-activator [--repin]'
+home=${HOME:?HOME required}
+state=${XDG_STATE_HOME:-$home/.local/state}/ui-shell
+bin=$home/.local/bin/update-ui-shell
+pinned=$state/signer.asc
+ui_valid_path "$state" && ui_valid_path "$bin" || ui_die 2 'HOME and XDG_STATE_HOME must be absolute single-line paths.'
+command -v gpg >/dev/null || ui_die 1 'gpg is required (package gnupg).'
+# The key file name is fixed; tests may name another one, and only with UI_SHELL_UPDATE_TEST=1.
+key_file=$here/signer.asc
+[[ ${UI_SHELL_UPDATE_TEST-} == 1 && -n ${UI_SHELL_SIGNER_KEY-} ]] && key_file=$UI_SHELL_SIGNER_KEY
+[[ -f $key_file && ! -L $key_file ]] || ui_die 1 "Missing signer key $key_file."
+scratch=$(mktemp -d)
+trap 'rm -rf -- "${scratch:?}"' EXIT
+
+fingerprint=$(ui_key_load "$key_file" "$scratch/new") || ui_die 1 "$key_file must hold exactly one usable public OpenPGP key."
+ui_key_signs "$scratch/new" || ui_die 1 "$key_file has no usable signing key."
+
+confirm() { # ask for the fingerprint; the README shows it in groups, so spaces and case do not matter
+  local typed
+  printf 'Signer key fingerprint (primary key):\n  %s\n' "$(ui_key_format "$fingerprint")"
+  printf '%s' 'Type the fingerprint shown in the README to pin this key: '
+  IFS= read -r typed || typed=''
+  typed=${typed//[[:space:]]/}
+  [[ ${typed^^} == "$fingerprint" ]] || ui_die 3 'Refused: the typed fingerprint does not match.'
+}
+
+pin=1
+if [[ -e $pinned ]]; then
+  if old=$(ui_key_load "$pinned" "$scratch/old"); then
+    if [[ $old == "$fingerprint" ]]; then
+      # Same primary: keep every signature of both files (a revocation stays) and refresh the pin.
+      ui_key_load "$pinned" "$scratch/merge" >/dev/null && ui_key_load "$key_file" "$scratch/merge" >/dev/null ||
+        ui_die 1 'Could not merge the pinned key with the new file.'
+      pin=0
+    elif (( repin )); then
+      confirm
+    else
+      ui_die 3 "Refused: a different signer key is already pinned in $pinned. Use --repin to replace it."
+    fi
+  else
+    (( repin )) || ui_die 1 "The pinned key $pinned is unusable (expired or damaged). Run update/install-activator --repin."
+    confirm
+  fi
+else
+  confirm
+fi
+mkdir -p -- "$state"
+if (( pin )); then
+  ui_key_export "$scratch/new" "$fingerprint" | (umask 077 && ui_write_atomic "$pinned")
+else
+  ui_key_export "$scratch/merge" "$fingerprint" | (umask 077 && ui_write_atomic "$pinned")
+fi
+chmod 0600 -- "$pinned"
+
+mkdir -p -- "${bin%/*}"
+ui_compose_activator "$here" >"$bin.new"
+chmod 0755 -- "$bin.new"
+mv -f -- "$bin.new" "$bin"
+printf 'Installed %s. Run update-ui-shell to install the shell.\n' "$bin"

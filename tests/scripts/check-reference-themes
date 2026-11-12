@@ -75,15 +75,17 @@ with tempfile.TemporaryDirectory(prefix="reference-themes-") as temporary:
     }
     for original, renamed in roles.items():
         (installed / "helpers" / original).rename(installed / "helpers" / renamed)
-    manifest = installed / "config.ini"
-    manifest_text = (PROJECT / "tools" / "config.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/")
+    manifest = installed / "manifest.ini"
+    settings = installed / "settings.ini"
+    settings.write_text((PROJECT / "tools" / "settings.ini").read_text())
+    manifest_text = (PROJECT / "tools" / "manifest.ini").read_text().replace("scripts = scripts", "scripts = helpers").replace("= scripts/", "= helpers/")
     for original, renamed in roles.items():
         manifest_text = manifest_text.replace("helpers/" + original, "helpers/" + renamed)
     manifest.write_text(manifest_text)
 
     read_config = installed / "helpers" / "read-shell-config"
     resolved = scratch / "relocated-runtime.json"
-    resolved.write_text(run(read_config, manifest, installed / "helpers" / "read-ini", env=env).stdout)
+    resolved.write_text(run(read_config, manifest, settings, installed / "helpers" / "read-ini", env=env).stdout)
     runtime = json.loads(resolved.read_text())
     env["UI_SHELL_RUNTIME"] = str(resolved)
     role_importer = pathlib.Path(runtime["commands"]["importThemeColors"])

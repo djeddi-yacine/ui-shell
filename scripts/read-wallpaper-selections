@@ -3,7 +3,8 @@
 set -euo pipefail
 [[ $# == 1 ]] || { printf '%s\n' 'Usage: read-wallpaper-selections RESOLVED_RUNTIME' >&2; exit 2; }
 runtime=$1
-policy=$(jq -er '.paths.hypr+"/user/monitors.lua"' "$runtime")
+policy=$(jq -er '.paths.userLua+"/monitors.lua"' "$runtime")
+[[ -f $policy ]] || policy=$(jq -er '.paths.hypr+"/default/monitors.lua"' "$runtime")
 primary=$(lua - "$policy" <<'LUA'
 local policy = dofile(arg[1]).palette_source
 assert(policy.kind == "default-wallpaper" or policy.kind == "output-wallpaper", "Invalid global palette policy")

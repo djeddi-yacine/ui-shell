@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print explicit per-output geometry overrides for the current Hyprland session.
 # Development only: output is host-specific. Review and merge it into
-# $XDG_CONFIG_HOME/ui-shell/hypr/user/monitors.lua; never commit it as a default.
+# $XDG_CONFIG_HOME/user-wm-shell/lua/monitors.lua; never commit it as a default.
 set -euo pipefail
 (( $# <= 1 )) || { printf '%s\n' 'Usage: generate-monitor-overrides [MONITORS_JSON]' >&2; exit 2; }
 if (( $# == 1 )); then

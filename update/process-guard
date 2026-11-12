@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Report whether a shell session or a release user exists. Scans /proc for this user's processes:
+# one named Hyprland, qs or quickshell, or one whose working directory, open file or mapped file is
+# under DATA_DIR/releases/. An entry whose name cannot be read counts as in use. For an entry whose
+# directory, files or mappings cannot be read (daemons that dropped privileges, such as ssh-agent
+# and (sd-pam), are always like that) the command line, which is world-readable, must then name the
+# release tree; the design's blanket "unreadable counts as in use" would block every update. This process and its ancestors
+# are skipped (a rollback runs from inside the release it inspects).
+# Exit 0 when clear; exit 1 and one `pid name reason` line per finding otherwise.
+set -uo pipefail
+[[ $# == 1 && $1 == /* ]] || { printf '%s\n' 'Usage: process-guard DATA_DIR' >&2; exit 2; }
+releases=${1%/}/releases/
+proc=/proc
+# The fake tree exists for tests only.
+[[ ${UI_SHELL_UPDATE_TEST-} == 1 && -n ${UI_SHELL_GUARD_PROC-} ]] && proc=$UI_SHELL_GUARD_PROC
+
+skip=' '
+if [[ $proc == /proc ]]; then
+  pid=$$
+  while [[ $pid =~ ^[0-9]+$ && $pid != 0 && $pid != 1 ]]; do
+    skip+="$pid "
+    pid=$(awk '$1 == "PPid:" { print $2 }' "/proc/$pid/status" 2>/dev/null) || break
+  done
+fi
+
+found=0
+# An unreadable entry is in use only when its command line names the release tree.
+unreadable() {
+  local what=$3 command_line=''
+  { command_line=$(tr '\0' ' ' <"$entry/cmdline"); } 2>/dev/null
+  if [[ $command_line == *"$releases"* ]]; then report "$1" "$2" "$what (command line names the release tree)"; fi
+}
+report() { printf '%s %s %s\n' "$1" "$2" "$3"; found=1; }
+shopt -s nullglob
+for entry in "$proc"/[0-9]*; do
+  pid=${entry##*/}
+  [[ $skip != *" $pid "* && -O $entry ]] || continue
+  if ! IFS= read -r name <"$entry/comm" 2>/dev/null; then
+    [[ -d $entry ]] && report "$pid" '?' 'process entry unreadable'
+    continue
+  fi
+  case $name in Hyprland|qs|quickshell) report "$pid" "$name" 'session process' ;; esac
+  cwd=$(readlink -- "$entry/cwd" 2>/dev/null) || { unreadable "$pid" "$name" 'working directory unreadable'; continue; }
+  if [[ $cwd/ == "$releases"* ]]; then report "$pid" "$name" "working directory in release tree ($cwd)"; continue; fi
+  if [[ ! -r $entry/fd || ! -x $entry/fd ]]; then unreadable "$pid" "$name" 'open files unreadable'; continue; fi
+  fds=("$entry"/fd/*)
+  hit=''
+  for descriptor in "${fds[@]}"; do
+    target=$(readlink -- "$descriptor" 2>/dev/null) || continue
+    [[ $target == "$releases"* ]] && { hit=$target; break; }
+  done
+  if [[ -n $hit ]]; then report "$pid" "$name" "open file in release tree ($hit)"; continue; fi
+  if [[ -e $entry/maps ]]; then
+    if ! { maps=$(<"$entry/maps"); } 2>/dev/null; then unreadable "$pid" "$name" 'mapped files unreadable'; continue; fi
+    [[ $maps == *" $releases"* ]] && report "$pid" "$name" 'mapped file in release tree'
+  fi
+done
+exit "$found"

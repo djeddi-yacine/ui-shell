@@ -15,11 +15,12 @@ runtime=${UI_SHELL_RUNTIME:?resolved runtime data required}
 scratch=$(mktemp -d "$XDG_CACHE_HOME/wallpaper-pipeline.XXXXXX")
 # The outer sandbox owns cleanup; leave private scratch available on failure.
 manifest=$(jq -er '.configFile' "$runtime")
+settings_file=$(jq -er '.settingsFile' "$runtime")
 resolver=$(jq -er '.commands.readShellConfig' "$runtime")
 reader=$(jq -er '.commands.readIni' "$runtime")
 prepare_runtime=$(jq -er '.commands.prepareRuntime' "$runtime")
 resolve_current() {
-  "$resolver" "$manifest" "$reader" >"$scratch/resolved.json"
+  "$resolver" "$manifest" "$settings_file" "$reader" >"$scratch/resolved.json"
   runtime=$("$prepare_runtime" "$scratch/resolved.json")
   registry=$(jq -er '.bundle.wallpaperRegistry' "$runtime")
   runtime_lua=$(jq -er '.runtimeLua' "$runtime")

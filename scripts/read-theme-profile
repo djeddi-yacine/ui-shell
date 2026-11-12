@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # One durable recipe: full saved colors and explicit wallpaper choices.
 set -euo pipefail
-[[ $# == 5 ]] || { printf '%s\n' 'Usage: read-theme-profile PROFILE_INI CONFIG_ROOT PROFILE_STORE THEME_STORE INI_READER' >&2; exit 2; }
-profile_input=$1 root=$(realpath -e -- "$2") profiles=$(realpath -e -- "$3") themes=$(realpath -e -- "$4") reader=$5
+[[ $# == 5 || $# == 7 ]] || { printf '%s\n' 'Usage: read-theme-profile PROFILE_INI CONFIG_ROOT PROFILE_STORE THEME_STORE INI_READER [SHIPPED_PROFILE_STORE SHIPPED_THEME_STORE]' >&2; exit 2; }
+profile_input=$1 root=$(realpath -e -- "$2") profiles=$(realpath -m -- "$3") themes=$(realpath -m -- "$4") reader=$5
+# The shipped stores are a read-only second search root; a user entry with the same id wins.
+# Absent directories mean no fallback (development staging seeds the user stores instead).
+shipped_profiles='' shipped_themes=''
+if [[ $# == 7 ]]; then
+  shipped_profiles=$(realpath -m -- "$6") shipped_themes=$(realpath -m -- "$7")
+  [[ -d $shipped_profiles ]] || shipped_profiles=''
+  [[ -d $shipped_themes ]] || shipped_themes=''
+fi
+if [[ ! -e $profile_input && -n $shipped_profiles && $profile_input == "$profiles/"*/profile.ini ]]; then
+  fallback=$shipped_profiles/${profile_input#"$profiles/"}
+  [[ -f $fallback ]] && profile_input=$fallback
+fi
 profile=$(realpath -e -- "$profile_input")
-[[ -d $profiles && -d $themes && -f $profile_input && ! -L $profile_input && $profile == "$profiles/"* ]] || {
+[[ -f $profile_input && ! -L $profile_input && ( $profile == "$profiles/"* || -n $shipped_profiles && $profile == "$shipped_profiles/"* ) ]] || {
   printf '%s\n' 'Profile must be a regular file inside configured profile storage.' >&2; exit 1;
 }
 work=$(mktemp -d)
@@ -58,9 +70,19 @@ profile_json=$("$reader" "$work/profile.ini" | jq -ce --arg root "$root" --arg p
      .monitors=($selections | map(select(.output!="") | {key:.output,value:.selection}) | from_entries)),
    profileColors:(if $theme.source=="file" then {defaultPalette:$by_output[""],byOutput:($by_output | del(.[""]))} else null end)}
 ')
+# A definition missing from the user's Theme store but present in the shipped one is read from there.
+shipped_definition() {
+  local path=$1
+  if [[ -n $shipped_themes && $path == "$themes/"* && ! -e $path && ! -L $path && -f $shipped_themes/${path#"$themes/"} ]]; then
+    printf '%s\n' "$shipped_themes/${path#"$themes/"}"
+  else
+    printf '%s\n' "$path"
+  fi
+}
 check_theme_definition() {
-  local path=$1 canonical
-  [[ ${path##*/} == config.ini && $path == "$root/"* ]] || {
+  local path=$1 canonical store=$themes
+  [[ -n $shipped_themes && $path == "$shipped_themes/"* ]] && store=$shipped_themes
+  [[ ${path##*/} == config.ini && ( $path == "$root/"* || $store == "$shipped_themes" ) ]] || {
     printf 'Theme definition must be config-root-relative and inside configured Theme storage: %s\n' "$path" >&2; exit 1;
   }
   if [[ -e $path || -L $path ]]; then
@@ -69,18 +91,25 @@ check_theme_definition() {
     }
   fi
   canonical=$(realpath -m -- "$path")
-  [[ $canonical == "$themes/"* ]] || {
+  [[ $canonical == "$store/"* ]] || {
     printf 'Theme definition is outside configured Theme storage: %s\n' "$path" >&2; exit 1;
   }
   local current=${path%/*}
-  while [[ $current != "$themes" ]]; do
-    [[ $current == "$themes/"* && ! -L $current ]] || {
+  while [[ $current != "$store" ]]; do
+    [[ $current == "$store/"* && ! -L $current ]] || {
       printf 'Theme definition crosses an unsafe Theme storage path: %s\n' "$path" >&2; exit 1;
     }
     current=${current%/*}
   done
 }
 while IFS= read -r definition; do
-  [[ -z $definition ]] || check_theme_definition "$definition"
+  [[ -z $definition ]] && continue
+  replacement=$(shipped_definition "$definition")
+  if [[ $replacement != "$definition" ]]; then
+    profile_json=$(jq -c --arg old "$definition" --arg new "$replacement" \
+      '.theme.definition |= (if . == $old then $new else . end) | .theme.definitionOverrides |= map_values(if . == $old then $new else . end)' <<<"$profile_json")
+    definition=$replacement
+  fi
+  check_theme_definition "$definition"
 done < <(jq -r '[.theme.definition, (.theme.definitionOverrides | .[])] | .[] | select(length > 0)' <<<"$profile_json")
 printf '%s\n' "$profile_json"

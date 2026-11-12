@@ -47,7 +47,7 @@ QtObject {
     function reply(text) {
         if (root.answered) return
         root.answered = true
-        root.writer.pending = text
+        root.answerText = text
         root.writer.running = true
     }
 
@@ -91,12 +91,12 @@ QtObject {
         onExited: root.callerGone()
     }
     // `cat` opens the pipe for writing, which the waiting client has open for reading.
+    property string answerText: ""
     property Process writer: Process {
-        property string pending: ""
         stdinEnabled: true
         command: ["sh", "-c", "cat > \"$1/result\"", "sh", root.filePath]
         onStarted: {
-            write(pending + "\n")
+            write(root.answerText + "\n")
             stdinEnabled = false
         }
     }

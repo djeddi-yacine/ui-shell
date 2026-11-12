@@ -6,10 +6,15 @@ hl.config({
     disable_logs = false,
     enable_stdout_logs = true,
   },
+  -- The disposable session never edits its config live; the watcher also floods the log with
+  -- "got an event for wd N which we don't have" errors.
+  misc = {
+    disable_autoreload = true,
+  },
 })
 
 local profile = require("profile")
-local settings = require("user.nested")
+local settings = require("userlua").load("nested")
 for key, value in pairs(settings.profile_overrides) do
   assert(profile[key] ~= nil, "Nested profile: unknown option " .. tostring(key))
   profile[key] = value

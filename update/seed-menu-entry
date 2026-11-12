@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Seed the user's uuctl launcher entry so uuctl asks through the shell's menu (MENU, normally
+# DATA_HOME/ui-shell/current/scripts/menu) instead of the first dmenu-like tool it finds. Only when
+# uuctl is installed. An absent entry is written; an entry whose Exec is `uuctl <path>/scripts/menu -p`
+# with another path is stale and rewritten; any other file is the user's and always wins.
+# The entry has the same file name as the package's, so it takes precedence over it.
+set -euo pipefail
+(( $# == 3 )) || { printf '%s\n' 'Usage: seed-menu-entry SOURCE_ROOT MENU DATA_HOME' >&2; exit 2; }
+source_root=$(realpath -e -- "$1")
+menu=$(realpath -m -- "$2")
+data_home=$(realpath -m -- "$3")
+template=$source_root/update/uuctl.desktop
+fail() { printf 'Seed menu entry: %s\n' "$*" >&2; exit 1; }
+[[ -f $template && ! -L $template ]] || fail 'update/uuctl.desktop must be a regular file'
+[[ $menu != *[[:space:]]* ]] || fail 'the staged menu path must not contain whitespace (an Exec value would need quoting)'
+[[ $menu != *'%'* && $menu != *'\'* && $menu != *'"'* ]] || fail 'the staged menu path must not contain %, \ or "'
+[[ ! -L $data_home/applications ]] || fail 'the applications directory must not be a symlink'
+command -v uuctl >/dev/null || exit 0
+target=$data_home/applications/uuctl.desktop
+if [[ -e $target || -L $target ]]; then
+  [[ -f $target && ! -L $target ]] || exit 0
+  # Only our own stale line is replaced; the rest of the file is kept as it is.
+  grep -qE '^Exec=uuctl [^ ]*/scripts/menu -p$' "$target" || exit 0
+  [[ $(grep -c '^Exec=' "$target") == 1 ]] || exit 0
+  grep -qxF "Exec=uuctl $menu -p" "$target" && exit 0
+  temporary=$(mktemp "$data_home/applications/.uuctl.XXXXXX")
+  trap 'rm -f -- "$temporary"' EXIT
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line == Exec=* ]] && line="Exec=uuctl $menu -p"
+    printf '%s\n' "$line"
+  done <"$target" >"$temporary"
+  mv -f -- "$temporary" "$target"
+  exit 0
+fi
+mkdir -p -- "$data_home/applications"
+temporary=$(mktemp "$data_home/applications/.uuctl.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+while IFS= read -r line || [[ -n $line ]]; do
+  printf '%s\n' "${line//@MENU@/$menu}"
+done <"$template" >"$temporary"
+mv -n -- "$temporary" "$target"

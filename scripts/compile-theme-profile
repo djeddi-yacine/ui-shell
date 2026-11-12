@@ -20,7 +20,8 @@ work=$(mktemp -d "$base/.build.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 reader=$(jq -er '.commands.readIni' "$input")
 "$(jq -er '.commands.readThemeProfile' "$input")" "$(jq -er '.theme.profile' "$input")" "$(jq -er '.configRoot' "$input")" \
-  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$reader" >"$work/profile.json"
+  "$(jq -er '.paths.profiles' "$input")" "$(jq -er '.paths.themes' "$input")" "$reader" \
+  "$(jq -er '.paths.shippedProfiles' "$input")" "$(jq -er '.paths.shippedThemes' "$input")" >"$work/profile.json"
 [[ $(jq -er '.recipeHash' "$input") == $(jq -er '.recipeHash' "$work/profile.json") ]] || {
   printf '%s\n' 'Profile changed before compilation; resolve it again.' >&2; exit 3;
 }

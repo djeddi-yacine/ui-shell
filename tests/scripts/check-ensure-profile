@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# ensure-user-profile copies a shipped profile and every theme it names (its own definition and each
+# [definition_overrides] entry); a user entry is never touched.
+set -euo pipefail
+project=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+fail() { printf 'Ensure profile: %s\n' "$1" >&2; exit 1; }
+scratch=$(mktemp -d)
+trap 'rm -r -- "${scratch:?}"' EXIT
+mkdir -p "$scratch"/{user/profiles,user/themes,shipped/profiles/demo,shipped/themes/{base,over,unrelated}}
+printf 'x\n' >"$scratch/shipped/themes/base/config.ini"
+printf 'o\n' >"$scratch/shipped/themes/over/config.ini"
+printf 'u\n' >"$scratch/shipped/themes/unrelated/config.ini"
+cat >"$scratch/shipped/profiles/demo/profile.ini" <<'INI'
+[theme]
+definition = themes/base/config.ini
+
+[definition_overrides]
+dark = themes/over/config.ini
+INI
+jq -n --arg p "$scratch/user/profiles" --arg t "$scratch/user/themes" --arg sp "$scratch/shipped/profiles" --arg st "$scratch/shipped/themes" \
+  '{paths: {profiles: $p, themes: $t, shippedProfiles: $sp, shippedThemes: $st}}' >"$scratch/runtime.json"
+bash "$project/scripts/ensure-user-profile" "$scratch/runtime.json" demo
+[[ -f $scratch/user/profiles/demo/profile.ini ]] || fail 'the profile was not copied'
+[[ -f $scratch/user/themes/base/config.ini ]] || fail 'the named theme was not copied'
+[[ -f $scratch/user/themes/over/config.ini ]] || fail 'the override theme was not copied'
+[[ ! -e $scratch/user/themes/unrelated ]] || fail 'a theme the profile does not name was copied'
+# a user entry wins and is never touched
+printf 'mine\n' >"$scratch/user/themes/over/config.ini"
+rm -r -- "${scratch:?}/user/profiles/demo"
+bash "$project/scripts/ensure-user-profile" "$scratch/runtime.json" demo
+[[ $(<"$scratch/user/themes/over/config.ini") == mine ]] || fail 'a user theme was overwritten'
+printf 'Ensure profile checks passed: profile, named theme and override theme copied; user entries kept.\n'

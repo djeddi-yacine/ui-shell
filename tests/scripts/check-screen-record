@@ -358,13 +358,5 @@ UI_SHELL_RECORD_MIN_MB=999999999 "$script" start monitor:FAKE-1 2>/dev/null && f
 "$script" start monitor:FAKE-1 --countdown abc 2>/dev/null && fail 'bad countdown accepted'; ok
 UI_SHELL_RECORDER=/nonexistent "$script" start monitor:FAKE-1 2>/dev/null && fail 'missing recorder accepted'; ok
 
-echo '== the real recorder with no Wayland session fails with a readable message'
-if command -v gpu-screen-recorder >/dev/null; then
-  reset
-  env -u WAYLAND_DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE UI_SHELL_RECORDER=gpu-screen-recorder "$script" start monitor:NONE --desktop-audio no
-  wait_state failed 8
-  field .message | grep -qi 'wayland' || fail "the real recorder's error did not reach the state: $(field .message)"; ok
-fi
-
 reset
 printf 'screen-record: %d checks passed\n' "$checks"

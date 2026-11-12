@@ -3,12 +3,12 @@
 -- from a mutable system-wide plugin directory.
 local profile = require("profile")
 local settings = profile.phantomat
-assert(settings.mode == "overview" or settings.mode == "canvas",
-  "Phantomat: mode must be overview or canvas")
-
 if not settings.enabled then
   return
 end
+
+assert(settings.mode == "overview" or settings.mode == "canvas",
+  "Phantomat: mode must be overview or canvas")
 
 local runtime = require("runtime")
 local colors = dofile(runtime.bundle.hyprPalette)
@@ -28,6 +28,7 @@ local function navigator_colors(palette)
   }
 end
 
+assert(runtime.paths.phantomatLibrary, "Phantomat: set [phantomat] library in settings.ini to enable the plugin")
 hl.plugin.load(runtime.paths.phantomatLibrary)
 
 local loaded = false
@@ -117,7 +118,7 @@ local config = {
 }
 
 if settings.mode == "canvas" then
-  config = require("user.canvas")
+  config = require("userlua").load("canvas")
 end
 
 -- Configured global colors are the explicit default for unassigned outputs.
