@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if (( $# != 7 )); then
+  printf '%s\n' 'Usage: import-theme-colors REFERENCE_ROOT DESTINATION NORMALIZER RENDERER POSITIVE WARNING NEGATIVE' >&2
+  exit 2
+fi
+reference=$(realpath -e -- "$1")
+destination=$(realpath -ms -- "$2")
+normalizer=$3 renderer=$4 positive=$5 warning=$6 negative=$7
+fail() { printf 'Theme import: %s\n' "$*" >&2; exit 1; }
+[[ -d $reference && $reference != / ]] || fail 'reference root must be a non-root directory'
+[[ -n $positive && -n $warning && -n $negative ]] || fail 'explicit semantic mappings required'
+[[ $destination != / && $destination != "$reference" && $destination != "$reference"/* && $reference != "$destination"/* ]] || fail 'reference and destination must be disjoint'
+# Refuse redirected destination paths, including dangling links.
+check_path() {
+  local path=$1
+  while [[ $path != / ]]; do
+    [[ ! -L $path ]] || fail "symlink destination: $path"
+    path=$(dirname -- "$path")
+  done
+}
+check_path "$destination"
+theme_id() {
+  local palette variant slug
+  palette=${1%/colors.toml}
+  variant=${palette##*/} slug=${palette%/*}
+  printf '%s-%s' "${slug//\//-}" "$variant"
+}
+scratch=$(mktemp -d)
+temporary=
+cleanup() {
+  [[ -z $temporary ]] || rm -f -- "$temporary"
+  rm -rf -- "$scratch"
+}
+trap cleanup EXIT
+# NUL-delimited discovery supports spaces and does not follow reference symlinks.
+rg --files --hidden --no-ignore -0 "$reference" >"$scratch/discovered"
+files=()
+declare -A ids=()
+while IFS= read -r -d '' file; do
+  relative=${file#"$reference"/}
+  if [[ $relative =~ ^(.+)/(dark|day|high-contrast|day-high-contrast|oled)/colors\.toml$ ]]; then
+    slug=${BASH_REMATCH[1]}
+    variant=${BASH_REMATCH[2]}
+    [[ $slug =~ ^[a-z0-9]+(-[a-z0-9]+)*(/[a-z0-9]+(-[a-z0-9]+)*)*$ ]] || fail "unsafe theme slug: $slug"
+    [[ ! -L $file && $(realpath -e -- "$file") == "$reference/$relative" ]] || fail "redirected reference: $relative"
+    id=${slug//\//-}-$variant
+    [[ ! -v ids[$id] ]] || fail "duplicate theme ID: $id"
+    ids[$id]=1
+    files+=("$relative")
+  elif [[ $relative == */colors.toml ]]; then
+    fail "unsupported reference palette: $relative"
+  fi
+done <"$scratch/discovered"
+(( ${#files[@]} > 0 )) || fail 'no theme palettes found'
+mapfile -d '' -t files < <(printf '%s\0' "${files[@]}" | LC_ALL=C sort -z)
+# Convert everything before publishing: invalid inputs preserve existing outputs.
+written=0 unchanged=0
+for relative in "${files[@]}"; do
+  target=$(theme_id "$relative")/config.ini
+  check_path "$destination/$target"
+  mkdir -p -- "$scratch/palettes/$(dirname -- "$target")"
+  "$normalizer" "$reference/$relative" "$scratch/normalized.json" "$positive" "$warning" "$negative"
+  "$renderer" "$scratch/normalized.json" "$scratch/palettes/$target"
+done
+for relative in "${files[@]}"; do
+  target=$(theme_id "$relative")/config.ini
+  check_path "$destination/$target"
+  [[ ! -d $destination/$target ]] || fail "output is a directory: $target"
+  [[ ! -e $destination/$target || -f $destination/$target ]] || fail "output is not a regular file: $target"
+  mkdir -p -- "$destination/$(dirname -- "$target")"
+  if [[ -f $destination/$target ]] && cmp -s -- "$scratch/palettes/$target" "$destination/$target"; then unchanged=$((unchanged + 1)); continue; fi
+  temporary=$(mktemp "$destination/$(dirname -- "$target")/.config.ini.XXXXXX")
+  cp -- "$scratch/palettes/$target" "$temporary"
+  mv -f -- "$temporary" "$destination/$target"
+  temporary=
+  written=$((written + 1))
+done
+printf 'Regenerated %s reference palettes: %s written, %s unchanged.\n' "${#files[@]}" "$written" "$unchanged"

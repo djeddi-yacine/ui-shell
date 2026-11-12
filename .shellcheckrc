@@ -1,0 +1,9 @@
+# Read by shellcheck for every script in the repository.
+external-sources=true
+# SC2154: the update marker fields (marker_*), the sandbox settings (test_*) and the sourced test
+# fixtures are assigned through read/eval/source, which shellcheck cannot follow.
+disable=SC2154
+# SC1007: `VAR= command` is an empty environment value on purpose (crash points, signer key).
+disable=SC1007
+# SC1091: sources are located through $here or a path inside the sandbox, which cannot be followed statically.
+disable=SC1091
