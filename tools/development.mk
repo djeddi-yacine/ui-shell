@@ -24,7 +24,7 @@ dev-help:
 		'  dev-check-update      Build the dev release and rehearse it against a scratch copy of a clean user directory' \
 		'  dev-update            Install and update like a stranger in a Bubblewrap sandbox (private home, read-only root); options in DEV_UPDATE_ARGS, see tools/scripts/dev-update --help' \
 		'  release-plan          Show the next patch release without changing anything' \
-		'  release-patch|minor|major  Gate, bump VERSION, sign the tag, prove install + upgrade + rollback in the sandbox, then push (RELEASE_ARGS=--no-push|--no-gate|--yes|...)' \
+		'  release-patch|minor|major  Gate, bump VERSION, sign the tag, prove install + upgrade + rollback in the sandbox, then push (RELEASE_ARGS=--no-push|--no-test|--no-gate|--yes|...)' \
 		'  dev-stage            Stage runtime files privately under .build/' \
 		'  dev-configure         Prepare the staged manifest and palettes' \
 		'  dev-seed-clipboard    Write ~/.config/cliphist/config (history in the runtime dir) only if absent' \

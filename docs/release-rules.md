@@ -10,7 +10,7 @@ signs the tag, proves in the sandbox that a stranger installs it and that the pr
 to it and rolls back, and only then pushes. The release key is never a default: set `RELEASE_GNUPGHOME`
 to the GnuPG home that holds it (and `RELEASE_SIGNING_KEY` when it holds several signing keys); the script
 shows the key that will sign, requires its primary to equal the pinned `update/signer.asc` key, and asks
-before signing, so a wrong key is fixed by setting the variable again. `RELEASE_ARGS` passes `--no-push`, `--no-gate`, `--yes`,
+before signing, so a wrong key is fixed by setting the variable again. `RELEASE_ARGS` passes `--no-push`, `--no-test`, `--no-gate`, `--yes`,
 `--no-public`. `make test-release` tests that flow with a throwaway key. `VERSION` always holds the latest
 released version; the script refuses when it and the newest tag disagree.
 

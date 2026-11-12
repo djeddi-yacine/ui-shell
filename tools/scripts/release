@@ -4,10 +4,11 @@
 # only then pushes. Nothing is pushed before the proof passes; a failure before the push removes the
 # release commit and the tag again.
 #
-#   release patch|minor|major [--plan] [--no-gate] [--no-push] [--no-public] [--yes]
+#   release patch|minor|major [--plan] [--no-test] [--no-gate] [--no-push] [--no-public] [--yes]
 #
 #   --plan       print what would happen and stop (changes nothing)
-#   --no-gate    skip make test, dev-lint, dev-shellcheck and dev-check-update
+#   --no-test    skip only `make test` (the long suite); lint, shellcheck and the release build check still run
+#   --no-gate    skip the whole gate: make test, dev-lint, dev-shellcheck and dev-check-update
 #   --no-push    stop after the local proof; the commit and the signed tag stay local
 #   --no-public  skip the proof against the published repository after the push
 #   --yes        do not ask before pushing
@@ -34,11 +35,12 @@ die() { printf 'release: %s\n' "$*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//' >&2; exit "${1:-2}"; }
 
-bump='' plan=0 gate=1 push=1 public=1 yes=0
+bump='' plan=0 gate=1 test=1 push=1 public=1 yes=0
 for argument in "$@"; do
   case $argument in
     patch|minor|major) [[ -z $bump ]] || usage; bump=$argument ;;
     --plan) plan=1 ;;
+    --no-test) test=0 ;;
     --no-gate) gate=0 ;;
     --no-push) push=0 ;;
     --no-public) public=0 ;;
@@ -104,7 +106,7 @@ fi
 say "plan: $previous -> $tag ($bump)"
 if (( since > 0 )); then git log --oneline "$previous..HEAD" | sed 's/^/  /'
 else printf '  no commits since %s: the release commit only bumps VERSION\n' "$previous"; fi
-printf '  gate: %s, push: %s, public proof: %s, signer %s\n' "$( ((gate)) && echo yes || echo no)" "$( ((push)) && echo yes || echo no)" "$( ((public && push)) && echo yes || echo no)" "$fingerprint"
+printf '  tests: %s, gate: %s, push: %s, public proof: %s, signer %s\n' "$( ((gate && test)) && echo yes || echo no)" "$( ((gate)) && echo yes || echo no)" "$( ((push)) && echo yes || echo no)" "$( ((public && push)) && echo yes || echo no)" "$fingerprint"
 printf '  signing key %s in %s\n    %s\n' "$signing_fpr" "$gnupg_home" \
   "$(GNUPGHOME=$gnupg_home gpg --with-colons --list-keys "$primary_fpr" | awk -F: '$1 == "uid" { print $10; exit }')"
 (( ! plan )) || exit 0
@@ -116,7 +118,9 @@ fi
 # ---- gate ---------------------------------------------------------------------------------------
 if (( gate )); then
   say 'gate'
-  make --no-print-directory test dev-lint dev-shellcheck dev-check-update
+  targets=(dev-lint dev-shellcheck dev-check-update)
+  (( ! test )) || targets=(test "${targets[@]}")
+  make --no-print-directory "${targets[@]}"
 fi
 
 # ---- commit and sign (undone if anything fails before the push) ---------------------------------------
