@@ -84,9 +84,10 @@ if (( push )); then [[ -z $(git ls-remote --tags "$remote" "refs/tags/$tag") ]] 
 [[ -f $signer_key ]] || die "no signer key file $signer_key."
 fingerprint=$(gpg --show-keys --with-colons "$signer_key" | awk -F: '$1 == "fpr" { print $10; exit }')
 [[ -n $fingerprint ]] || die "$signer_key holds no key."
-# Secret signing keys in the release home that are neither expired, revoked nor invalid: "PRIMARY KEY".
+# Secret keys in the release home that can sign themselves (lowercase s: the uppercase S of a primary only
+# says a subkey can), are present (not a stub, marked #) and are neither expired, revoked nor invalid: "PRIMARY KEY".
 candidates=$(GNUPGHOME=$gnupg_home gpg --with-colons --list-secret-keys 2>/dev/null | awk -F: '
-  $1 == "sec" || $1 == "ssb" { kind = $1; usable = ($12 ~ /[sS]/ && $2 !~ /^[erid]$/) }
+  $1 == "sec" || $1 == "ssb" { kind = $1; usable = ($12 ~ /s/ && $2 !~ /^[erid]$/ && $15 != "#") }
   $1 == "fpr" { if (kind == "sec") primary = $10; if (usable) { print primary, $10; usable = 0 } }')
 if [[ -n ${RELEASE_SIGNING_KEY:-} ]]; then
   signing_fpr=${RELEASE_SIGNING_KEY%!}
