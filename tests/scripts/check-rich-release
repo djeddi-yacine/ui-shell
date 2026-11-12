@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# The parts of an update that a tooling-only release never touches: a candidate release that ships a
+# data migration, raises the readable shape, and changes the installed activator itself, installed
+# over a real previous release in the sandbox, then rolled back; and the whole release script run on it.
+# The checks look inside the kept sandbox home: the migration ran and left its marker, a snapshot was
+# taken first, the activator replaced itself, and a rollback restored the user data. Setup is in
+# tests/scripts/release-fixture. Needs bwrap and gpg.
+set -euo pipefail
+# shellcheck source=tests/scripts/release-fixture
+source "$(dirname -- "${BASH_SOURCE[0]}")/release-fixture"
+
+home=$scratch/home
+dev_update() { # ARGS... ; every run uses the local repository, the throwaway key and the kept home
+  bash "$root/tools/scripts/dev-update" --repo "$repo" --no-net --signer-key "$signer_key" \
+    --fingerprint "$signer_fp" --home "$home" "$@" >"$scratch/out" 2>&1 ||
+    { cat -- "$scratch/out" >&2; fail "dev-update $* failed"; }
+}
+config=$home/.config/user-wm-shell state=$home/.local/state/ui-shell
+migration=1893456000-candidate-note
+
+# The candidate: a migration (shape 2), the manifest reading shapes 1 to 2, and a changed activator.
+cd -- "$repo"
+printf '%s\n' '#!/usr/bin/env bash' '# shape: 2' 'set -euo pipefail' \
+  'printf "migrated\n" >"$UI_SHELL_CONFIG_HOME/migrated-by-candidate"' >"migrations/$migration"
+chmod +x "migrations/$migration"
+sed -i 's/^reads_max = 1$/reads_max = 2/' tools/manifest.ini
+printf '%s\n' '# candidate activator marker' >>update/activator
+git add -f -- "migrations/$migration" tools/manifest.ini update/activator
+git commit -q -m 'A candidate with a migration, a wider shape and a new activator'
+GNUPGHOME=$scratch/gpg git tag -s -u "$subkey_fp!" -m v0.1.9 v0.1.9
+
+# The previous release is installed first; its activator and its user data are what the update meets.
+dev_update --from v0.1.0 --to v0.1.0 --steps install,update
+[[ -f $config/migrated-by-candidate ]] && fail 'the migration ran before it was released'
+rg -q 'candidate activator marker' "$home/.local/bin/update-ui-shell" && fail 'the old activator already has the new code'
+
+# The update: dry-run changes nothing, the update migrates, the activator replaces itself, a snapshot exists.
+dev_update --from v0.1.0 --to v0.1.9 --steps dry-run,update,again
+[[ -f $config/migrated-by-candidate ]] || fail 'the migration did not run'
+rg -q '^shape=2$' "$state/migrations/$migration" || fail 'the migration marker lacks shape 2'
+rg -q 'candidate activator marker' "$home/.local/bin/update-ui-shell" || fail 'the activator did not replace itself'
+[[ -n $(find "$state" -ipath '*snapshot*' -print -quit) ]] || fail 'no snapshot was taken before the shape rose'
+rg -q 'user data intact after the update' "$scratch/out" || fail 'the user-data check did not run on the update'
+
+# The rollback: the previous release is active, the migration's effect and marker are gone, the data is intact.
+dev_update --from v0.1.0 --to v0.1.9 --steps rollback
+[[ $(readlink "$home/.local/share/ui-shell/current") == releases/v0.1.0 ]] || fail 'the rollback did not restore v0.1.0'
+[[ ! -e $config/migrated-by-candidate ]] || fail 'the rollback left the migration effect in the user directory'
+[[ ! -e $state/migrations/$migration ]] || fail 'the rollback left the migration marker'
+rg -q 'user data intact after the rollback' "$scratch/out" || fail 'the user-data check did not run on the rollback'
+
+# The whole release script on the same candidate (the test tag is dropped so the script makes its own).
+git tag -d v0.1.9 >/dev/null
+release patch --no-gate --no-public --yes || { cat -- "$scratch/out" >&2; fail 'the release of the rich candidate failed'; }
+rg -q 'rollback exit 0' "$scratch/out" || fail 'the release proofs did not roll back'
+printf '%s\n' 'Rich release checks passed.'

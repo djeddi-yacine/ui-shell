@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [install, update, migration]
 created: "2026-11-11T02:03:44"
-updated: "2026-11-12T08:08:40"
+updated: "2026-11-12T08:42:00"
 ---
 
 <!-- compiled_truth -->
@@ -243,5 +243,11 @@ Related: [[shipped-default-seed]], [[xdg-runtime-and-theme-schema]].
 - time: 2026-11-12T08:08:40
   kind: decision
   summary: "Release tooling never hardcodes machine-specific setup (owner instruction): RELEASE_GNUPGHOME is required with no default, RELEASE_SIGNING_KEY is optional (else the single usable signing key in that home), the script shows the signing key, requires its primary to equal the pinned update/signer.asc key, and asks to confirm before signing; a wrong key is fixed by setting the env again. The repository user.signingkey is no longer used. Docs use $RELEASE_GNUPGHOME."
+  source: owner chat
+  affects: [install-update-migration]
+
+- time: 2026-11-12T08:42:00
+  kind: decision
+  summary: "Release proofs now cover user data and the hard path: dev-update plants a user-directory file and a state file before an update and fails if the update or rollback changes them (settings.ini is reported, since a migration may rewrite it); tests/scripts/check-rich-release installs a candidate with a migration, reads_max 2 and a changed activator over a real previous release, checks the migration marker, the snapshot, the activator self-update and the rollback restore, then runs the whole release script on it. The v0.1.0 to v0.2.0 upgrade proved only signing, pinning, swap and rollback because no shipped part differed."
   source: owner chat
   affects: [install-update-migration]

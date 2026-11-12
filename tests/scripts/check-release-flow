@@ -3,62 +3,10 @@
 # remote, the real dev-update sandbox. Covers the bump, the signed tag, the install and the
 # previous-to-new upgrade proofs, the push, the refusals, and the undo when a proof fails.
 # The real repository, keys and remote are never touched. Needs bwrap and gpg.
+# Setup: tests/scripts/release-fixture.
 set -euo pipefail
-# The caller's release settings (the real key, remote, branch) must never reach the scratch run.
-unset RELEASE_GNUPGHOME RELEASE_SIGNING_KEY RELEASE_SIGNER_KEY RELEASE_REMOTE RELEASE_BRANCH
-root=$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/../..")
-scratch=$(mktemp -d)
-cleanup() { chmod -R u+w -- "${scratch:?}" 2>/dev/null || true; rm -r -- "${scratch:?}"; }
-trap cleanup EXIT
-fail() { printf 'Release flow check failed: %s\n' "$*" >&2; exit 1; }
-
-for dependency in bwrap gpg git; do command -v "$dependency" >/dev/null || fail "$dependency is required."; done
-
-# Two throwaway identities: the signer, laid out like a real release home (the primary key is only a
-# stub, a signing subkey does the work), and a stranger whose key must not be accepted.
-new_key() { # DIR NAME -> prints the fingerprint
-  GNUPGHOME=$1 gpg --batch --quiet --pinentry-mode loopback --passphrase '' --quick-gen-key "$2 <$2@example.invalid>" ed25519 sign never >/dev/null 2>&1
-  GNUPGHOME=$1 gpg --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }'
-}
-mkdir -m 700 "$scratch/full" "$scratch/gpg" "$scratch/other"
-GNUPGHOME=$scratch/full gpg --batch --quiet --pinentry-mode loopback --passphrase '' --quick-gen-key 'signer <signer@example.invalid>' ed25519 cert never >/dev/null 2>&1
-signer_fp=$(GNUPGHOME=$scratch/full gpg --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
-GNUPGHOME=$scratch/full gpg --batch --quiet --pinentry-mode loopback --passphrase '' --quick-add-key "$signer_fp" ed25519 sign never >/dev/null 2>&1
-subkey_fp=$(GNUPGHOME=$scratch/full gpg --with-colons --list-keys | awk -F: '$1 == "fpr" { n++; if (n == 2) { print $10; exit } }')
-GNUPGHOME=$scratch/full gpg --batch --pinentry-mode loopback --passphrase '' --export-secret-subkeys "$subkey_fp!" |
-  GNUPGHOME=$scratch/gpg gpg --batch --quiet --import 2>/dev/null
-other_fp=$(new_key "$scratch/other" other)
-GNUPGHOME=$scratch/full gpg --batch --armor --export "$signer_fp" >"$scratch/signer.asc"
-GNUPGHOME=$scratch/other gpg --batch --armor --export "$other_fp" >"$scratch/other.asc"
-
-# The repository: this tree's tooling on top of a clone, a first release signed by the throwaway key,
-# one change after it, and a bare remote.
-git clone -q -- "$root" "$scratch/repo"
-repo=$scratch/repo
-git -C "$repo" config user.name tester
-git -C "$repo" config user.email tester@example.invalid
-git -C "$repo" config commit.gpgsign false
-git -C "$repo" tag -l | xargs -r git -C "$repo" tag -d >/dev/null
-for file in tools/scripts/release tools/scripts/dev-update tools/development.mk .gitignore VERSION; do
-  mkdir -p -- "$(dirname -- "$repo/$file")"
-  cp -- "$root/$file" "$repo/$file"
-done
-git -C "$repo" add -A
-git -C "$repo" commit -q --allow-empty -m 'Tooling under test'
-GNUPGHOME=$scratch/gpg git -C "$repo" tag -s -u "$subkey_fp!" -m v0.1.0 v0.1.0
-printf 'change\n' >"$repo/change.txt"
-git -C "$repo" add -f change.txt
-git -C "$repo" commit -q -m 'A change after v0.1.0'
-git init -q --bare "$scratch/remote.git"
-git -C "$repo" remote remove origin
-git -C "$repo" remote add origin "$scratch/remote.git"
-git -C "$repo" push -q origin main v0.1.0
-
-release() { # ARGS... ; environment and directory fixed; output kept in $scratch/out
-  (cd -- "$repo" && RELEASE_GNUPGHOME=$scratch/gpg RELEASE_SIGNER_KEY=${signer_key:-$scratch/signer.asc} \
-    bash tools/scripts/release "$@") >"$scratch/out" 2>&1
-}
-signer_key=$scratch/signer.asc
+# shellcheck source=tests/scripts/release-fixture
+source "$(dirname -- "${BASH_SOURCE[0]}")/release-fixture"
 
 # Refusals change nothing.
 head_before=$(git -C "$repo" rev-parse HEAD)

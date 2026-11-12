@@ -11,7 +11,7 @@ to it and rolls back, and only then pushes. The release key is never a default: 
 to the GnuPG home that holds it (and `RELEASE_SIGNING_KEY` when it holds several signing keys); the script
 shows the key that will sign, requires its primary to equal the pinned `update/signer.asc` key, and asks
 before signing, so a wrong key is fixed by setting the variable again. `RELEASE_ARGS` passes `--no-push`, `--no-test`, `--no-gate`, `--yes`,
-`--no-public`. `make test-release` tests that flow with a throwaway key. `VERSION` always holds the latest
+`--no-public`. `make test-release` tests that flow with a throwaway key, and `make test-rich-release` runs it on a candidate with a migration, a wider shape and a new activator. `VERSION` always holds the latest
 released version; the script refuses when it and the newest tag disagree.
 
 ## 1. The tag
@@ -88,3 +88,6 @@ released version; the script refuses when it and the newest tag disagree.
 24. The signing rehearsal in `docs/release-testing.md` section 2 succeeds with the real subkey.
 25. After pushing, `make dev-update` passes against the public repository, and for any release after
     the first, an upgrade from the previous tag passes too (kept `--home`, see `docs/release-testing.md`).
+    `dev-update` plants a user-directory file and a state file before an update and fails when the update or the
+    rollback changes them (`settings.ini` is reported, since a migration may rewrite it), so a release with no
+    migration still gets that check.

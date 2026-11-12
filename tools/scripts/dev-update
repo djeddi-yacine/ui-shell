@@ -15,7 +15,9 @@
 #   --steps        comma list, run in order; default install,dry-run,update,again
 #                    install   clone --from, type the fingerprint, install ~/.local/bin/update-ui-shell
 #                    dry-run   --dry-run; the data, config and state trees must stay unchanged
-#                    update    update (with --tag when --to is set); no pending marker may remain
+#                    update    update (with --tag when --to is set); no pending marker may remain; a file in the
+#                              user directory and one in the state directory, planted first, must survive
+#                              the update and the rollback unchanged (settings.ini is compared and reported)
 #                    again     a second update must report "Already current"
 #                    rollback  --rollback to the previous release (skipped when there is none)
 #   --fingerprint  primary fingerprint typed at the prompt (default: the one README.md shows)
@@ -56,6 +58,28 @@ inside() {
     } 2>/dev/null | grep -v -e " $state/update/lock " -e "^d $state/update$" -e "^f $state/update/lock$" | sort || true
   }
 
+  # User data an update or a rollback must never lose or change: a file in the user directory, one in the
+  # state directory, and the bytes of settings.ini. Planted before an update, checked after each of
+  # update and rollback. The record of them lives beside the roots, where the updater never looks.
+  config=$HOME/.config/user-wm-shell record=$HOME/.dev-update-user-data
+  plant_user_data() {
+    mkdir -p -- "$config" "$state"
+    [[ -f $config/dev-update-sentinel ]] || printf 'user data %s\n' "$RANDOM$RANDOM" >"$config/dev-update-sentinel"
+    [[ -f $state/dev-update-sentinel ]] || printf 'state data %s\n' "$RANDOM$RANDOM" >"$state/dev-update-sentinel"
+    sha256sum -- "$config/dev-update-sentinel" "$state/dev-update-sentinel" >"$record"
+    rm -f -- "$record.settings"
+    [[ ! -f $config/settings.ini ]] || sha256sum -- "$config/settings.ini" >"$record.settings"
+  }
+  check_user_data() { # LABEL
+    if [[ ! -f $record ]]; then printf 'SKIP  no user data was planted before %s\n' "$1"; return; fi
+    if sha256sum --check --quiet --strict -- "$record" >/dev/null 2>&1; then pass "user data intact after $1"
+    else fail "user data changed or lost by $1"; sha256sum --check --strict -- "$record" 2>&1 | grep -v ': OK$' | sed 's/^/        /' || true; fi
+    # settings.ini may be rewritten on purpose by a migration, so a change is reported, not failed.
+    if [[ ! -f $record.settings ]]; then :
+    elif sha256sum --check --quiet --strict -- "$record.settings" >/dev/null 2>&1; then pass "settings.ini unchanged by $1"
+    else printf 'NOTE  settings.ini differs after %s (expected only when a migration rewrote it)\n' "$1"; fi
+  }
+
   if [[ $tag == latest ]]; then
     tag=$(git ls-remote --tags --refs "$DEV_UPDATE_REPO" 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -n 1)
     [[ -n $tag ]] || { printf 'No v* tag in %s.\n' "$DEV_UPDATE_REPO" >&2; exit 1; }
@@ -89,6 +113,7 @@ inside() {
       update)
         args=()
         [[ -z $DEV_UPDATE_TO ]] || args=(--tag "$DEV_UPDATE_TO")
+        plant_user_data
         capture "$bin" "${args[@]}"
         (( rc == 0 )) && pass 'update exit 0' || fail "update exit $rc"
         if [[ -L $data/current ]]; then
@@ -99,6 +124,7 @@ inside() {
         fi
         [[ ! -e $state/update/pending ]] && pass 'no pending marker' || fail 'a pending marker is left'
         [[ -f $HOME/.config/user-wm-shell/settings.ini ]] && pass 'settings.ini exists' || fail 'settings.ini missing'
+        check_user_data 'the update'
         ;;
       again)
         args=()
@@ -113,6 +139,7 @@ inside() {
           (( rc == 0 )) && pass 'rollback exit 0' || fail "rollback exit $rc"
           [[ $(readlink "$data/current") != "$previous" ]] && pass "current -> $(readlink "$data/current")" || fail 'current did not change'
           [[ ! -e $state/update/pending ]] && pass 'no pending marker' || fail 'a pending marker is left'
+          check_user_data 'the rollback'
         else
           printf 'SKIP  no previous release to roll back to\n'
         fi
