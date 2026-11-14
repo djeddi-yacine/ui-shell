@@ -13,7 +13,7 @@ REFS_DIR ?= $(ROOT)/refs
 PHANTOMAT_DIR := $(ROOT)/refs/phantomat
 PHANTOMAT_PLUGIN := $(ROOT)/.build/phantomat/spatialoverview.so
 
-.PHONY: dev-release dev-check-update dev-update release-plan release-patch release-minor release-major dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-shellcheck dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run
+.PHONY: dev-release dev-check-update dev-update release-plan release-patch release-minor release-major dev-shaders refs-pull dev-help dev-stage dev-seed-clipboard dev-seed-menu dev-configure dev-import-themes dev-bundle-themes dev-lint dev-shellcheck dev-verify-hypr dev-build-phantomat dev-verify-phantomat dev-run toolkit-env
 
 dev-help:
 	@printf '%s\n' \
@@ -35,7 +35,8 @@ dev-help:
 		'  dev-verify-hypr       Validate the staged production Hyprland config' \
 		'  dev-build-phantomat   Build the reference plugin' \
 		'  dev-verify-phantomat  Check the plugin build artifact' \
-		'  dev-run               Run Quickshell on the HOST display, not in isolation'
+		'  dev-run               Run Quickshell on the HOST display, not in isolation' \
+		'  toolkit-env           Run a rice demo in the toolkit sandbox: TOOLKIT=qt4|qt5|qt6|gtk2|gtk3|gtk4|adw APP=<name> [THEME_DIR=dir] [SANDBOX_ARGS=--trace|--timeout N]; APP=list shows apps'
 
 refs-pull:
 	@status=0; \
@@ -132,3 +133,13 @@ dev-shaders:
 	[ -n "$$QSB" ] || { echo 'qsb not found: install qt6-shadertools' >&2; exit 1; }; \
 	cd $(SPOILER_DIR) && "$$QSB" --qt6 --glsl "100es,120,150" --hlsl 50 --msl 12 -o spoiler.frag.qsb spoiler.frag && \
 	sha256sum spoiler.frag | cut -d" " -f1 > spoiler.frag.sha256
+
+TOOLKIT ?=
+APP ?=
+THEME_DIR ?=
+SANDBOX_ARGS ?=
+
+toolkit-env:
+	@test -n "$(TOOLKIT)" -a -n "$(APP)" || { printf '%s\n' 'Usage: make toolkit-env TOOLKIT=qt6 APP=widgets-gallery [THEME_DIR=dir] [SANDBOX_ARGS=...] (APP=list shows apps)' >&2; exit 2; }
+	@if [ "$(APP)" = list ]; then "$(ROOT)/tools/scripts/toolkit-sandbox" "$(TOOLKIT)" --list; \
+	else "$(ROOT)/tools/scripts/toolkit-sandbox" "$(TOOLKIT)" $(if $(THEME_DIR),--theme-dir "$(THEME_DIR)") $(SANDBOX_ARGS) --app "$(APP)"; fi

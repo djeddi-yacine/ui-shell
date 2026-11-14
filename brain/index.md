@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-11-12T08:01:16.996Z._
+_Auto-generated. Last updated 2026-11-14T04:08:12.270Z._
 
 - [application-launcher-boundary](pages/application-launcher-boundary.md) — category: decision | tags: [shell, launcher, devices] | # Decision
 - [audio-control-module](pages/audio-control-module.md) — category: decision | tags: [audio, pipewire, module] | # Decision
@@ -25,6 +25,7 @@ _Auto-generated. Last updated 2026-11-12T08:01:16.996Z._
 - [shell-scope-and-layout](pages/shell-scope-and-layout.md) — category: decision | tags: [scope, quickshell, hyprland, qml, lua, bash] | # Decision
 - [shipped-default-seed](pages/shipped-default-seed.md) — category: decision | tags: [default, staging, tests, config] | # Decision
 - [theme-profile-bundles](pages/theme-profile-bundles.md) — category: decision | tags: [theme, profiles, qml, composition] | # Decision
+- [toolkit-sandbox](pages/toolkit-sandbox.md) — category: decision | tags: [theme, tests, sandbox, gtk, qt] | # Decision (owner, 2026-11-14)
 - [wallpaper-cache-identity](pages/wallpaper-cache-identity.md) — category: decision | tags: [wallpaper, cache, matugen, profiles] | # Decision
 - [wallpaper-source-and-generation](pages/wallpaper-source-and-generation.md) — category: decision | tags: [wallpaper, hyprpaper, matugen, theme] | # Decision
 - [xdg-runtime-and-theme-schema](pages/xdg-runtime-and-theme-schema.md) — category: decision | tags: [config, xdg, theme, composition] | # Decision

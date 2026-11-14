@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Runs a rice demo app (or any command) in a Bubblewrap sandbox that shows its toolkit as
+# an engine themes it: private empty HOME/XDG dirs, read-only system with host theming
+# masked, a private session bus, explicit environment. Config: tools/toolkit-sandbox.conf.
+set -euo pipefail
+
+usage() {
+  printf '%s\n' 'Usage: toolkit-sandbox <qt4|qt5|qt6|gtk2|gtk3|gtk4|adw> [--theme-dir DIR] [--trace] [--timeout SECONDS]' \
+    '                      (--app NAME | --list | -- COMMAND...)' >&2
+  exit 2
+}
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+source "$root/tools/toolkit-sandbox.conf"
+
+toolkit=${1-}; [[ -n $toolkit ]] || usage; shift
+[[ -n ${sandbox_demo[$toolkit]-} ]] || { printf 'Unknown toolkit: %s\n' "$toolkit" >&2; usage; }
+theme_dir='' trace=0 timeout_seconds='' app='' list=0 command=()
+while (($#)); do
+  case $1 in
+    --theme-dir) theme_dir=${2:?--theme-dir needs a directory}; shift 2 ;;
+    --trace) trace=1; shift ;;
+    --timeout) timeout_seconds=${2:?--timeout needs seconds}; shift 2 ;;
+    --app) app=${2:?--app needs a name}; shift 2 ;;
+    --list) list=1; shift ;;
+    --) shift; command=("$@"); break ;;
+    *) usage ;;
+  esac
+done
+
+declare -n tk_env="sandbox_env_$toolkit" tk_unset="sandbox_unset_$toolkit" tk_apps="sandbox_apps_$toolkit"
+if ((list)); then
+  for spec in "${tk_apps[@]}"; do printf '%s\n' "${spec%%|*}"; done
+  exit 0
+fi
+[[ -n $app || ${#command[@]} -gt 0 ]] || usage
+[[ -z $app || ${#command[@]} -eq 0 ]] || { printf '%s\n' 'Give --app or a command, not both.' >&2; exit 2; }
+[[ -z $timeout_seconds || $timeout_seconds =~ ^[0-9]+$ ]] || { printf '%s\n' '--timeout must be whole seconds.' >&2; exit 2; }
+[[ $sandbox_graphics == render-nodes || $sandbox_graphics == software ]] || { printf '%s\n' 'Unsupported sandbox_graphics.' >&2; exit 1; }
+[[ $sandbox_logs == keep || $sandbox_logs == discard ]] || { printf '%s\n' 'Unsupported sandbox_logs.' >&2; exit 1; }
+for dependency in bwrap dbus-run-session timeout; do
+  command -v "$dependency" >/dev/null || { printf 'Missing dependency: %s\n' "$dependency" >&2; exit 1; }
+done
+((trace == 0)) || command -v strace >/dev/null || { printf '%s\n' 'Missing dependency: strace' >&2; exit 1; }
+
+# Each selection key is stated exactly once per toolkit: a value or a deliberate unset.
+for key in "${sandbox_selection_keys[@]}"; do
+  count=0
+  for pair in "${sandbox_env_common[@]}" "${tk_env[@]}"; do [[ ${pair%%=*} != "$key" ]] || count=$((count + 1)); done
+  for name in "${tk_unset[@]}"; do [[ $name != "$key" ]] || count=$((count + 1)); done
+  ((count == 1)) || { printf 'Config: %s must be set or unset exactly once for %s (found %d).\n' "$key" "$toolkit" "$count" >&2; exit 1; }
+done
+
+demo="$root/${sandbox_demo[$toolkit]}"
+[[ -d $demo/build ]] || { printf 'Demo is not built: %s/build (see its README.md).\n' "$demo" >&2; exit 1; }
+cwd=$demo app_env=()
+if [[ -n $app ]]; then
+  found=''
+  for spec in "${tk_apps[@]}"; do [[ ${spec%%|*} != "$app" ]] || found=$spec; done
+  [[ -n $found ]] || { printf 'Unknown app %s for %s; try --list.\n' "$app" "$toolkit" >&2; exit 2; }
+  IFS='|' read -r _ binary app_cwd extra <<<"$found"
+  [[ -x $demo/$binary ]] || { printf 'App is not built: %s\n' "$demo/$binary" >&2; exit 1; }
+  command=("$demo/$binary"); cwd="$demo/$app_cwd"
+  [[ -z $extra ]] || IFS=',' read -r -a app_env <<<"$extra"
+fi
+
+x11=0
+for name in "${sandbox_x11_toolkits[@]}"; do [[ $name != "$toolkit" ]] || x11=1; done
+if ((x11)); then
+  [[ -S $sandbox_x11_socket ]] || { printf 'X11 socket missing: %s\n' "$sandbox_x11_socket" >&2; exit 1; }
+  # A shared X server carries host X resources and XSETTINGS; refuse rather than leak them.
+  if command -v xprop >/dev/null && ! xprop -display "$sandbox_x11_display" -root RESOURCE_MANAGER 2>&1 | grep -q 'not found'; then
+    printf '%s\n' 'Host X server has RESOURCE_MANAGER set (xrdb); it would reach the app. Refusing.' >&2; exit 1
+  fi
+  python3 -I - "$sandbox_x11_display" <<'PY' || { printf '%s\n' 'Host X server has an XSETTINGS manager (_XSETTINGS_S0); it would reach the app. Refusing.' >&2; exit 1; }
+import ctypes, sys
+x = ctypes.CDLL("libX11.so.6")
+x.XOpenDisplay.restype = ctypes.c_void_p
+x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]; x.XInternAtom.restype = ctypes.c_ulong
+x.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]; x.XGetSelectionOwner.restype = ctypes.c_ulong
+d = x.XOpenDisplay(sys.argv[1].encode())
+if not d: sys.exit(3)
+sys.exit(1 if x.XGetSelectionOwner(d, x.XInternAtom(d, b"_XSETTINGS_S0", 0)) else 0)
+PY
+else
+  display_socket="${XDG_RUNTIME_DIR:?Parent XDG_RUNTIME_DIR required}/${WAYLAND_DISPLAY:?Parent WAYLAND_DISPLAY required}"
+  [[ $WAYLAND_DISPLAY != /* ]] || display_socket=$WAYLAND_DISPLAY
+  [[ -S $display_socket ]] || { printf 'Wayland socket missing: %s\n' "$display_socket" >&2; exit 1; }
+fi
+
+run_dir=$(mktemp -d "$sandbox_log_parent/rice-sandbox.XXXXXX")
+cleanup() { [[ $sandbox_logs == keep ]] || rm -rf -- "$run_dir"; }
+trap cleanup EXIT
+mkdir -m 0700 "$run_dir/home" "$run_dir/artifacts"
+theme_env=()
+if [[ -n $theme_dir ]]; then
+  [[ -d $theme_dir ]] || { printf 'Theme dir missing: %s\n' "$theme_dir" >&2; exit 1; }
+  cp -a -- "$theme_dir/." "$run_dir/home/"
+  rm -f -- "$run_dir/home/sandbox.env"
+  if [[ -f $theme_dir/sandbox.env ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      [[ -n $line && $line != \#* ]] || continue
+      key=${line%%=*} allowed=0
+      for name in "${sandbox_theme_env_keys[@]}"; do [[ $name != "$key" ]] || allowed=1; done
+      ((allowed)) && [[ $line == *=* ]] || { printf 'sandbox.env: key not allowed: %s\n' "$key" >&2; exit 1; }
+      theme_env+=("${line//\$\{HOME\}/$sandbox_home}")
+    done <"$theme_dir/sandbox.env"
+  fi
+fi
+find "$run_dir/home" -mindepth 1 -printf '%P\n' | sort >"$run_dir/home-at-start.txt"
+
+args=("${sandbox_namespace_options[@]}" --clearenv)
+for path in "${sandbox_readonly_system_paths[@]}"; do args+=(--ro-bind "$path" "$path"); done
+args+=(--symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64
+  --proc /proc --dev /dev --tmpfs /tmp
+  --perms 0700 --dir "$sandbox_runtime"
+  --bind "$run_dir/home" "$sandbox_home"
+  --ro-bind "$demo" "$demo" --bind "$demo/build" "$demo/build"
+  --ro-bind "$root/$sandbox_dbus_config" /sandbox/session-bus.conf)
+for path in "${sandbox_masked_paths[@]}"; do
+  if [[ -e $path ]]; then args+=(--tmpfs "$path" --remount-ro "$path"); fi
+done
+if ((x11)); then
+  args+=(--dir /tmp/.X11-unix --ro-bind "$sandbox_x11_socket" "$sandbox_x11_socket" --setenv DISPLAY "$sandbox_x11_display")
+else
+  args+=(--ro-bind "$display_socket" "$sandbox_runtime/$sandbox_parent_display" --setenv WAYLAND_DISPLAY "$sandbox_parent_display")
+fi
+((trace == 0)) || args+=(--bind "$run_dir/artifacts" /artifacts)
+if [[ $sandbox_graphics == software ]]; then
+  args+=(--setenv LIBGL_ALWAYS_SOFTWARE 1)
+else
+  while IFS= read -r node; do args+=(--dev-bind "$node" "$node"); done < <(find /dev/dri -maxdepth 1 -type c -name 'renderD*' -print | sort)
+fi
+args+=(--setenv HOME "$sandbox_home"
+  --setenv XDG_CONFIG_HOME "$sandbox_home/.config" --setenv XDG_DATA_HOME "$sandbox_home/.local/share"
+  --setenv XDG_CACHE_HOME "$sandbox_home/.cache" --setenv XDG_STATE_HOME "$sandbox_home/.local/state"
+  --setenv XDG_RUNTIME_DIR "$sandbox_runtime")
+for pair in "${sandbox_env_common[@]}" "${tk_env[@]}" "${app_env[@]}" "${theme_env[@]}"; do
+  value=${pair#*=}; value=${value//@HOME@/$sandbox_home}; value=${value//@DEMO@/$demo}
+  args+=(--setenv "${pair%%=*}" "$value")
+done
+args+=(--chdir "$cwd")
+
+inner=(dbus-run-session --config-file=/sandbox/session-bus.conf --)
+[[ -z $timeout_seconds ]] || inner=(timeout "$timeout_seconds" "${inner[@]}")
+((trace == 0)) || inner+=(strace -ff -qq -o /artifacts/trace
+  -e "trace=open,openat,openat2,stat,lstat,newfstatat,statx,access,faccessat,faccessat2,execve")
+printf 'Sandbox run: %s (logs: %s)\n' "$run_dir" "$sandbox_logs" >&2
+status=0
+bwrap "${args[@]}" -- "${inner[@]}" "${command[@]}" > >(tee "$run_dir/app.log") 2>&1 || status=$?
+
+if ((trace)) && compgen -G "$run_dir/artifacts/trace.*" >/dev/null; then
+  # One file per process (-ff), so no call is split across lines.
+  log=$run_dir/trace.log; cat "$run_dir"/artifacts/trace.* >"$log"
+  # Successful path lookups only (result not -1), first path argument.
+  sed -nE '/= -1 /!s/^[a-z_0-9]+\((AT_FDCWD, )?"([^"]*)".*/\2/p' "$log" | sort -u >"$run_dir/opened.txt"
+  {
+    printf 'Trace: %s lookups, %s distinct paths found\n' "$(wc -l <"$log")" "$(wc -l <"$run_dir/opened.txt")"
+    printf 'Lookups naming the real home %s: %s\n' "$HOME" "$(grep -c -F -- "$HOME" "$log" || true)"
+    printf '%s\n' 'Found paths under /etc:'; grep -E '^/etc/' "$run_dir/opened.txt" | sed 's/^/  /' || true
+    printf '%s\n' 'Found paths in masked dirs (the empty mount point itself is expected):'
+    for path in "${sandbox_masked_paths[@]}"; do grep -E "^${path}(/|$)" "$run_dir/opened.txt" | sed 's/^/  /' || true; done
+    printf '%s\n' 'Found paths in the private home:'; grep -E "^$sandbox_home(/|$)" "$run_dir/opened.txt" | sed 's/^/  /' || true
+  } | tee "$run_dir/trace-report.txt"
+fi
+printf 'Exit status: %s%s\n' "$status" "$([[ $status == 124 ]] && printf ' (still running at --timeout: alive)')" >&2
+exit "$status"
