@@ -26,6 +26,7 @@ _Auto-generated. Last updated 2026-11-14T04:08:12.270Z._
 - [shipped-default-seed](pages/shipped-default-seed.md) — category: decision | tags: [default, staging, tests, config] | # Decision
 - [theme-profile-bundles](pages/theme-profile-bundles.md) — category: decision | tags: [theme, profiles, qml, composition] | # Decision
 - [toolkit-sandbox](pages/toolkit-sandbox.md) — category: decision | tags: [theme, tests, sandbox, gtk, qt] | # Decision (owner, 2026-11-14)
+- [toolkit-theming-engines](pages/toolkit-theming-engines.md) — category: decision | tags: [theme, gtk, qt, engines] | # Decision (owner direction, scope settled, designs open)
 - [wallpaper-cache-identity](pages/wallpaper-cache-identity.md) — category: decision | tags: [wallpaper, cache, matugen, profiles] | # Decision
 - [wallpaper-source-and-generation](pages/wallpaper-source-and-generation.md) — category: decision | tags: [wallpaper, hyprpaper, matugen, theme] | # Decision
 - [xdg-runtime-and-theme-schema](pages/xdg-runtime-and-theme-schema.md) — category: decision | tags: [config, xdg, theme, composition] | # Decision

@@ -1,0 +1,73 @@
+# breeze: KDE Breeze visual style (Qt style, window decoration, colour schemes, cursors)
+
+Source: refs/breeze (shallow clone; commit 3d03086, 2026-11-12; branch master). License: per-file SPDX headers plus LICENSES/ directory (BSD-3-Clause, CC0-1.0, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, LicenseRef-KDE-Accepted-GPL, MIT), cited at `LICENSES/` (directory listing, 7 files). Scope: kstyle/ (Qt style), kdecoration/ (window decoration), libbreezecommon/, colors/, cursors/ (build scripts and layout only), misc/breezetobreezelight/, CMakeLists.txt, README.md. Not studied: po/, wallpapers/, most of cursors/ SVG content.
+Id prefix: BR.
+
+## 1. Purpose and shape
+- BR1.1 Breeze is the KDE Plasma default look: a Qt widget style (`QStyle` subclass, `breezestyle.h:58` `ParentStyleClass = KStyle`), a KWin window decoration (KDecoration3, `kdecoration/breezedecoration.cpp:37`), colour scheme files (`colors/*.colors`), and cursor themes (`cursors/`). Languages: C++ with Qt and KDE Frameworks; QML is used only for optional Qt Quick features (`CMakeLists.txt:42`, option `BUILD_WITH_QTQUICK`). `README.md` lists the components as colors/, cursors/, kdecoration/, kstyle/, wallpapers/.
+- BR1.2 Top-level layout: `kstyle/` (Qt style plugin, approx. 99 tracked files, includes `breezestyle.cpp` of 8781 lines and `breezehelper.cpp` of 1960 lines); `kdecoration/` (window decoration and button, 33 tracked files); `libbreezecommon/` (shared `BoxShadowRenderer`, `libbreezecommon/breezeboxshadowrenderer.h:17`); `colors/` (three `.colors` files plus `ExtraDesktop.sh`); `cursors/` (856 tracked files, SVG sources and build scripts); `misc/breezetobreezelight/` (small helper, `main.cpp:7-14`); `wallpapers/`; `po/` (translations); `LICENSES/`.
+- BR1.3 Build system: CMake. Minimum Qt 6.11.0 (`CMakeLists.txt:9`, `QT_MIN_VERSION`), minimum KF6 6.30.0 (`CMakeLists.txt:6`), Qt5 minimum 5.15.2 and KF5 minimum 5.102.0 (`CMakeLists.txt:5,8`). Qt5 and Qt6 style builds are selected by `BUILD_QT5` / `BUILD_QT6` (`CMakeLists.txt:39-40`); both default ON, and the KDE CI variable `CI_JOB_NAME_SLUG` forces one (`CMakeLists.txt:46-54`). The style is built as target `breeze${QT_MAJOR_VERSION}` (`kstyle/CMakeLists.txt:123`). Cursor build is `BUILD_CURSOR` (`CMakeLists.txt:41`).
+
+## 2. Theme input (how configuration reaches it)
+- BR2.1 Style settings file: `breeze.kcfg` (installed to KCFG dir, `kstyle/CMakeLists.txt:125`), generated via `kstyle/breezestyleconfigdata.kcfgc:1` (`File=breeze.kcfg`). Groups and entries are declared in `kstyle/breeze.kcfg` (for example `<group name="Style">` at line 42).
+- BR2.2 Style defaults and theme file: `kstyle/breeze.themerc` is installed to `kstyle/themes` (`kstyle/CMakeLists.txt:124`). Reading of the themerc is not traced in this study (UNVERIFIED: the code path that consumes breeze.themerc).
+- BR2.3 Window decoration settings: `kdecoration/breezesettingsdata.kcfg:6` names the file `breezerc`. Entries include `ShadowStrength`, `ShadowSize`, `ShadowColor` (type Color, `breezesettingsdata.kcfg` group `Common`, entries at lines 12, 19, 30) and `OutlineCloseButton` (line 35). Installed as `breeze-decoration.kcfg` (`kdecoration/CMakeLists.txt:40`).
+- BR2.4 Global KDE settings read by the style: `KSharedConfig::openConfig()` and group `KDE`, key `AnimationDurationFactor` (`kstyle/breezestyle.cpp:2077-2085`). The style does not override animation duration unless that key is set (`breezestyle.cpp:2080-2083`). `ShowIconsOnPushButtons` is read from group `KDE` with default true (`breezestyle.cpp:8726-8727`).
+- BR2.5 Helper configuration: `Helper::Helper(KSharedConfig::Ptr config)` stores the style config and opens `kwinrc` (`kstyle/breezehelper.cpp:72-78`). `Helper::loadConfig()` runs at `breezehelper.cpp:87` and reads colour-scheme brushes and contrast (see BR3).
+- BR2.6 Title-bar colour overrides: `breezehelper.cpp:63-66` (in a per-window-group block) and `breezehelper.cpp:100-103` read keys `activeBackground`, `activeForeground`, `inactiveBackground`, `inactiveForeground` from a config group, with defaults taken from the application palette (Highlight / HighlightedText, Active and Disabled groups).
+- BR2.7 Environment variables and command-line flags: None found in the files studied.
+
+## 3. Color and style model
+- BR3.1 Colour schemes are KDE `.colors` INI files, one section per colour set. `colors/BreezeLight.colors` declares `[General] ColorScheme=BreezeLight` and `Name=Breeze Light` (lines 141-143). Dark variant: `colors/BreezeDark.colors:143` (`ColorScheme=BreezeDark`). Classic variant: `colors/BreezeClassic.colors:106-107` (`ColorScheme=BreezeClassic`, `Name=Breeze Classic`). Line counts: 172, 211, 208 respectively.
+- BR3.2 Sections inside each `.colors` file include `[Colors:Button]` (BreezeLight line 29, `BackgroundNormal=252,252,252` line 31, `DecorationFocus=61,174,233` line 32), `[Colors:Complementary]` (line 43, `BackgroundNormal=42,46,50` line 45), and `[Colors:Header]` (line 57). `[ColorEffects:Disabled]` is in BreezeClassic at line 1 with `Color=56,56,56`, `ColorAmount=0`, `ColorEffect=0` (lines 1-4).
+- BR3.3 Palette model: the style works on `QPalette` through `option->palette` and roles such as `QPalette::Window`, `WindowText`, `Base`, `Button`, `ButtonText`, `Highlight`, `HighlightedText`, and colour groups `Active`, `Inactive`, `Disabled` (e.g. `breezehelper.cpp:142-162`, `breezehelper.cpp:186-190`, `breezehelper.cpp:202`, `breezehelper.cpp:250`).
+- BR3.4 Stateful brushes from KColorScheme: `KStatefulBrush(KColorScheme::View, KColorScheme::FocusColor)`, `HoverColor`, `NegativeText`, `NeutralText` at `breezehelper.cpp:89-92`. Frame contrast comes from `KColorScheme::frameContrast()` into `_contrastBias` (`breezehelper.cpp:105`), exposed by `frameIntensityBias()` (`kstyle/breezehelper.h:105-107`).
+- BR3.5 Shade and mix formulas: the style uses `KColorUtils::mix(a, b, t)` and `KColorUtils::lighten(c)`. Examples: frame outline = mix(Window, WindowText, frameIntensityBias) (`breezehelper.cpp:144`); focus-hover blend = mix(focus, WindowText, 0.15) (`breezehelper.cpp:174`) and mix(hover, WindowText, 0.15) (`breezehelper.cpp:180`); frame background = mix(Window, Base, Metrics::Blend_Value) (`breezehelper.cpp:202`) where `Blend_Value = 0.3` (`kstyle/breezemetrics.h:176`); selection outline = `KColorUtils::lighten(HighlightColor)` with background at alpha 0.20 (`kstyle/breezestyle.cpp:6795-6797`, `background.setAlphaF(0.20)`). The exact formulas of `KColorUtils::mix` and `lighten` live in KColorUtils (KF6), not in this repo (UNVERIFIED: internal arithmetic).
+- BR3.6 Per-state handling: functions named by state in `breezehelper.cpp` include `frameOutlineColor(palette, mouseOver, hasFocus, opacity, mode)` (line 142), `focusOutlineColor` (172), `hoverOutlineColor` (178), `sidePanelOutlineColor` (184), `arrowColor` (206, 221), `sliderOutlineColor` (248), `scrollBarHandleColor` (277). Hover and focus are blended by an `opacity` value that comes from the animation system (`AnimationMode`, e.g. `breezehelper.cpp:152-162`).
+- BR3.7 Disabled and inactive colours are taken from the `Disabled` and `Inactive` palette groups (`breezehelper.cpp:65-66`, `breezehelper.cpp:186`).
+- BR3.8 Shadows: `BoxShadowRenderer` in `libbreezecommon/breezeboxshadowrenderer.h:17` (used by both kstyle and kdecoration, shadow colour from `ShadowColor`). Shadow strength and size keys are listed in BR2.3.
+- BR3.9 Blur and shadow helpers in kstyle: `kstyle/breezeblurhelper.cpp`, `breezeshadowhelper.cpp` (463 lines), `breezeframeshadow.cpp` (338 lines). These were not read in detail (see section 8).
+
+## 4. Output and rendering path
+- BR4.1 Plugin entry point: `class StylePlugin : public QStylePlugin` (`kstyle/breezestyleplugin.h:13`) with `Q_PLUGIN_METADATA(IID "org.qt-project.Qt.QStyleFactoryInterface" FILE "breeze.json")` (`breezestyleplugin.h:17`).
+- BR4.2 Factory: `StylePlugin::create(key)` returns `new Style` when key equals "breeze" (case-insensitive) (`breezestyleplugin.cpp:15-21`). `StylePlugin::keys()` returns `"Breeze"` (`breezestyleplugin.cpp:24-26`). Metadata file `kstyle/breeze.json:1` has `"Keys": [ "Breeze" ]`.
+- BR4.3 Style class: `class Style : public ParentStyleClass` (`breezestyle.h:58`, parent `KStyle`). Overrides include `polish(QWidget*)` (`breezestyle.h:82`), `unpolish(QWidget*)` (`:85`), `polish(QApplication*)` (`:88`), `unpolish(QApplication*)` (`:91`), `drawPrimitive` (`:115`), `drawControl` (`:118`), `drawComplexControl` (`:121`).
+- BR4.4 Custom element enums: the style adds private values such as `CE_CapacityBar`, `CE_IconButton` (`breezestyle.h:528`, `:531`) and a style hint `SH_ArgbDndWindow` (`:525`).
+- BR4.5 Helper object: each Style holds a `Helper` (`kstyle/breezehelper.h:32`, `class Helper : public QObject`), which owns the config, the palette-change event filter, and the colour functions in BR3.
+- BR4.6 Drawing path: the Qt widget calls the style's `drawControl` / `drawPrimitive` / `drawComplexControl` (`breezestyle.h:115-121`); the implementation in `breezestyle.cpp` (8781 lines) computes colours via Helper and paints with QPainter, using `painter->setRenderHints(QPainter::Antialiasing)` (e.g. `breezestyle.cpp:6793`).
+- BR4.7 Window decoration path: `K_PLUGIN_FACTORY_WITH_JSON(BreezeDecoFactory, "breeze.json", registerPlugin<Breeze::Decoration>(); registerPlugin<Breeze::Button>();)` (`kdecoration/breezedecoration.cpp:37`). `Breeze::Decoration` derives from `KDecoration3::Decoration` (`breezedecoration.cpp:129`). It uses `KDecoration3::DecorationShadow` (`breezedecoration.cpp:19`, shadows stored as statics at `:124-125`), `DecorationButtonGroup` (`:18`), and `ColorGroup` / `ColorRole` from KDecoration3 (`:116-117`). Settings change signal connected at `breezedecoration.cpp:215`.
+- BR4.8 Cursors: the cursor theme is generated from SVG sources by a manual script, not from CMake. `cursors/README.md` says SVG sources are in `{Breeze,Breeze_Light}/src/svg`, that Inkscape and xcursorgen are required, and that `../src/build.sh` runs from the theme directory. `cursors/src/build.sh:26-32` checks for inkscape and xcursorgen, `:59` calls inkscape, `:72` runs `$BIN_DIR/generate_cursors`. Other tools in `cursors/src/`: `kcursorgen`, `split_monilithic_svg`, `svgo.config.mjs`, `hotspot_test`, `diff_pixmaps`, `clean_svg`.
+- BR4.9 Colour-scheme switch helper: `misc/breezetobreezelight/main.cpp:7-14` switches the colour scheme to BreezeLight when the current one is Breeze.
+
+## 5. Extension and integration points
+- BR5.1 Qt style plugin: installed to `${KDE_INSTALL_QTPLUGINDIR}/styles/` (`kstyle/CMakeLists.txt:123`) as `breeze5` or `breeze6` depending on `QT_MAJOR_VERSION`. Selected by name "Breeze" through the Qt style factory (BR4.2).
+- BR5.2 Window decoration plugin: installed to `${KDE_INSTALL_PLUGINDIR}/${KDECORATION_PLUGIN_DIR}` (`kdecoration/CMakeLists.txt:39`), loaded by KWin through its KDecoration3 plugin factory (BR4.7). Plugin metadata is `kdecoration/breeze.json`, whose `KPlugin` block starts at line 2 (`"KPlugin": {`).
+- BR5.3 Colour scheme discovery: `.colors` files are installed by the CMake of `colors/` (UNVERIFIED: install path, not read in this study).
+- BR5.4 ABI and version coupling: the style includes KStyle, KColorScheme, KColorUtils, and KSharedConfig headers (`breezehelper.cpp:12-13` for KColorScheme and KColorUtils). KDecoration3 types are used directly (`breezedecoration.cpp:18-20`). Versions are coupled through the minimums in BR1.3.
+- BR5.5 Environment variable selection: None found in the files studied. Selection is by style name "Breeze" (BR4.2) or by KWin decoration plugin id from `breeze.json`.
+
+## 6. Data and tooling
+- BR6.1 Colour scheme files: `colors/BreezeLight.colors`, `colors/BreezeDark.colors`, `colors/BreezeClassic.colors` (INI format, BR3.1-3.2).
+- BR6.2 Settings schema: `kstyle/breeze.kcfg` and `kstyle/breezestyleconfigdata.kcfgc` (BR2.1), `kdecoration/breezesettingsdata.kcfg` (BR2.3).
+- BR6.3 Cursor pipeline: `cursors/src/build.sh` and the tools listed in BR4.8. The `cursors/README.md` states the build is manual and not part of CMake.
+- BR6.4 Shared helper library: `libbreezecommon/` (BoxShadowRenderer).
+- BR6.5 Tests: CMake option `BUILD_TESTING` (default ON, `CMakeLists.txt:24`) builds a testing tree (contents not studied).
+- BR6.6 Translations: `po/` (120 tracked files, count from `git ls-files`). Not read.
+- BR6.7 Helper script: `colors/ExtraDesktop.sh` (listed in colors/; contents not read).
+
+## 7. Facts of note
+- BR7.1 The Qt style and the window decoration are separate binaries with separate config files (`kstyle/breeze.kcfg` for the style, `kdecoration/breezesettingsdata.kcfg` for `breezerc`, BR2.1 and BR2.3).
+- BR7.2 Animation duration follows the global KDE `AnimationDurationFactor` key and is skipped when that key is absent (BR2.4).
+- BR7.3 Cursor build is manual and needs Inkscape and xcursorgen (BR4.8). The file `cursors/README.md` is the source for this statement.
+- BR7.4 Colour contrast of frames is taken from `KColorScheme::frameContrast()` (BR3.4). The value is read at config load time (`breezehelper.cpp:105`).
+- BR7.5 The Breeze Classic scheme has a separate `[ColorEffects:Disabled]` block with `ColorAmount=0` and `ColorEffect=0` (BR3.2).
+- BR7.6 The style file `breezestyle.cpp` is 8781 lines; the Helper file is 1960 lines (line counts from `wc -l`).
+
+## 8. Not covered
+- Not read in detail: `kstyle/breezestyle.cpp` bodies (only the selection-outline path at 6793-6797, the animation config at 2077-2086, and the ShowIconsOnPushButtons read at 8726-8727 were read); `kstyle/animations/`, `kstyle/config/`, `breezeshadowhelper.cpp`, `breezeframeshadow.cpp`, `breezetileset.cpp`, `breezeblurhelper.cpp`, `breezewindowmanager`, `breezemnemonics`.
+- Not read: the full `kdecoration/breezedecoration.cpp` body (only lines 18-20, 37, 116-129, 215), `kdecoration/breezebutton*`, `breezesettingsprovider`, `breezeexceptionlist`.
+- Not read: `kstyle/breeze.themerc` contents and the code that consumes it (UNVERIFIED).
+- Not read: `colors/BreezeClassic.colors` and `colors/BreezeDark.colors` beyond the header lines and the single keys cited.
+- Not read: `cursors/` SVG content and hotspot data; `po/`; `wallpapers/`.
+- KColorUtils and KColorScheme internals are in KDE Frameworks, not in this repo.
+- Spot-check: the following citations were re-read in this session and confirmed: `CMakeLists.txt:9`, `kstyle/breezestyleplugin.cpp:15-26`, `kstyle/breezehelper.cpp:105`, `kstyle/breezemetrics.h:176`, `kstyle/breezestyle.cpp:6795`, `colors/BreezeDark.colors:143`, `colors/BreezeLight.colors:142`, `kdecoration/CMakeLists.txt:39-40`, `kstyle/CMakeLists.txt:123-125`.
